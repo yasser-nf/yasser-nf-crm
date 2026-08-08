@@ -266,7 +266,8 @@ creation method anywhere in the codebase.
 
 ## 6. Indexes
 
-38 total.
+**39 declared**, plus 8 primary-key indexes created implicitly = **47 in the
+database**. Verified against the live schema after migration.
 
 | Table | Indexes |
 | ----- | ------- |
@@ -274,10 +275,14 @@ creation method anywhere in the codebase.
 | customers | 5 — phone_normalized (unique partial), phone_original, name, created_at, last_purchase_at |
 | accounts | 6 — email (unique partial), status, created_at, created_by, country, **stock_selection** |
 | profiles | 9 — account+number (unique), account_id, status, customer_id, worker_id, pin, sale_date, **expiration_date**, **availability** |
-| profile_events | 5 — profile+created DESC, type, customer_id, actor_user_id, created_at DESC |
+| profile_events | 6 — **account+created DESC**, profile+created DESC, type, customer_id, user_id, created_at DESC |
 | audit_logs | 4 — entity+entity_id+created DESC, user+created DESC, action, created_at DESC |
 | backups | 4 — type, status, created_at DESC, **restore_point** |
 | settings | 1 — singleton (unique) |
+
+`profile_events.account_created_idx` was added in M03 (ADR-006 Decision 2) to
+serve the account timeline. It is the sixth index on that table and the reason
+this count moved from 38 to 39.
 
 ### Partial indexes and why
 
