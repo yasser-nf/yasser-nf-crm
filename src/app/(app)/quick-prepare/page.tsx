@@ -7,6 +7,21 @@ export const metadata: Metadata = {
 };
 
 /**
+ * Never prerendered, never cached.
+ *
+ * The page reads live stock. Nothing else on it touches a dynamic API, so Next
+ * would happily prerender it and freeze the count at build time — and a worker
+ * shown stale availability is a worker about to sell a profile that is gone.
+ *
+ * Today the authenticated layout's session read makes this segment dynamic
+ * anyway. That is a side effect, not a guarantee: it would silently stop being
+ * true the moment the layout stopped reading cookies. Stating the requirement
+ * here means the correctness of this page does not depend on a detail of its
+ * parent.
+ */
+export const dynamic = "force-dynamic";
+
+/**
  * Quick Prepare.
  *
  * 04_UI_GUIDELINES.md calls this the flagship feature and 01_MASTER_RULES.md
