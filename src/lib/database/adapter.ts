@@ -73,21 +73,73 @@ interface DriverError {
   readonly message: string;
 }
 
-function isDriverError(value: unknown): value is DriverError {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    typeof (value as { code: unknown }).code === "string"
-  );
+/** SQLSTATE is always five characters of [0-9A-Z], e.g. 23505, 40P01. */
+const SQLSTATE_PATTERN = /^[0-9A-Z]{5}$/;
+
+/**
+ * Network-level failures worth retrying.
+ *
+ * These arrive from Node rather than PostgreSQL, so they carry no SQLSTATE. A
+ * dropped connection to the pooler is exactly as transient as a serialization
+ * failure and deserves the same treatment.
+ */
+const RETRYABLE_NETWORK_CODES: readonly string[] = [
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "CONNECTION_CLOSED",
+  "CONNECTION_ENDED",
+];
+
+const MAX_CAUSE_DEPTH = 6;
+
+/**
+ * Finds the real driver error inside whatever wrapper reached us.
+ *
+ * Drizzle does not rethrow the driver's error — it wraps it in a
+ * DrizzleQueryError carrying the SQL and parameters, and hangs the original off
+ * `cause`. Inspecting only the top-level object therefore never finds a
+ * SQLSTATE, which silently turned every constraint violation into a generic
+ * failure and disabled the retry policy at the same time. Found by the M04.5
+ * runtime harness; a unique-violation surfaced as UNEXPECTED_ERROR rather than
+ * ConflictError, so the customers race handler never recognised it.
+ *
+ * The cause chain is walked rather than assumed one level deep, because a
+ * transaction wraps errors again on the way out.
+ */
+function findDriverError(value: unknown, depth = 0): DriverError | null {
+  if (depth > MAX_CAUSE_DEPTH || typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const candidate = value as { code?: unknown; message?: unknown; cause?: unknown };
+
+  if (typeof candidate.code === "string" && candidate.code.length > 0) {
+    return {
+      code: candidate.code,
+      message: typeof candidate.message === "string" ? candidate.message : String(value),
+    };
+  }
+
+  return findDriverError(candidate.cause, depth + 1);
+}
+
+function isSqlState(code: string): boolean {
+  return SQLSTATE_PATTERN.test(code);
 }
 
 function isRetryable(error: unknown): boolean {
-  if (!isDriverError(error)) {
+  const driverError = findDriverError(error);
+
+  if (!driverError) {
     return false;
   }
 
-  return RETRYABLE_SQL_STATES.includes(error.code);
+  return (
+    RETRYABLE_SQL_STATES.includes(driverError.code) ||
+    RETRYABLE_NETWORK_CODES.includes(driverError.code)
+  );
 }
 
 /**
@@ -114,13 +166,15 @@ function sleep(milliseconds: number): Promise<void> {
  * user — a constraint name tells them nothing and leaks schema shape.
  */
 function translateDriverError(error: unknown, operation: string): AppError {
-  if (!isDriverError(error)) {
+  const driverError = findDriverError(error);
+
+  if (!driverError || !isSqlState(driverError.code)) {
     return toAppError(error);
   }
 
-  const context = { operation, sqlState: error.code };
+  const context = { operation, sqlState: driverError.code };
 
-  switch (error.code) {
+  switch (driverError.code) {
     case SQL_STATE.UNIQUE_VIOLATION:
       return new ConflictError(`Unique constraint violated during ${operation}`, {
         cause: error,
@@ -185,7 +239,18 @@ async function runWithRetry<T>(operation: string, run: () => Promise<T>): Promis
   }
 
   const error = translateDriverError(lastError, operation);
-  logger.error("Database operation failed", error);
+
+  /*
+   * Operational failures are expected conditions the system knows how to
+   * handle — a unique violation losing a find-or-create race, for instance. The
+   * caller recovers, so logging them at error level fills the log with alerts
+   * for things that worked. Genuine defects still log as errors.
+   */
+  if (error.isOperational) {
+    logger.warn("Database operation rejected", { operation, code: error.code });
+  } else {
+    logger.error("Database operation failed", error);
+  }
 
   return fail(error);
 }
