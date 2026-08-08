@@ -1,18 +1,26 @@
 /**
- * Database schema.
+ * Database schema — single surface.
  *
- * Deliberately empty.
+ * drizzle-kit reads this barrel to generate migrations, and the Database Adapter
+ * passes it to the Drizzle client so the relational query API is available.
  *
- * 03_DATABASE.md — which 05_DEVELOPMENT_WORKFLOW.md ranks fourth in the source
- * of truth order — has no content yet. Defining tables here would mean
- * inventing the data model, which 01_MASTER_RULES.md forbids: "Never guess
- * requirements."
+ * Repositories may import this module. They may NOT import
+ * `@/lib/drizzle/client` — ADR-005 Decision 5 places the architectural boundary
+ * at the connection, not at the query builder. ESLint enforces it.
  *
- * Milestone M01 is the foundation only. Tables arrive with the milestone that
- * owns them, once the database document defines them.
- *
- * Every table module gets re-exported from this barrel so that drizzle-kit and
- * the Database Adapter both see one schema surface.
+ * Deferred tables (ADR-005 Decision 1): orders, issues, timeline_events,
+ * notifications.
  */
 
-export {};
+export * from "./enums";
+
+export * from "./users";
+export * from "./customers";
+export * from "./accounts";
+export * from "./profiles";
+export * from "./profile-events";
+export * from "./audit-logs";
+export * from "./backups";
+export * from "./settings";
+
+export * from "./relations";

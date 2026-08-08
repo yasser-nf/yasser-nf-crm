@@ -9,14 +9,15 @@ import { fail, ok } from "@/utils/result";
 /**
  * Database Adapter.
  *
- * ADR-003 Rule 1. This is the only module in the application permitted to
- * import Drizzle, and it is where raw PostgreSQL errors die.
+ * ADR-003 Rule 1. The only module permitted to hold a database connection, and
+ * the place raw PostgreSQL errors die.
  *
  * Repositories describe WHAT data is needed. The Adapter decides HOW it is
- * retrieved. That split is what makes 01_MASTER_RULES.md's "never expose
- * technical errors to users" a structural guarantee rather than a habit — there
- * is exactly one place where a driver error can enter the system, and it cannot
- * leave without becoming an AppError.
+ * retrieved: connection, transaction scope, retry policy, error translation.
+ * ADR-005 Decision 5 records why repositories may use Drizzle's query builder
+ * while still being unable to reach a connection.
+ *
+ * No business logic lives here. The Adapter never knows what a profile is.
  */
 
 type TransactionCallback = Parameters<DrizzleClient["transaction"]>[0];
@@ -33,6 +34,38 @@ const SQL_STATE = {
   FOREIGN_KEY_VIOLATION: "23503",
   NOT_NULL_VIOLATION: "23502",
   CHECK_VIOLATION: "23514",
+  SERIALIZATION_FAILURE: "40001",
+  DEADLOCK_DETECTED: "40P01",
+  /** Class 08 — connection exceptions. */
+  CONNECTION_EXCEPTION: "08000",
+  CONNECTION_DOES_NOT_EXIST: "08003",
+  CONNECTION_FAILURE: "08006",
+  CANNOT_CONNECT_NOW: "57P03",
+  ADMIN_SHUTDOWN: "57P01",
+} as const;
+
+/**
+ * Failures that a later attempt can plausibly succeed at.
+ *
+ * Deliberately narrow. Retrying a constraint violation cannot help — the data is
+ * wrong, and retrying only delays the error while holding a connection. These
+ * are the transient cases: the pooler dropped us, the database is failing over,
+ * or two transactions collided.
+ */
+const RETRYABLE_SQL_STATES: readonly string[] = [
+  SQL_STATE.SERIALIZATION_FAILURE,
+  SQL_STATE.DEADLOCK_DETECTED,
+  SQL_STATE.CONNECTION_EXCEPTION,
+  SQL_STATE.CONNECTION_DOES_NOT_EXIST,
+  SQL_STATE.CONNECTION_FAILURE,
+  SQL_STATE.CANNOT_CONNECT_NOW,
+  SQL_STATE.ADMIN_SHUTDOWN,
+];
+
+const RETRY_POLICY = {
+  maxAttempts: 3,
+  baseDelayMs: 50,
+  maxDelayMs: 500,
 } as const;
 
 interface DriverError {
@@ -49,11 +82,36 @@ function isDriverError(value: unknown): value is DriverError {
   );
 }
 
+function isRetryable(error: unknown): boolean {
+  if (!isDriverError(error)) {
+    return false;
+  }
+
+  return RETRYABLE_SQL_STATES.includes(error.code);
+}
+
+/**
+ * Exponential backoff with jitter.
+ *
+ * Jitter matters under contention: without it, several requests that collided
+ * once retry in lockstep and collide again at the same moment.
+ */
+function backoffDelayMs(attempt: number): number {
+  const exponential = RETRY_POLICY.baseDelayMs * 2 ** (attempt - 1);
+  const capped = Math.min(exponential, RETRY_POLICY.maxDelayMs);
+
+  return capped / 2 + Math.random() * (capped / 2);
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 /**
  * Converts a driver failure into an AppError.
  *
- * The original message is preserved for logs via `cause` but never reaches the
- * user — a constraint name would tell them nothing and would leak schema shape.
+ * The original message is preserved in `cause` for logs and never reaches the
+ * user — a constraint name tells them nothing and leaks schema shape.
  */
 function translateDriverError(error: unknown, operation: string): AppError {
   if (!isDriverError(error)) {
@@ -93,22 +151,51 @@ function translateDriverError(error: unknown, operation: string): AppError {
 }
 
 /**
- * Runs a database operation and returns a Result.
+ * Runs work with the retry policy applied, returning a Result.
  *
- * `operation` is a short description used in logs. It exists so a failure is
- * traceable without attaching a stack trace to user-visible output.
+ * `operation` is a short description used in logs, so a failure is traceable
+ * without attaching a stack trace to user-visible output.
  */
+async function runWithRetry<T>(operation: string, run: () => Promise<T>): Promise<Result<T>> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= RETRY_POLICY.maxAttempts; attempt += 1) {
+    try {
+      return ok(await run());
+    } catch (caught) {
+      lastError = caught;
+
+      const canRetry = isRetryable(caught) && attempt < RETRY_POLICY.maxAttempts;
+
+      if (!canRetry) {
+        break;
+      }
+
+      const delay = backoffDelayMs(attempt);
+
+      logger.warn("Retrying database operation after a transient failure", {
+        operation,
+        attempt,
+        maxAttempts: RETRY_POLICY.maxAttempts,
+        delayMs: Math.round(delay),
+      });
+
+      await sleep(delay);
+    }
+  }
+
+  const error = translateDriverError(lastError, operation);
+  logger.error("Database operation failed", error);
+
+  return fail(error);
+}
+
+/** Runs a database operation on the pooled connection. */
 async function query<T>(
   operation: string,
   run: (executor: DatabaseExecutor) => Promise<T>,
 ): Promise<Result<T>> {
-  try {
-    return ok(await run(drizzleClient));
-  } catch (caught) {
-    const error = translateDriverError(caught, operation);
-    logger.error("Database operation failed", error);
-    return fail(error);
-  }
+  return runWithRetry(operation, () => run(drizzleClient));
 }
 
 /**
@@ -116,20 +203,16 @@ async function query<T>(
  *
  * Throwing inside the callback rolls the transaction back — that is the driver's
  * contract and cannot be expressed with Result, so the callback works in
- * exceptions and this function converts the outcome back into a Result at the
- * boundary.
+ * exceptions and this function restores the Result boundary on the way out.
+ *
+ * Retries apply to the transaction as a whole. That is what makes retrying a
+ * serialization failure or deadlock safe: the failed attempt left nothing behind.
  */
 async function transaction<T>(
   operation: string,
   run: (executor: DatabaseTransaction) => Promise<T>,
 ): Promise<Result<T>> {
-  try {
-    return ok(await drizzleClient.transaction((tx) => run(tx)));
-  } catch (caught) {
-    const error = translateDriverError(caught, operation);
-    logger.error("Database transaction failed", error);
-    return fail(error);
-  }
+  return runWithRetry(operation, () => drizzleClient.transaction((tx) => run(tx)));
 }
 
 export const databaseAdapter = { query, transaction } as const;

@@ -18,11 +18,23 @@ const MODULE_BOUNDARY = {
     "Modules expose a single public API. Import from '@/modules/<feature>' instead of reaching into its internals. See ADR-003.",
 };
 
-/** Only the Database Adapter may import Drizzle. */
-const DRIZZLE_BOUNDARY = {
-  group: ["@/lib/drizzle", "@/lib/drizzle/*", "drizzle-orm", "drizzle-orm/*"],
+/**
+ * Only the Database Adapter may hold a database connection.
+ *
+ * ADR-005 Decision 5 corrected this rule. It previously blocked `drizzle-orm`
+ * entirely, which made repositories unimplementable: a repository must build
+ * queries for its table, and ADR-003 simultaneously forbids the Adapter from
+ * building table-specific queries, so no code could build a query at all.
+ *
+ * The boundary that carries the intent is the connection, not the query builder.
+ * Repositories may use Drizzle's operators and the schema; they may not obtain a
+ * connection, so they cannot bypass error translation, the retry policy, or
+ * transaction scoping.
+ */
+const DATABASE_CONNECTION_BOUNDARY = {
+  group: ["@/lib/drizzle/client", "postgres"],
   message:
-    "Only the Database Adapter in '@/lib/database' may import Drizzle. Repositories describe what data is needed, the Adapter decides how it is retrieved. See ADR-003.",
+    "Only the Database Adapter in '@/lib/database' may hold a database connection. Execute queries through databaseAdapter.query or .transaction so error translation and the retry policy are not bypassed. See ADR-005 Decision 5.",
 };
 
 const eslintConfig = defineConfig([
@@ -51,15 +63,18 @@ const eslintConfig = defineConfig([
   },
 
   {
-    // Repositories describe WHAT. The Adapter decides HOW.
+    // Repositories describe WHAT. The Adapter decides HOW, and owns the connection.
     files: ["src/modules/**/repositories/**/*.ts"],
     rules: {
-      "no-restricted-imports": ["error", { patterns: [MODULE_BOUNDARY, DRIZZLE_BOUNDARY] }],
+      "no-restricted-imports": [
+        "error",
+        { patterns: [MODULE_BOUNDARY, DATABASE_CONNECTION_BOUNDARY] },
+      ],
     },
   },
 
   {
-    // The Adapter is the single sanctioned Drizzle import site.
+    // The Adapter and the Drizzle module are the sanctioned connection holders.
     files: ["src/lib/database/**/*.ts", "src/lib/drizzle/**/*.ts"],
     rules: {
       "no-restricted-imports": ["error", { patterns: [MODULE_BOUNDARY] }],
