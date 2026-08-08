@@ -1,0 +1,250 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Yasser NF CRM — Design Tokens
+ *
+ * 04_UI_GUIDELINES.md: Dark Theme only. No Light Theme. No Theme Switcher.
+ *
+ * There is deliberately no `.dark` class and no light-mode token set. The theme
+ * is not a mode the application can be in — it is the only appearance that
+ * exists. Adding a light palette later would be an architecture change, not a
+ * feature toggle.
+ */
+
+@theme {
+  /* ---------------------------------------------------------------------
+   * BACKGROUND — Dark Navy
+   * ------------------------------------------------------------------- */
+  --color-background: hsl(222 47% 5%);
+  --color-background-secondary: hsl(222 44% 8%);
+
+  /* Surface is used by cards, panels, dialogs and navigation. */
+  --color-surface: hsl(221 40% 11%);
+  --color-surface-raised: hsl(220 36% 14%);
+  --color-surface-overlay: hsl(220 34% 17%);
+
+  --color-border: hsl(220 26% 18%);
+  --color-border-strong: hsl(220 22% 26%);
+
+  /* ---------------------------------------------------------------------
+   * TEXT HIERARCHY
+   * Page Title > Section Title > Card Title > Description > Caption
+   * ------------------------------------------------------------------- */
+  --color-foreground: hsl(210 40% 98%);
+  --color-foreground-muted: hsl(215 20% 68%);
+  --color-foreground-subtle: hsl(215 16% 50%);
+
+  /* ---------------------------------------------------------------------
+   * PRIMARY — Cyan
+   * Buttons, links, selections, highlights, focus.
+   * ------------------------------------------------------------------- */
+  --color-primary: hsl(189 94% 43%);
+  --color-primary-hover: hsl(189 94% 50%);
+  --color-primary-active: hsl(189 94% 38%);
+  --color-primary-foreground: hsl(200 90% 6%);
+  --color-primary-subtle: hsl(189 94% 43% / 0.12);
+
+  /* ---------------------------------------------------------------------
+   * SEMANTIC
+   * ------------------------------------------------------------------- */
+  --color-success: hsl(142 71% 45%);
+  --color-success-foreground: hsl(140 90% 6%);
+  --color-success-subtle: hsl(142 71% 45% / 0.14);
+
+  --color-warning: hsl(25 95% 53%);
+  --color-warning-foreground: hsl(25 90% 8%);
+  --color-warning-subtle: hsl(25 95% 53% / 0.14);
+
+  --color-danger: hsl(0 84% 60%);
+  --color-danger-foreground: hsl(0 90% 8%);
+  --color-danger-subtle: hsl(0 84% 60% / 0.14);
+
+  /*
+   * Status palette. 04_UI_GUIDELINES.md assigns Blue to Reserved and Purple to
+   * Sold. These are part of the documented system, not "random colors".
+   */
+  --color-info: hsl(217 91% 60%);
+  --color-info-subtle: hsl(217 91% 60% / 0.14);
+
+  --color-accent-purple: hsl(258 90% 66%);
+  --color-accent-purple-subtle: hsl(258 90% 66% / 0.14);
+
+  --color-neutral: hsl(215 16% 50%);
+  --color-neutral-subtle: hsl(215 16% 50% / 0.14);
+
+  /* ---------------------------------------------------------------------
+   * BORDER RADIUS
+   * Small 8 · Medium 12 · Large 16 · Dialogs 24
+   * ------------------------------------------------------------------- */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 1.5rem;
+
+  /* ---------------------------------------------------------------------
+   * SHADOWS — Soft only. No heavy shadows. No glowing effects.
+   * ------------------------------------------------------------------- */
+  --shadow-soft: 0 1px 2px hsl(222 47% 2% / 0.4), 0 2px 8px hsl(222 47% 2% / 0.24);
+  --shadow-raised: 0 2px 4px hsl(222 47% 2% / 0.4), 0 8px 24px hsl(222 47% 2% / 0.28);
+  --shadow-overlay: 0 8px 16px hsl(222 47% 2% / 0.44), 0 24px 48px hsl(222 47% 2% / 0.36);
+
+  /* ---------------------------------------------------------------------
+   * TYPOGRAPHY — One family. Three weights: Regular, Medium, Bold.
+   * ------------------------------------------------------------------- */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+
+  --text-page-title: 1.75rem;
+  --text-page-title--line-height: 2.25rem;
+  --text-page-title--font-weight: 700;
+  --text-page-title--letter-spacing: -0.02em;
+
+  --text-section-title: 1.125rem;
+  --text-section-title--line-height: 1.75rem;
+  --text-section-title--font-weight: 500;
+  --text-section-title--letter-spacing: -0.01em;
+
+  --text-card-title: 0.9375rem;
+  --text-card-title--line-height: 1.375rem;
+  --text-card-title--font-weight: 500;
+
+  --text-description: 0.875rem;
+  --text-description--line-height: 1.375rem;
+
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.125rem;
+
+  /* ---------------------------------------------------------------------
+   * MOTION — 150 / 200 / 250ms. Never exceed 300ms.
+   * ------------------------------------------------------------------- */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 250ms;
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ---------------------------------------------------------------------
+   * shadcn/ui SEMANTIC ALIASES
+   *
+   * shadcn components are authored against a fixed vocabulary (card, popover,
+   * muted, accent, destructive, ring, input). These alias that vocabulary onto
+   * the palette above rather than declaring new colours.
+   *
+   * This is not duplication: there is exactly one place a colour value is
+   * defined, and these point at it. The alternative — rewriting every generated
+   * component to use our names — would mean hand-editing the output of every
+   * future `npx shadcn add`, forever.
+   * ------------------------------------------------------------------- */
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-foreground);
+
+  --color-popover: var(--color-surface-overlay);
+  --color-popover-foreground: var(--color-foreground);
+
+  --color-muted: var(--color-surface-raised);
+  --color-muted-foreground: var(--color-foreground-muted);
+
+  --color-accent: var(--color-surface-raised);
+  --color-accent-foreground: var(--color-foreground);
+
+  --color-secondary: var(--color-surface-raised);
+  --color-secondary-foreground: var(--color-foreground);
+
+  --color-destructive: var(--color-danger);
+  --color-destructive-foreground: var(--color-danger-foreground);
+
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-primary);
+}
+
+:root {
+  /* Consumed by third-party components that read a bare --radius, such as Sonner. */
+  --radius: 0.75rem;
+}
+
+/*
+ * SPACING
+ *
+ * 04_UI_GUIDELINES.md permits only 4 8 12 16 20 24 32 40 48 64.
+ * Tailwind's default 0.25rem step maps onto that exactly:
+ *   1=4  2=8  3=12  4=16  5=20  6=24  8=32  10=40  12=48  16=64
+ *
+ * Use only those steps for layout spacing. The scale is intentionally left
+ * dynamic so icon sizing (size-4, size-5) keeps working; restricting it would
+ * break Radix primitives for no design benefit. The constraint is documented
+ * and mirrored in config/theme.ts.
+ */
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-description);
+    line-height: var(--text-description--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Accessibility: focus must always be visible. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-strong);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-foreground-subtle);
+  }
+
+  /* Respect users who ask the operating system for reduced motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility glass {
+  background-color: hsl(221 40% 11% / 0.72);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+}

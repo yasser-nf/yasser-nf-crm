@@ -1,0 +1,15 @@
+/**
+ * Auth module — public API.
+ *
+ * ADR-003 Rule 2: this file is the module contract. Everything not exported
+ * here is internal and must not be imported from outside the module. ESLint
+ * blocks deep imports into `@/modules/auth/*`.
+ *
+ * The service is exported for cross-module use; the repository layer (when this
+ * module gains one) never will be.
+ */
+export { LoginForm } from "./components/login-form";
+export { useLogin } from "./hooks/use-login";
+export { useLogout } from "./hooks/use-logout";
+export { authService } from "./services/auth.service";
+export { loginSchema, type LoginInput } from "./validation/login.schema";

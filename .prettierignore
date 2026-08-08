@@ -1,0 +1,8 @@
+.next
+node_modules
+build
+out
+coverage
+drizzle
+package-lock.json
+*.md
