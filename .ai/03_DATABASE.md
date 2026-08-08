@@ -50,8 +50,37 @@ New table not described below
 
 profile_events
 
-Profile-level history. Distinct from timeline_events, which is account grain.
-Specified in ADR-005.
+Profile-level history. Specified in ADR-005, extended in ADR-006.
+
+Columns
+
+id · account_id · profile_id · event_type · user_id · customer_id · metadata ·
+notes · created_at
+
+---
+
+# TIMELINE_EVENTS — CANCELLED
+
+Superseded by ADR-006 Decision 1.
+
+timeline_events will never be built.
+
+profile_events is the only event source. Account history is produced by querying
+profile_events by account_id, which is why that column exists.
+
+The timeline requirement in 01_MASTER_RULES.md is therefore CLOSED, not deferred.
+
+Two sources, two jobs:
+
+profile_events
+
+What happened to the profiles.
+
+audit_logs
+
+What changed on the account record itself.
+
+The timeline_events section later in this document no longer applies.
 
 ---
 

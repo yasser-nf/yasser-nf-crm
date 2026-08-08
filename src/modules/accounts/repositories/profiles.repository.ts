@@ -60,6 +60,17 @@ export interface ProfilesRepository {
     profileId: string,
     pagination?: PaginationInput,
   ): Promise<Result<Page<ProfileEventRow>>>;
+  /**
+   * The account timeline.
+   *
+   * ADR-006 Decision 1: profile_events is the only event source, and account
+   * history is this query. The account_id column exists so it reads one index
+   * range instead of joining through profiles.
+   */
+  listAccountEvents(
+    accountId: string,
+    pagination?: PaginationInput,
+  ): Promise<Result<Page<ProfileEventRow>>>;
   countByAccount(accountId: string): Promise<Result<number>>;
 }
 
@@ -189,6 +200,25 @@ export const profilesRepository: ProfilesRepository = {
     const where = eq(profileEvents.profileId, profileId);
 
     return databaseAdapter.transaction("profiles.listEvents", async (executor) => {
+      const items = await executor
+        .select()
+        .from(profileEvents)
+        .where(where)
+        .orderBy(desc(profileEvents.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      const totals = await executor.select({ count: count() }).from(profileEvents).where(where);
+
+      return { items, total: readCount(totals), limit, offset };
+    });
+  },
+
+  async listAccountEvents(accountId, pagination = {}) {
+    const { limit, offset } = normalizePagination(pagination);
+    const where = eq(profileEvents.accountId, accountId);
+
+    return databaseAdapter.transaction("profiles.listAccountEvents", async (executor) => {
       const items = await executor
         .select()
         .from(profileEvents)

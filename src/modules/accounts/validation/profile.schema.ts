@@ -41,14 +41,20 @@ export const profileInsertSchema = createInsertSchema(profiles, {
   updatedAt: true,
 });
 
+/*
+ * Every refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality — without this,
+ * a partial update would be forced to resend every refined field.
+ */
 export const profileUpdateSchema = createUpdateSchema(profiles, {
-  profileName: z.string().trim().min(1).max(60),
+  profileName: z.string().trim().min(1).max(60).optional(),
   pin: z
     .string()
     .trim()
-    .regex(/^[0-9]{4}$/, "PIN must be exactly 4 digits"),
-  durationDays: z.number().int().positive(),
-  notes: z.string().trim().max(2000),
+    .regex(/^[0-9]{4}$/, "PIN must be exactly 4 digits")
+    .optional(),
+  durationDays: z.number().int().positive().optional(),
+  notes: z.string().trim().max(2000).optional(),
 })
   .omit({
     id: true,
@@ -75,6 +81,24 @@ export const profileUpdateSchema = createUpdateSchema(profiles, {
     { message: "An available profile cannot have a customer" },
   );
 
+/**
+ * The only fields a person may edit on a profile.
+ *
+ * M03 forbids changing the profile number, creating profiles and deleting them.
+ * Expressing the permitted set as its own schema means a form cannot submit a
+ * field the milestone forbids, even by accident.
+ */
+export const profileEditSchema = z.object({
+  profileName: z.string().trim().min(1, "Profile name is required").max(60).optional(),
+  pin: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{4}$/, "PIN must be exactly 4 digits")
+    .optional(),
+});
+
+export type ProfileEdit = z.infer<typeof profileEditSchema>;
+
 export const profileEventSelectSchema = createSelectSchema(profileEvents);
 
 export const profileEventInsertSchema = createInsertSchema(profileEvents, {
@@ -83,7 +107,7 @@ export const profileEventInsertSchema = createInsertSchema(profileEvents, {
    * Constrained to an object so a bare string or array cannot be written into a
    * column the whole history view reads. Must never carry a password.
    */
-  data: z.record(z.string(), z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 }).omit({
   id: true,
   createdAt: true,

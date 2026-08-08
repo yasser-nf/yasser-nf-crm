@@ -76,11 +76,12 @@ CREATE TABLE "profiles" (
 --> statement-breakpoint
 CREATE TABLE "profile_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"account_id" uuid NOT NULL,
 	"profile_id" uuid NOT NULL,
 	"event_type" "profile_event_type" NOT NULL,
-	"actor_user_id" uuid,
+	"user_id" uuid,
 	"customer_id" uuid,
-	"data" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"notes" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -132,8 +133,9 @@ ALTER TABLE "accounts" ADD CONSTRAINT "accounts_created_by_users_id_fk" FOREIGN 
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_account_id_accounts_id_fk" FOREIGN KEY ("account_id") REFERENCES "public"."accounts"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_worker_id_users_id_fk" FOREIGN KEY ("worker_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_events" ADD CONSTRAINT "profile_events_account_id_accounts_id_fk" FOREIGN KEY ("account_id") REFERENCES "public"."accounts"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profile_events" ADD CONSTRAINT "profile_events_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "profile_events" ADD CONSTRAINT "profile_events_actor_user_id_users_id_fk" FOREIGN KEY ("actor_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_events" ADD CONSTRAINT "profile_events_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "profile_events" ADD CONSTRAINT "profile_events_customer_id_customers_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "backups" ADD CONSTRAINT "backups_created_by_users_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
@@ -162,10 +164,11 @@ CREATE INDEX "profiles_pin_idx" ON "profiles" USING btree ("pin");--> statement-
 CREATE INDEX "profiles_sale_date_idx" ON "profiles" USING btree ("sale_date");--> statement-breakpoint
 CREATE INDEX "profiles_expiration_date_idx" ON "profiles" USING btree ("expiration_date") WHERE "profiles"."expiration_date" is not null;--> statement-breakpoint
 CREATE INDEX "profiles_availability_idx" ON "profiles" USING btree ("account_id","status") WHERE "profiles"."status" = 'available';--> statement-breakpoint
+CREATE INDEX "profile_events_account_created_idx" ON "profile_events" USING btree ("account_id","created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "profile_events_profile_created_idx" ON "profile_events" USING btree ("profile_id","created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "profile_events_type_idx" ON "profile_events" USING btree ("event_type");--> statement-breakpoint
 CREATE INDEX "profile_events_customer_id_idx" ON "profile_events" USING btree ("customer_id");--> statement-breakpoint
-CREATE INDEX "profile_events_actor_user_id_idx" ON "profile_events" USING btree ("actor_user_id");--> statement-breakpoint
+CREATE INDEX "profile_events_user_id_idx" ON "profile_events" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "profile_events_created_at_idx" ON "profile_events" USING btree ("created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "audit_logs_entity_idx" ON "audit_logs" USING btree ("entity","entity_id","created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "audit_logs_user_created_idx" ON "audit_logs" USING btree ("user_id","created_at" DESC NULLS LAST);--> statement-breakpoint

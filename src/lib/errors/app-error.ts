@@ -170,6 +170,38 @@ export class UnexpectedError extends AppError {
   protected readonly defaultUserMessage = "Something went wrong. Please try again.";
 }
 
+/**
+ * An error rebuilt on the client from a Server Action's response.
+ *
+ * ADR-006 Decision 3: a Result carries an AppError instance, and class instances
+ * do not survive the server-to-client boundary — the prototype and its methods
+ * are lost. Actions therefore return a plain envelope, and the hook layer turns
+ * it back into a real AppError here.
+ *
+ * That restoration matters: it is what lets `ErrorState`, `isAppError` and the
+ * TanStack Query retry policy keep working unchanged for data that arrived over
+ * the wire.
+ */
+export class ActionError extends AppError {
+  readonly code: string;
+  readonly severity: ErrorSeverity = "medium";
+  protected readonly defaultUserMessage: string;
+
+  /** Field-level messages, when the server reported a validation failure. */
+  readonly fieldErrors: Readonly<Record<string, string>> | undefined;
+
+  constructor(
+    userMessage: string,
+    code: string,
+    fieldErrors?: Readonly<Record<string, string>> | undefined,
+  ) {
+    super(`Server action failed: ${code}`, { userMessage });
+    this.code = code;
+    this.defaultUserMessage = userMessage;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
 /** Narrowing helper for values crossing an untyped boundary. */
 export function isAppError(value: unknown): value is AppError {
   return value instanceof AppError;

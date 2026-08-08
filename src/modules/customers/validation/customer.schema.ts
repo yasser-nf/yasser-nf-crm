@@ -39,12 +39,17 @@ export const customerInsertSchema = createInsertSchema(customers, {
   lastPurchaseAt: true,
 });
 
+/*
+ * Every refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality — without this,
+ * a partial update would be forced to resend every refined field.
+ */
 export const customerUpdateSchema = createUpdateSchema(customers, {
-  name: z.string().trim().min(1).max(120),
-  phoneOriginal: z.string().trim().min(1).max(40),
-  phoneNormalized: normalizedPhone,
-  whatsappUrl: z.url(),
-  notes: z.string().trim().max(2000),
+  name: z.string().trim().min(1).max(120).optional(),
+  phoneOriginal: z.string().trim().min(1).max(40).optional(),
+  phoneNormalized: normalizedPhone.optional(),
+  whatsappUrl: z.url().optional(),
+  notes: z.string().trim().max(2000).optional(),
 })
   .omit({
     id: true,

@@ -1,5 +1,6 @@
 import { index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
+import { accounts } from "./accounts";
 import { customers } from "./customers";
 import { profileEventTypeEnum } from "./enums";
 import { profiles } from "./profiles";
@@ -8,15 +9,15 @@ import { users } from "./users";
 /**
  * Profile history. Append-only.
  *
- * The M02 brief asks for this table to be designed for future extensibility,
- * which is why detail lives in a `data` jsonb column rather than in a widening
- * set of nullable columns. A `replaced` event needs the replacement profile, an
- * `extended` event needs the added days, a `pin_changed` event needs neither —
- * modelling all of that as columns would give every row a dozen nulls and every
- * new event type another migration.
+ * ADR-006 Decision 1: this is the ONLY event source. timeline_events is
+ * cancelled, and account history is produced by querying this table by
+ * account_id.
  *
- * Distinct from the deferred timeline_events, which records ACCOUNT history.
- * Different grain, different table. See ADR-005 Decision 1.
+ * Detail lives in a `metadata` jsonb column rather than in a widening set of
+ * nullable columns. A `replaced` event needs the replacement profile, an
+ * `extended` event needs the added days, a `pin_changed` event needs neither —
+ * modelling that as columns would give every row a dozen nulls and every new
+ * event type another migration.
  *
  * There is no updated_at and no deleted_at. 01_MASTER_RULES.md requires history
  * that is never modified, and a column that does not exist cannot be written to
@@ -27,12 +28,26 @@ export const profileEvents = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
 
+    /**
+     * The owning account.
+     *
+     * ADR-006 Decision 2. Derivable through profiles.account_id, and duplicated
+     * anyway because account history is a primary screen: without it, every
+     * account page load joins to profiles to filter. Against millions of events
+     * that join runs on every view.
+     *
+     * Safe to duplicate because it cannot drift — a profile never moves between
+     * accounts, and profiles.account_id has no update path in the codebase.
+     */
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+
     profileId: uuid("profile_id")
       .notNull()
       /*
        * Cascade: profiles die with their account, and a profile's history has no
-       * subject once the profile is gone. Account-level history is timeline_events'
-       * job, and that table is deferred.
+       * subject once the profile is gone.
        */
       .references(() => profiles.id, { onDelete: "cascade" }),
 
@@ -40,9 +55,9 @@ export const profileEvents = pgTable(
 
     /**
      * Who did it. Null for events the system raises on its own, such as expiry
-     * detected by a scheduled sweep.
+     * detected by a scheduled sweep. Named to match audit_logs.user_id.
      */
-    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
 
     /**
      * The customer this event concerned, when it concerned one.
@@ -58,7 +73,7 @@ export const profileEvents = pgTable(
      * Must never contain a password or any decrypted secret — this table is read
      * by history views and is not a place secrets should reach.
      */
-    data: jsonb("data").notNull().default({}),
+    metadata: jsonb("metadata").notNull().default({}),
 
     notes: text("notes"),
 
@@ -66,14 +81,18 @@ export const profileEvents = pgTable(
   },
   (table) => [
     /*
-     * The primary read: one profile's history, newest first. Descending in the
-     * index so the query reads the front rather than sorting.
+     * The account timeline, newest first. This index is the entire reason
+     * account_id exists on this table — it turns the timeline into one index
+     * range read instead of a join plus sort.
      */
+    index("profile_events_account_created_idx").on(table.accountId, table.createdAt.desc()),
+
+    /* One profile's history, newest first. */
     index("profile_events_profile_created_idx").on(table.profileId, table.createdAt.desc()),
 
     index("profile_events_type_idx").on(table.eventType),
     index("profile_events_customer_id_idx").on(table.customerId),
-    index("profile_events_actor_user_id_idx").on(table.actorUserId),
+    index("profile_events_user_id_idx").on(table.userId),
     index("profile_events_created_at_idx").on(table.createdAt.desc()),
   ],
 );

@@ -18,8 +18,12 @@ import { settings } from "@/lib/drizzle/schema";
 
 export const settingsSelectSchema = createSelectSchema(settings);
 
+/*
+ * The refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality.
+ */
 export const settingsUpdateSchema = createUpdateSchema(settings, {
-  values: z.record(z.string(), z.unknown()),
+  values: z.record(z.string(), z.unknown()).optional(),
 })
   .omit({
     id: true,

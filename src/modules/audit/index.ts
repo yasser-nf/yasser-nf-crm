@@ -6,6 +6,8 @@
 export type { AuditRepository, AuditFilter } from "./repositories/audit.repository";
 export { auditRepository } from "./repositories/audit.repository";
 
+export { auditService, type AuditContext, type RecordAuditInput } from "./services/audit.service";
+
 export {
   auditLogInsertSchema,
   auditLogSelectSchema,

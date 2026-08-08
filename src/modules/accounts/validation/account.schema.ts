@@ -44,11 +44,16 @@ export const accountInsertSchema = baseAccountInsert.extend({
   password: z.string().min(1, "Password is required").max(200),
 });
 
+/*
+ * Every refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality — without this,
+ * a partial update would be forced to resend every refined field.
+ */
 export const accountUpdateSchema = createUpdateSchema(accounts, {
-  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
-  country: z.string().trim().length(2).toUpperCase(),
-  notes: z.string().trim().max(2000),
-  healthScore: z.number().int().min(0).max(100),
+  email: z.string().trim().toLowerCase().email("Enter a valid email address").optional(),
+  country: z.string().trim().length(2).toUpperCase().optional(),
+  notes: z.string().trim().max(2000).optional(),
+  healthScore: z.number().int().min(0).max(100).optional(),
 })
   .omit({
     id: true,

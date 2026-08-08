@@ -44,6 +44,8 @@ export const accountsRelations = relations(accounts, ({ one, many }) => ({
   }),
   /** Exactly five, enforced in the service layer. See profiles.ts. */
   profiles: many(profiles),
+  /** The account timeline. ADR-006 Decision 1: the only event source. */
+  events: many(profileEvents),
 }));
 
 export const profilesRelations = relations(profiles, ({ one, many }) => ({
@@ -63,12 +65,16 @@ export const profilesRelations = relations(profiles, ({ one, many }) => ({
 }));
 
 export const profileEventsRelations = relations(profileEvents, ({ one }) => ({
+  account: one(accounts, {
+    fields: [profileEvents.accountId],
+    references: [accounts.id],
+  }),
   profile: one(profiles, {
     fields: [profileEvents.profileId],
     references: [profiles.id],
   }),
   actor: one(users, {
-    fields: [profileEvents.actorUserId],
+    fields: [profileEvents.userId],
     references: [users.id],
   }),
   customer: one(customers, {

@@ -24,11 +24,16 @@ export const backupInsertSchema = createInsertSchema(backups, {
   verifiedAt: true,
 });
 
+/*
+ * Every refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality — without this,
+ * a partial update would be forced to resend every refined field.
+ */
 export const backupUpdateSchema = createUpdateSchema(backups, {
-  filename: z.string().trim().min(1).max(512),
-  sizeBytes: z.number().int().nonnegative(),
-  checksum: z.string().trim().min(1).max(128),
-  errorMessage: z.string().trim().max(2000),
+  filename: z.string().trim().min(1).max(512).optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  checksum: z.string().trim().min(1).max(128).optional(),
+  errorMessage: z.string().trim().max(2000).optional(),
 })
   .omit({
     id: true,

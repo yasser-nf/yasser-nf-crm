@@ -1,6 +1,6 @@
 {
-  "id": "bd310b22-e27e-4500-ad94-03d95358b4a7",
-  "prevId": "8a22943c-00d5-48b3-8f09-2968c948857b",
+  "id": "6958a6bf-95d3-42a5-98e4-e839aa2a97a4",
+  "prevId": "822154a6-ebf4-4504-a83b-d747406f9580",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -836,6 +836,12 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "profile_id": {
           "name": "profile_id",
           "type": "uuid",
@@ -849,8 +855,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "actor_user_id": {
-          "name": "actor_user_id",
+        "user_id": {
+          "name": "user_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -861,8 +867,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "data": {
-          "name": "data",
+        "metadata": {
+          "name": "metadata",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,
@@ -883,6 +889,27 @@
         }
       },
       "indexes": {
+        "profile_events_account_created_idx": {
+          "name": "profile_events_account_created_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
         "profile_events_profile_created_idx": {
           "name": "profile_events_profile_created_idx",
           "columns": [
@@ -934,11 +961,11 @@
           "method": "btree",
           "concurrently": false
         },
-        "profile_events_actor_user_id_idx": {
-          "name": "profile_events_actor_user_id_idx",
+        "profile_events_user_id_idx": {
+          "name": "profile_events_user_id_idx",
           "columns": [
             {
-              "expression": "actor_user_id",
+              "expression": "user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -966,6 +993,19 @@
         }
       },
       "foreignKeys": {
+        "profile_events_account_id_accounts_id_fk": {
+          "name": "profile_events_account_id_accounts_id_fk",
+          "tableFrom": "profile_events",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "tableTo": "accounts",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
         "profile_events_profile_id_profiles_id_fk": {
           "name": "profile_events_profile_id_profiles_id_fk",
           "tableFrom": "profile_events",
@@ -979,11 +1019,11 @@
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
-        "profile_events_actor_user_id_users_id_fk": {
-          "name": "profile_events_actor_user_id_users_id_fk",
+        "profile_events_user_id_users_id_fk": {
+          "name": "profile_events_user_id_users_id_fk",
           "tableFrom": "profile_events",
           "columnsFrom": [
-            "actor_user_id"
+            "user_id"
           ],
           "tableTo": "users",
           "columnsTo": [

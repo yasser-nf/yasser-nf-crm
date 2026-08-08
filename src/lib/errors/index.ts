@@ -1,4 +1,5 @@
 export {
+  ActionError,
   AppError,
   ConfigurationError,
   ConflictError,

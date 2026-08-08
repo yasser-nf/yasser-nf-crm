@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 
 import {
   databaseAdapter,
@@ -37,17 +37,39 @@ const ENTITY = "Account";
 
 const liveOnly = isNull(accounts.deletedAt);
 
+/** Columns the accounts list may be ordered by. */
+export type AccountSortField = "email" | "status" | "healthScore" | "country" | "createdAt";
+
 export interface AccountFilter extends PaginationInput {
   readonly status?: AccountRow["status"] | undefined;
   readonly country?: string | undefined;
   /** Matches email, notes, or country. Never the password — it is encrypted. */
   readonly search?: string | undefined;
+  readonly sortBy?: AccountSortField | undefined;
+  readonly sortDirection?: "asc" | "desc" | undefined;
+}
+
+/**
+ * An account row plus its profile tallies.
+ *
+ * The counts are aggregated in SQL rather than by loading five profiles per row.
+ * A 25-row page would otherwise issue 25 extra queries, or return 125 profile
+ * rows the list never displays.
+ */
+export interface AccountWithCounts {
+  readonly account: AccountRow;
+  readonly availableProfiles: number;
+  readonly soldProfiles: number;
 }
 
 export interface AccountsRepository {
   findById(id: string): Promise<Result<AccountRow>>;
   findByEmail(email: string): Promise<Result<AccountRow>>;
   list(filter?: AccountFilter): Promise<Result<Page<AccountRow>>>;
+  /** The accounts list screen. Includes available and sold profile tallies. */
+  listWithCounts(filter?: AccountFilter): Promise<Result<Page<AccountWithCounts>>>;
+  /** Restores an archived account to healthy. */
+  restore(id: string): Promise<Result<AccountRow>>;
   /** Creates the account and all five profiles atomically. */
   create(input: AccountInsert, createdBy: string | null): Promise<Result<AccountRow>>;
   update(id: string, input: AccountUpdate): Promise<Result<AccountRow>>;
@@ -82,6 +104,25 @@ function buildFilter(filter: AccountFilter) {
   }
 
   return and(...conditions);
+}
+
+const SORT_COLUMNS = {
+  email: accounts.email,
+  status: accounts.status,
+  healthScore: accounts.healthScore,
+  country: accounts.country,
+  createdAt: accounts.createdAt,
+} as const;
+
+/**
+ * Resolves sort input to a column.
+ *
+ * A lookup table rather than string interpolation: an arbitrary column name from
+ * a query string must never reach SQL.
+ */
+function resolveOrderBy(filter: AccountFilter) {
+  const column = SORT_COLUMNS[filter.sortBy ?? "createdAt"];
+  return filter.sortDirection === "asc" ? asc(column) : desc(column);
 }
 
 export const accountsRepository: AccountsRepository = {
@@ -128,13 +169,43 @@ export const accountsRepository: AccountsRepository = {
         .select()
         .from(accounts)
         .where(where)
-        .orderBy(desc(accounts.createdAt))
+        .orderBy(resolveOrderBy(filter))
         .limit(limit)
         .offset(offset);
 
       const totals = await executor.select({ count: count() }).from(accounts).where(where);
 
       return { items, total: readCount(totals), limit, offset };
+    });
+  },
+
+  async listWithCounts(filter = {}) {
+    const { limit, offset } = normalizePagination(filter);
+    const where = buildFilter(filter);
+
+    return databaseAdapter.transaction("accounts.listWithCounts", async (executor) => {
+      /*
+       * Counts come from a LEFT JOIN with FILTER aggregates, so an account with
+       * no matching profiles still appears with zeroes rather than dropping out
+       * of the list. One query, one pass.
+       */
+      const rows = await executor
+        .select({
+          account: accounts,
+          availableProfiles: sql<number>`count(*) filter (where ${profiles.status} = 'available')::int`,
+          soldProfiles: sql<number>`count(*) filter (where ${profiles.status} = 'sold')::int`,
+        })
+        .from(accounts)
+        .leftJoin(profiles, eq(profiles.accountId, accounts.id))
+        .where(where)
+        .groupBy(accounts.id)
+        .orderBy(resolveOrderBy(filter))
+        .limit(limit)
+        .offset(offset);
+
+      const totals = await executor.select({ count: count() }).from(accounts).where(where);
+
+      return { items: rows, total: readCount(totals), limit, offset };
     });
   },
 
@@ -179,12 +250,13 @@ export const accountsRepository: AccountsRepository = {
         )
         .returning({ id: profiles.id });
 
-      /* Opening entry in each profile's history. */
+      /* Opening entry in each profile's history. ADR-006: account_id included. */
       await executor.insert(profileEvents).values(
         createdProfiles.map((profile) => ({
+          accountId: account.id,
           profileId: profile.id,
           eventType: "created" as const,
-          actorUserId: createdBy,
+          userId: createdBy,
         })),
       );
 
@@ -272,6 +344,29 @@ export const accountsRepository: AccountsRepository = {
       executor
         .update(accounts)
         .set({ status: "archived", archivedAt: sql`now()`, updatedAt: sql`now()` })
+        .where(and(eq(accounts.id, id), liveOnly))
+        .returning(),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return requireFound(result.value[0], ENTITY, id);
+  },
+
+  /**
+   * Restores an archived account.
+   *
+   * Returns it to `healthy` and clears archived_at. Deliberately refuses to
+   * restore a soft-deleted account: `liveOnly` excludes those, so a deleted
+   * record cannot be revived through the archive path.
+   */
+  async restore(id) {
+    const result = await databaseAdapter.query("accounts.restore", (executor) =>
+      executor
+        .update(accounts)
+        .set({ status: "healthy", archivedAt: null, updatedAt: sql`now()` })
         .where(and(eq(accounts.id, id), liveOnly))
         .returning(),
     );

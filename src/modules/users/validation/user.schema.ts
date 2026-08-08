@@ -36,9 +36,14 @@ export const userInsertSchema = createInsertSchema(users, {
   deletedAt: true,
 });
 
+/*
+ * Every refinement is `.optional()`. Supplying a schema to createUpdateSchema
+ * replaces the generated one entirely, including its optionality — without this,
+ * a partial update would be forced to resend every refined field.
+ */
 export const userUpdateSchema = createUpdateSchema(users, {
-  name: z.string().trim().min(1, "Name is required").max(120),
-  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
+  name: z.string().trim().min(1, "Name is required").max(120).optional(),
+  email: z.string().trim().toLowerCase().email("Enter a valid email address").optional(),
 })
   .omit({
     /* Immutable: id is the Supabase Auth identity. */
