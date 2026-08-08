@@ -10,15 +10,6 @@ const nextConfig: NextConfig = {
    * it — and would win by being newer.
    */
   agentRules: false,
-
-  typescript: {
-    // A build that ships type errors is not production-ready.
-    ignoreBuildErrors: false,
-  },
-
-  eslint: {
-    ignoreDuringBuilds: false,
-  },
 };
 
 export default nextConfig;
