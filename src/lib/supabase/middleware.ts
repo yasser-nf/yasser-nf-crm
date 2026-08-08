@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import type { User } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { env } from "@/config/env";
+import { env, isSupabaseConfigured } from "@/config/env";
 
 /**
  * Refreshes the Supabase session and reports who the request belongs to.
@@ -19,6 +19,20 @@ export async function updateSupabaseSession(request: NextRequest): Promise<{
   user: User | null;
 }> {
   let response = NextResponse.next({ request });
+
+  /*
+   * Without real credentials there is no session to refresh, and the request
+   * below would resolve a hostname that does not exist — a failed network round
+   * trip on every single request, including every navigation.
+   *
+   * Returning `user: null` is honest rather than a bypass: nobody is signed in,
+   * so route protection denies access and redirects to login. A misconfigured
+   * production deployment therefore locks everyone out, which is the safe
+   * direction to fail. No session is ever fabricated.
+   */
+  if (!isSupabaseConfigured()) {
+    return { response, user: null };
+  }
 
   const supabase = createServerClient(
     env.NEXT_PUBLIC_SUPABASE_URL,

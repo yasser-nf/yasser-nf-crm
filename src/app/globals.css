@@ -160,9 +160,35 @@
   --color-ring: var(--color-primary);
 }
 
+/*
+ * UNCONDITIONALLY EMITTED TOKENS
+ *
+ * Tailwind v4 tree-shakes @theme: a variable is only emitted if some utility
+ * class in the build references it. That is fine for `bg-surface` — the class
+ * and the variable ship together.
+ *
+ * It is not fine for a token read through `var()` in a TSX inline style or an
+ * arbitrary value, because Tailwind cannot see that usage. Such a token survives
+ * only while some unrelated class happens to reference it, and silently vanishes
+ * the day that class is deleted — with no build error and no failing test.
+ *
+ * Every token consumed via var() outside a Tailwind class is therefore declared
+ * here as well, so its presence does not depend on coincidence.
+ *
+ * Add to this list when new code reads a token with var().
+ */
 :root {
-  /* Consumed by third-party components that read a bare --radius, such as Sonner. */
+  /* Bare --radius: read by third-party components such as Sonner. */
   --radius: 0.75rem;
+
+  /* src/shared/ui/sonner.tsx — toast inline style */
+  --color-surface-overlay: hsl(220 34% 17%);
+  --color-border-strong: hsl(220 22% 26%);
+  --color-foreground: hsl(210 40% 98%);
+  --radius-md: 0.75rem;
+
+  /* src/app/(auth)/login/page.tsx — radial gradient arbitrary value */
+  --color-primary-subtle: hsl(189 94% 43% / 0.12);
 }
 
 /*

@@ -65,15 +65,32 @@ real credentials are supplied, and the login page says so explicitly.
 
 | Command               | Purpose                                        |
 | --------------------- | ---------------------------------------------- |
+| `npm run verify`      | **All gates below. Run before every commit.**  |
 | `npm run dev`         | Development server                             |
 | `npm run build`       | Production build                               |
 | `npm run lint`        | ESLint, including architecture boundary rules  |
 | `npm run typecheck`   | TypeScript with no emit                        |
 | `npm run format`      | Prettier write                                 |
+| `npm run format:check`| Prettier check without writing                 |
 | `npm run audit:prod`  | Audit production dependencies only             |
 | `npm run db:generate` | Generate a migration from the Drizzle schema   |
 | `npm run db:migrate`  | Apply migrations                               |
 | `npm run db:studio`   | Drizzle Studio                                 |
+
+`npm run verify` runs lint → typecheck → format check → production build →
+production audit, and stops at the first failure.
+
+---
+
+## Documentation
+
+| Document | Contents |
+| -------- | -------- |
+| [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) | Folder tree, module tree, public APIs, layer communication, data flow |
+| [docs/DEPENDENCY_GRAPH.md](docs/DEPENDENCY_GRAPH.md) | The six-layer chain, shared dependencies, providers, boot sequence |
+| [docs/HEALTH_CHECK.md](docs/HEALTH_CHECK.md) | Dead code, duplication, unused exports, weak typing, security posture |
+
+These describe the code. `.ai/` decides it. Where they disagree, `.ai/` wins.
 
 ---
 

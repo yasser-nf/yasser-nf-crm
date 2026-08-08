@@ -66,7 +66,12 @@ export function FormField({
         />
 
         {trailing ? (
-          <div className="absolute inset-y-0 right-0 flex items-center pr-1">{trailing}</div>
+          /*
+           * No horizontal padding. 04_UI_GUIDELINES.md sets a 44x44 minimum
+           * touch target, and the field is exactly 44px tall — inset padding
+           * would shrink a trailing control below that.
+           */
+          <div className="absolute inset-y-0 right-0 flex items-center">{trailing}</div>
         ) : null}
       </div>
 

@@ -100,11 +100,12 @@ export function LoginForm() {
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               tabIndex={-1}
               aria-label={isPasswordVisible ? "Hide password" : "Show password"}
               onClick={() => setIsPasswordVisible((visible) => !visible)}
-              className="text-foreground-subtle hover:text-foreground"
+              // size-11 meets the 44x44 minimum touch target on mobile.
+              className="size-11 text-foreground-subtle hover:text-foreground"
             >
               {isPasswordVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
             </Button>
@@ -127,7 +128,8 @@ export function LoginForm() {
             <p className="text-description text-foreground">{login.error.userMessage}</p>
             <button
               type="submit"
-              className="self-start text-caption font-medium text-primary underline-offset-4 hover:underline"
+              // min-h-11 keeps this recovery action tappable at the 44px minimum.
+              className="inline-flex min-h-11 items-center self-start text-caption font-medium text-primary underline-offset-4 hover:underline"
             >
               Try again
             </button>
