@@ -6,6 +6,9 @@ import { notFound } from "next/navigation";
 import { ROUTES } from "@/config/constants";
 import { NotFoundError } from "@/lib/errors";
 import { AccountHeader, AccountTimeline, ProfileCard, accountsService } from "@/modules/accounts";
+import type { AccountRow } from "@/lib/drizzle/schema";
+import type { ProfileAllocation } from "@/modules/accounts";
+import { ReplaceAccountButton } from "@/modules/quick-prepare";
 import { ErrorState } from "@/shared/feedback/error-state";
 
 export const metadata: Metadata = {
@@ -22,6 +25,67 @@ export const metadata: Metadata = {
  * it is fetched by a separate action when someone clicks to reveal it, so a
  * page view never puts a credential in the HTML.
  */
+/**
+ * Offers replacement to every customer stranded on a broken account.
+ *
+ * Rendered only for the four fault statuses — the button itself returns null
+ * otherwise, so a healthy account shows nothing.
+ *
+ * Grouped by customer because replacement moves one customer's whole holding at
+ * once. A customer with three profiles on this account gets one button, not
+ * three, and their three profiles land together on the new account.
+ */
+function ReplaceAllocations({
+  account,
+  profiles,
+}: {
+  account: AccountRow;
+  profiles: readonly ProfileAllocation[];
+}) {
+  const byCustomer = new Map<string, number>();
+
+  for (const { profile } of profiles) {
+    if (profile.customerId) {
+      byCustomer.set(profile.customerId, (byCustomer.get(profile.customerId) ?? 0) + 1);
+    }
+  }
+
+  if (byCustomer.size === 0) {
+    return null;
+  }
+
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-warning/30 bg-surface p-5">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-section-title text-foreground">Affected customers</h2>
+        <p className="text-caption text-foreground-muted">
+          Move a customer to healthy stock. They keep their original expiration date.
+        </p>
+      </div>
+
+      <ul className="flex flex-col gap-2">
+        {[...byCustomer.entries()].map(([customerId, count], index) => (
+          <li
+            key={customerId}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-background-secondary px-4 py-3"
+          >
+            <span className="text-description text-foreground">
+              Customer {index + 1} · {count} profile{count === 1 ? "" : "s"}
+            </span>
+
+            <ReplaceAccountButton
+              account={account}
+              customerId={customerId}
+              customerLabel={`customer ${index + 1}`}
+              profileCount={count}
+            />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default async function AccountDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
@@ -87,6 +151,8 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         </div>
       ) : null}
 
+      <ReplaceAllocations account={account} profiles={profiles} />
+
       <section className="flex flex-col gap-4">
         <h2 className="text-section-title text-foreground">Profiles</h2>
 
@@ -107,7 +173,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         </div>
       </section>
 
-      <section className="flex flex-col gap-4">
+      <section className="flex flex-col gap-4" id="timeline">
         <h2 className="text-section-title text-foreground">Timeline</h2>
 
         {timeline.ok ? (

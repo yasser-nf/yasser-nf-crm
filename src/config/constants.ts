@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Application-wide constants.
  *
  * 01_MASTER_RULES.md forbids hardcoded business data. Values here are structural

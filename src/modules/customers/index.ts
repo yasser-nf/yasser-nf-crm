@@ -8,6 +8,8 @@
 export type { CustomersRepository, CustomerFilter } from "./repositories/customers.repository";
 export { customersRepository } from "./repositories/customers.repository";
 
+export { customersService, type FindOrCreateResult } from "./services/customers.service";
+
 export {
   customerInsertSchema,
   customerSelectSchema,
