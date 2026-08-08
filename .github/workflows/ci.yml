@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    env:
+      # Shape-valid placeholders. The pipeline never touches a real database.
+      # config/env.ts and env.server.ts validate at boot and fail fast, so these
+      # must satisfy the schemas or the build stops — which is the intended
+      # behaviour and is itself worth exercising in CI.
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+      DATABASE_URL: postgresql://postgres:placeholder@placeholder.supabase.co:5432/postgres
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` rather than `npm install`: it installs exactly the lockfile and
+      # fails if package.json and the lock have drifted, which install would
+      # silently repair.
+      - name: Install
+        run: npm ci
+
+      # Steps are separate rather than one `npm run verify` call so a failure
+      # names the stage in the GitHub UI instead of one opaque red cross.
+      # Each still fails the job immediately.
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Migration consistency
+        run: npm run db:check
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Production dependency audit
+        run: npm run audit:prod
+
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    needs: verify
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+      DATABASE_URL: postgresql://postgres:placeholder@placeholder.supabase.co:5432/postgres
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Only the unauthenticated journeys run here. Signing in needs a real
+      # Supabase project and a password, neither of which belongs in CI without
+      # a dedicated test project and a seeded user. See KNOWN_LIMITATIONS.md.
+      - name: E2E (unauthenticated journeys)
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
