@@ -4,6 +4,7 @@ import { accounts } from "./accounts";
 import { auditLogs } from "./audit-logs";
 import { backups } from "./backups";
 import { customers } from "./customers";
+import { loginHistory } from "./login-history";
 import { profileEvents } from "./profile-events";
 import { profiles } from "./profiles";
 import { settings } from "./settings";
@@ -29,6 +30,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   profileEvents: many(profileEvents),
   requestedBackups: many(backups),
   settingsUpdates: many(settings),
+  loginHistory: many(loginHistory),
 }));
 
 export const customersRelations = relations(customers, ({ many }) => ({
@@ -80,6 +82,17 @@ export const profileEventsRelations = relations(profileEvents, ({ one }) => ({
   customer: one(customers, {
     fields: [profileEvents.customerId],
     references: [customers.id],
+  }),
+}));
+
+export const loginHistoryRelations = relations(loginHistory, ({ one }) => ({
+  /**
+   * Optional on purpose: a failed attempt against an unknown address has no
+   * user to point at, and that is precisely the case worth recording.
+   */
+  user: one(users, {
+    fields: [loginHistory.userId],
+    references: [users.id],
   }),
 }));
 

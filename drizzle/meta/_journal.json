@@ -36,6 +36,20 @@
       "when": 1786276508296,
       "tag": "0004_user_status_suspended",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786304947014,
+      "tag": "0005_login_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786305035595,
+      "tag": "0006_login_history_rls",
+      "breakpoints": true
     }
   ]
 }

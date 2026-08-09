@@ -20,6 +20,7 @@ export * from "./accounts";
 export * from "./profiles";
 export * from "./profile-events";
 export * from "./audit-logs";
+export * from "./login-history";
 export * from "./backups";
 export * from "./settings";
 

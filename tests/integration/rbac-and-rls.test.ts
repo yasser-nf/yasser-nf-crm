@@ -30,6 +30,14 @@ afterAll(async () => {
   await sql?.end({ timeout: 5 });
 });
 
+/**
+ * Every table in `public`.
+ *
+ * The count is asserted, not just the membership: a table added without RLS
+ * would otherwise pass silently, which is exactly how login_history slipped
+ * through in M06 — `ALTER DEFAULT PRIVILEGES` governs grants, not row security,
+ * so anything created after migration 0002 starts with RLS off.
+ */
 const TABLES = [
   "users",
   "customers",
@@ -37,6 +45,7 @@ const TABLES = [
   "profiles",
   "profile_events",
   "audit_logs",
+  "login_history",
   "backups",
   "settings",
 ] as const;
@@ -116,11 +125,16 @@ describe.skipIf(!configured)("RLS — database configuration", () => {
     }
   });
 
-  it("gives history tables no UPDATE or DELETE policy", async () => {
+  it("gives append-only tables no UPDATE or DELETE policy", async () => {
+    /*
+     * profile_events, audit_logs and login_history are all append-only. An
+     * absent policy is stronger than one returning false: there is nothing to
+     * edit rather than a rule that could be got wrong.
+     */
     const rows = await sql!`
       select tablename, cmd from pg_policies
       where schemaname = 'public'
-        and tablename in ('profile_events', 'audit_logs')
+        and tablename in ('profile_events', 'audit_logs', 'login_history')
         and cmd in ('UPDATE', 'DELETE')`;
 
     expect(rows).toEqual([]);

@@ -119,6 +119,29 @@ export const auditEntityEnum = pgEnum("audit_entity", [
   "settings",
 ]);
 
+/**
+ * Authentication events, recorded in login_history.
+ *
+ * A dedicated list rather than reusing audit_action: those describe changes to
+ * business entities, these describe attempts to authenticate. `login_failed`
+ * has no entity at all, which is exactly why it does not belong in the audit
+ * enum.
+ *
+ * The M06 continuation brief requires this table because auth.audit_log_entries
+ * was measured empty — 0 rows against 12 refresh tokens.
+ */
+export const authEventTypeEnum = pgEnum("auth_event_type", [
+  "login_success",
+  "login_failed",
+  "logout",
+  "password_reset_requested",
+  "password_reset_completed",
+  "session_expired",
+  "session_revoked",
+  "invitation_sent",
+  "invitation_accepted",
+]);
+
 /** 03_DATABASE.md backup strategy: hourly, daily, manual, restore point. */
 export const backupTypeEnum = pgEnum("backup_type", ["hourly", "daily", "manual"]);
 
