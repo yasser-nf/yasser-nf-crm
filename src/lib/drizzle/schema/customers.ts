@@ -46,6 +46,19 @@ export const customers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 
+    /**
+     * The only stored piece of customer status.
+     *
+     * M05 defines four statuses. Three are derivable and therefore not stored:
+     * Archived is `deleted_at`, Active means holding a live subscription, and
+     * Inactive is the absence of one. Storing those would duplicate state and go
+     * stale the moment a subscription expired on its own.
+     *
+     * Blocked is a human decision that nothing else can be inferred from, so it
+     * is the one that needs a column.
+     */
+    blockedAt: timestamp("blocked_at", { withTimezone: true }),
+
     /** Soft delete: a customer may be referenced by profile history. */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },

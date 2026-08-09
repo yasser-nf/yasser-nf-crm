@@ -79,6 +79,19 @@ export const customerUpdateSchema = createUpdateSchema(customers, {
     },
   );
 
+/**
+ * The internal note, edited on the customer detail page.
+ *
+ * Its own schema rather than reusing the update schema: a note form must not be
+ * able to submit a phone number, and the narrowest schema is what guarantees
+ * that rather than trusting the caller to send only what it should.
+ */
+export const customerNotesSchema = z.object({
+  notes: z.string().trim().max(2000, "Notes are limited to 2000 characters"),
+});
+
+export type CustomerNotesInput = z.infer<typeof customerNotesSchema>;
+
 export type CustomerSelect = z.infer<typeof customerSelectSchema>;
 export type CustomerInsert = z.infer<typeof customerInsertSchema>;
 export type CustomerUpdate = z.infer<typeof customerUpdateSchema>;

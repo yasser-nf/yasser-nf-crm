@@ -1,0 +1,1 @@
+ALTER TABLE "customers" ADD COLUMN "blocked_at" timestamp with time zone;
