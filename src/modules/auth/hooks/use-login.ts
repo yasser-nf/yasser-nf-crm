@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { DEFAULT_AUTHENTICATED_ROUTE, REDIRECT_QUERY_PARAM } from "@/config/constants";
 import { unwrap } from "@/utils/result";
+import { recordLoginAction } from "../actions/session.actions";
 import { authService } from "../services/auth.service";
 import type { LoginInput } from "../validation/login.schema";
 
@@ -37,6 +38,13 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (input: LoginInput) => unwrap(await authService.signIn(input)),
     onSuccess: () => {
+      /*
+       * Fire and forget. The server resolves who logged in from the session
+       * cookie, so this cannot be used to forge a login, and a failed timestamp
+       * write must never block a successful sign-in.
+       */
+      void recordLoginAction();
+
       const destination = toSafeRedirect(searchParams.get(REDIRECT_QUERY_PARAM));
 
       /*

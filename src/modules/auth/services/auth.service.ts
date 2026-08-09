@@ -1,7 +1,7 @@
-import type { AuthError } from "@supabase/supabase-js";
+﻿import type { AuthError } from "@supabase/supabase-js";
 
 import { isSupabaseConfigured } from "@/config/env";
-import { toAppUser, type AppUser } from "@/lib/auth";
+import { toAuthIdentity, type AuthIdentity } from "@/lib/auth";
 import {
   ConfigurationError,
   ExternalServiceError,
@@ -19,7 +19,7 @@ import { loginSchema, type LoginInput } from "../validation/login.schema";
  * Authentication service.
  *
  * ADR-003 Rule 3: returns Result, never throws for an expected outcome. A wrong
- * password is not exceptional — it is the single most common thing that happens
+ * password is not exceptional â€” it is the single most common thing that happens
  * on a login form.
  *
  * 05_DEVELOPMENT_WORKFLOW.md requires services to be pure business logic with no
@@ -69,7 +69,7 @@ const NOT_CONFIGURED_MESSAGE =
  * Input is revalidated here rather than trusted from the form. 02_ARCHITECTURE.md:
  * never trust frontend validation.
  */
-async function signIn(input: LoginInput): Promise<Result<AppUser>> {
+async function signIn(input: LoginInput): Promise<Result<AuthIdentity>> {
   const parsed = loginSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -105,9 +105,17 @@ async function signIn(input: LoginInput): Promise<Result<AppUser>> {
       return fail(translateAuthError(error));
     }
 
-    const user = toAppUser(data.user);
+    /*
+     * Returns the identity, not an AppUser.
+     *
+     * Since M04.9 an AppUser carries a role, and the role lives in public.users.
+     * Building one here would mean the browser inventing an authorization
+     * claim. The server resolves the role on the next render, and refuses the
+     * session entirely if no active CRM record exists.
+     */
+    const identity = toAuthIdentity(data.user);
 
-    if (!user) {
+    if (!identity) {
       return fail(
         new UnauthorizedError("Authenticated user has no email address", {
           userMessage: "This account cannot be used to sign in. Please contact your administrator.",
@@ -115,7 +123,7 @@ async function signIn(input: LoginInput): Promise<Result<AppUser>> {
       );
     }
 
-    return ok(user);
+    return ok(identity);
   } catch (caught) {
     return fail(toAppError(caught));
   }

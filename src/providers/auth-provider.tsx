@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { createContext, use, useEffect, useMemo, useState } from "react";
 
-import { toAppUser, type AppUser } from "@/lib/auth";
+import type { AppUser } from "@/lib/auth";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 /**
@@ -56,13 +56,23 @@ export function AuthProvider({
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(toAppUser(session?.user ?? null));
+    } = supabase.auth.onAuthStateChange((event) => {
+      /*
+       * The client cannot build an AppUser. Since M04.9 the role comes from
+       * public.users, and reading it requires the server — so constructing one
+       * here would mean inventing an authorization claim in the browser.
+       *
+       * Signing out is the one transition the client may apply immediately:
+       * clearing the user is never an escalation, and waiting for a round trip
+       * would leave a signed-out person looking at their own data.
+       */
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+      }
 
       /*
-       * Server Components hold the authoritative view of the session. Refreshing
-       * lets middleware re-run and redirect, rather than leaving a signed-out
-       * user looking at a page they can no longer load data for.
+       * Everything else defers to the server, which re-resolves the session and
+       * the CRM record and sends back an authoritative `initialUser`.
        */
       if (event === "SIGNED_OUT" || event === "SIGNED_IN") {
         router.refresh();

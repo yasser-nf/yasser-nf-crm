@@ -28,7 +28,13 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["tests/unit/**/*.test.ts"],
+    /*
+     * Integration tests run against the real database and skip themselves when
+     * only placeholder credentials are present, so a fresh clone and CI both
+     * stay green without a project.
+     */
+    include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
+    testTimeout: 30_000,
     environment: "node",
     globals: false,
     reporters: ["default"],

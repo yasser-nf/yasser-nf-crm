@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { AppUser } from "@/lib/auth";
+import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
@@ -79,26 +80,30 @@ export function evaluateAllocation(account: AccountRow, profile: ProfileRow): Pr
  * Only a Super Admin may delete an account.
  *
  * 01_MASTER_RULES.md lists deleting accounts among the things a Worker cannot
- * do. Checked here rather than in the UI, because hiding a button is not
- * access control.
+ * do. Enforced here, in the service, rather than by hiding a button — the UI is
+ * a suggestion, and a Server Action is a POST endpoint anyone holding a session
+ * can call directly.
  *
- * ADR-005 Decision 3 made public.users.role authoritative, but the signed-in
- * AppUser does not yet carry it — the users table has no rows and no service
- * populates it. Until it does, this check cannot pass anyone, so deletion is
- * refused outright rather than silently allowed.
+ * The role is read from public.users by getCurrentUser, which ADR-005 Decision 3
+ * made authoritative. It is never read from Supabase Auth metadata: a second
+ * copy of an authorization decision is a copy that can disagree with the real
+ * one.
  */
 function assertMayDelete(actor: AppUser | null): Result<AppUser> {
   if (!actor) {
     return fail(new ForbiddenError("No signed-in user for a delete operation"));
   }
 
-  return fail(
-    new ForbiddenError("Role is not yet resolvable from the session", {
-      userMessage:
-        "Deleting accounts is unavailable until user roles are configured. Archive it instead.",
-      context: { actorId: actor.id },
-    }),
-  );
+  if (!roleHasPermission(actor.role, PERMISSIONS.DELETE_ACCOUNTS)) {
+    return fail(
+      new ForbiddenError(`Role ${actor.role} may not delete accounts`, {
+        userMessage: "You do not have permission to delete accounts. Archive it instead.",
+        context: { actorId: actor.id, role: actor.role },
+      }),
+    );
+  }
+
+  return ok(actor);
 }
 
 async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountWithCounts>>> {
