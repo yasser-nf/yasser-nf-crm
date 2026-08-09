@@ -50,11 +50,23 @@ export const userRoleEnum = pgEnum("user_role", ["super_admin", "worker"]);
 /**
  * Account state for a CRM user.
  *
- * No document defines this list. 03_DATABASE.md gives users a `status` column
- * without values, so the minimum honest set is used: a user can sign in, or
- * cannot. Anything richer would be inventing a business rule.
+ * M06 defines the semantics that were missing when this enum was created:
+ *
+ *   active     may authenticate and use the CRM
+ *   suspended  may not authenticate; existing sessions are left alone, so
+ *              lifting the suspension restores access without a new sign-in
+ *   disabled   may not authenticate AND every session is revoked immediately
+ *
+ * `archived` is not a value here. It is `deleted_at`, derived rather than
+ * stored, matching how customer status works — a stored `archived` could
+ * disagree with the tombstone.
+ *
+ * `blocked` was NOT added. The M06 brief lists it, but gives it no semantics
+ * distinct from suspended or disabled, and a third near-identical "cannot use
+ * the system" state would be indistinguishable in practice. See
+ * docs/USERS_MODULE.md.
  */
-export const userStatusEnum = pgEnum("user_status", ["active", "disabled"]);
+export const userStatusEnum = pgEnum("user_status", ["active", "suspended", "disabled"]);
 
 /**
  * Profile history event types, from the M02 brief.

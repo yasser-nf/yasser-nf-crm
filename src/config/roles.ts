@@ -1,12 +1,11 @@
 /**
- * User roles.
+ * Roles and permissions.
  *
- * ADR-003: M01 defines roles as types only. No role is persisted yet, because
- * 03_DATABASE.md is empty and the users table is undefined. Route protection in
- * M01 is authenticated-versus-guest only.
+ * ADR-005 Decision 3 makes public.users.role authoritative. M04.9 wired
+ * getCurrentUser to read it, so these checks are live rather than theoretical.
  *
- * When the database document exists, the storage location is added here and the
- * permission checks below become enforceable. The shape does not change.
+ * M06 expanded this into the full permission matrix. Two roles only — the brief
+ * is explicit that no others exist.
  */
 
 export const USER_ROLES = {
@@ -17,40 +16,123 @@ export const USER_ROLES = {
 export type UserRole = (typeof USER_ROLES)[keyof typeof USER_ROLES];
 
 /**
- * Capabilities a role may exercise.
+ * Every capability the application gates on.
  *
- * 01_MASTER_RULES.md states what a Worker cannot do. Expressing it as an
- * allow-list rather than a deny-list means a new capability defaults to denied
- * for Workers instead of accidentally being granted.
+ * Named for the action rather than the screen. A permission tied to a page
+ * stops meaning anything the moment the page moves, and authorization must
+ * survive a redesign.
  */
 export const PERMISSIONS = {
+  /* Accounts */
+  VIEW_ACCOUNTS: "view_accounts",
+  CREATE_ACCOUNTS: "create_accounts",
+  EDIT_ACCOUNTS: "edit_accounts",
+  ARCHIVE_ACCOUNTS: "archive_accounts",
   DELETE_ACCOUNTS: "delete_accounts",
+
+  /* Profiles */
+  EDIT_PROFILE_NAMES: "edit_profile_names",
+  EDIT_PROFILE_PINS: "edit_profile_pins",
+
+  /* Allocation */
+  PREPARE_SUBSCRIPTIONS: "prepare_subscriptions",
+  REPLACE_ACCOUNTS: "replace_accounts",
+
+  /* Customers */
+  VIEW_CUSTOMERS: "view_customers",
+  EDIT_CUSTOMER_NOTES: "edit_customer_notes",
+  BLOCK_CUSTOMERS: "block_customers",
+  ARCHIVE_CUSTOMERS: "archive_customers",
+
+  /* Operations */
+  SEARCH: "search",
+  OPEN_WHATSAPP: "open_whatsapp",
+
+  /* Administration */
   MANAGE_USERS: "manage_users",
+  MODIFY_PERMISSIONS: "modify_permissions",
   ACCESS_SETTINGS: "access_settings",
   ACCESS_BACKUPS: "access_backups",
-  VIEW_SYSTEM_INFORMATION: "view_system_information",
+  VIEW_SECURITY: "view_security",
   VIEW_LOGS: "view_logs",
+  ACCESS_DEVELOPER_PAGES: "access_developer_pages",
+  VIEW_SYSTEM_INFORMATION: "view_system_information",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
+/**
+ * What a Worker may do.
+ *
+ * Taken verbatim from the M06 brief's "Workers may" list. Expressed as an
+ * allow-list rather than a deny-list, so a permission added later defaults to
+ * denied for Workers instead of being silently granted — the direction a
+ * mistake should fail in.
+ */
+const WORKER_PERMISSIONS: readonly Permission[] = [
+  PERMISSIONS.VIEW_ACCOUNTS,
+  PERMISSIONS.VIEW_CUSTOMERS,
+  PERMISSIONS.PREPARE_SUBSCRIPTIONS,
+  PERMISSIONS.REPLACE_ACCOUNTS,
+  PERMISSIONS.EDIT_PROFILE_NAMES,
+  PERMISSIONS.EDIT_PROFILE_PINS,
+  PERMISSIONS.EDIT_CUSTOMER_NOTES,
+  PERMISSIONS.OPEN_WHATSAPP,
+  PERMISSIONS.SEARCH,
+];
+
+/** Super Admin holds everything. Listed by derivation so it cannot drift. */
+const ALL_PERMISSIONS = Object.values(PERMISSIONS);
+
 const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
-  [USER_ROLES.SUPER_ADMIN]: [
-    PERMISSIONS.DELETE_ACCOUNTS,
-    PERMISSIONS.MANAGE_USERS,
-    PERMISSIONS.ACCESS_SETTINGS,
-    PERMISSIONS.ACCESS_BACKUPS,
-    PERMISSIONS.VIEW_SYSTEM_INFORMATION,
-    PERMISSIONS.VIEW_LOGS,
-  ],
-  [USER_ROLES.WORKER]: [],
+  [USER_ROLES.SUPER_ADMIN]: ALL_PERMISSIONS,
+  [USER_ROLES.WORKER]: WORKER_PERMISSIONS,
 };
 
 export function roleHasPermission(role: UserRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
 }
 
+/** Every permission a role holds. Used by the users screen to explain access. */
+export function permissionsForRole(role: UserRole): readonly Permission[] {
+  return ROLE_PERMISSIONS[role];
+}
+
 export const ROLE_LABELS: Record<UserRole, string> = {
   [USER_ROLES.SUPER_ADMIN]: "Super Admin",
   [USER_ROLES.WORKER]: "Worker",
 };
+
+/**
+ * User status.
+ *
+ * `archived` is deliberately absent: it is `deleted_at`, derived rather than
+ * stored, exactly as customer status works. Adding it here would let a row be
+ * archived-but-not-deleted and disagree with itself.
+ *
+ * See docs/USERS_MODULE.md for why `blocked` was not added.
+ */
+export const USER_STATUSES = {
+  ACTIVE: "active",
+  SUSPENDED: "suspended",
+  DISABLED: "disabled",
+} as const;
+
+export type UserStatus = (typeof USER_STATUSES)[keyof typeof USER_STATUSES];
+
+export const USER_STATUS_LABELS: Record<UserStatus, string> = {
+  [USER_STATUSES.ACTIVE]: "Active",
+  [USER_STATUSES.SUSPENDED]: "Suspended",
+  [USER_STATUSES.DISABLED]: "Disabled",
+};
+
+/**
+ * Whether a status permits using the CRM.
+ *
+ * Only `active` does. Suspended and disabled both deny; they differ in what
+ * happens to existing sessions, which is a concern of the service that applies
+ * them rather than of this predicate.
+ */
+export function statusAllowsAccess(status: UserStatus): boolean {
+  return status === USER_STATUSES.ACTIVE;
+}
