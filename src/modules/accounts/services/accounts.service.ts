@@ -2,9 +2,10 @@ import "server-only";
 
 import type { AppUser } from "@/lib/auth";
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
-import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
+import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
+import { problemsService } from "@/modules/problems";
 import type { Page, PaginationInput } from "@/lib/database";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
@@ -46,13 +47,16 @@ export interface ProfileAllocation {
    */
   readonly isAllocatable: boolean;
   /** Why not, when it is not. Null when allocatable. */
-  readonly blockedReason: "account_not_healthy" | "profile_not_available" | null;
+  readonly blockedReason:
+    "account_not_healthy" | "account_has_problem" | "profile_not_available" | null;
 }
 
 export interface AccountDetail {
   readonly account: AccountRow;
   readonly profiles: readonly ProfileAllocation[];
-  /** False when the account's own status blocks every profile. */
+  /** Open problems blocking this account. Empty when nothing is wrong. */
+  readonly activeProblems: readonly IssueRow[];
+  /** False when the account's status or an open problem blocks every profile. */
   readonly accountAllowsAllocation: boolean;
   /** True when the profile count is not exactly five. Signals corrupt data. */
   readonly hasProfileCountAnomaly: boolean;
@@ -63,10 +67,29 @@ export interface AccountDetail {
  *
  * Exported so the Smart Stock Engine and Quick Prepare use the same function
  * rather than reimplementing the rule. One definition, one place to be wrong.
+ *
+ * M08 added the second input. `accounts.status` remains the persisted
+ * operational status and problems never write to it — ADR-010 Decision 4. An
+ * account is allocatable only when its status is healthy AND no active blocking
+ * problem exists, and that conjunction is computed here rather than stored, so
+ * neither fact is duplicated and neither can go stale against the other.
  */
-export function evaluateAllocation(account: AccountRow, profile: ProfileRow): ProfileAllocation {
+export function evaluateAllocation(
+  account: AccountRow,
+  profile: ProfileRow,
+  hasActiveProblem = false,
+): ProfileAllocation {
   if (account.status !== "healthy") {
     return { profile, isAllocatable: false, blockedReason: "account_not_healthy" };
+  }
+
+  /*
+   * Checked after status so the more specific reason wins: an account that is
+   * both unhealthy and has an open problem reports the status, which is what a
+   * worker can act on directly.
+   */
+  if (hasActiveProblem) {
+    return { profile, isAllocatable: false, blockedReason: "account_has_problem" };
   }
 
   if (profile.status !== "available") {
@@ -128,10 +151,23 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
 
   const account = accountResult.value;
 
+  /*
+   * Active problems reach this module through the Problems module's public API,
+   * never by querying `issues` here. The M08 brief makes ProblemsService the
+   * single source of truth for problems, and a second reader would be a second
+   * definition of "active".
+   */
+  const activeProblems = await problemsService.activeForAccount(id);
+  const problems = activeProblems.ok ? activeProblems.value : [];
+  const hasActiveProblem = problems.length > 0;
+
   return ok({
     account,
-    profiles: profilesResult.value.map((profile) => evaluateAllocation(account, profile)),
-    accountAllowsAllocation: account.status === "healthy",
+    activeProblems: problems,
+    profiles: profilesResult.value.map((profile) =>
+      evaluateAllocation(account, profile, hasActiveProblem),
+    ),
+    accountAllowsAllocation: account.status === "healthy" && !hasActiveProblem,
     /*
      * Surfaced rather than thrown. A count other than five means data arrived
      * outside accountsRepository.create — a migration or a manual insert. The

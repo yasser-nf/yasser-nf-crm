@@ -42,7 +42,25 @@ export default defineConfig({
      */
     include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
     setupFiles: ["tests/setup/env.ts"],
+    /*
+     * One file at a time.
+     *
+     * Every integration file opens its own postgres client, and the application's
+     * Drizzle pool holds up to ten more. Supabase's session pooler caps the
+     * project at 15 clients, so running files in parallel exhausts it and the
+     * suite fails with EMAXCONNSESSION — a connection limit, not a defect in the
+     * code under test. Serial execution is slower and honest; a flaky suite that
+     * blames the wrong thing is worse.
+     */
+    fileParallelism: false,
     testTimeout: 30_000,
+    /*
+     * Hooks get the same budget as tests. The default is 10s, and an integration
+     * `beforeAll` that opens a connection and reads a few rows over a remote
+     * pooler can exceed that on a cold start — a timeout there reports as a
+     * failed suite rather than a slow one.
+     */
+    hookTimeout: 30_000,
     environment: "node",
     globals: false,
     reporters: ["default"],

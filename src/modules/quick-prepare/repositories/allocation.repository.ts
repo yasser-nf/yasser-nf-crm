@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseExecutor } from "@/lib/database";
-import { accounts, profiles, type AccountRow, type ProfileRow } from "@/lib/drizzle/schema";
+import { accounts, issues, profiles, type AccountRow, type ProfileRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 
 /**
@@ -35,7 +35,40 @@ export interface AllocationCandidate {
  * are all separate values of the same enum. Listing them individually would go
  * stale the moment a status is added.
  */
-const eligibleAccount = and(eq(accounts.status, "healthy"), isNull(accounts.deletedAt));
+/**
+ * No open problem is blocking the account.
+ *
+ * M08. Expressed in SQL rather than filtered afterwards, deliberately: the
+ * locking read below takes row locks with SKIP LOCKED, and filtering after the
+ * fact would lock profiles this engine then discards — holding stock nobody can
+ * allocate until the transaction ends. The count query would be wrong too.
+ *
+ * This reads the `issues` table through the shared schema, which ADR-005
+ * Decision 5 permits a repository to do. It is not a module dependency —
+ * importing the Problems module's constant here would be, since ADR-003 forbids
+ * a repository importing another module.
+ *
+ * The status list is therefore written out rather than imported, and a unit
+ * test asserts it matches BLOCKING_STATUSES exactly. The duplication is real;
+ * the test is what stops it drifting, the same technique used for APP_VERSION.
+ */
+const noBlockingProblem = sql`not exists (
+  select 1 from ${issues}
+  where ${issues.accountId} = ${accounts.id}
+    and ${issues.status} in ('open', 'in_progress', 'waiting')
+)`;
+
+/**
+ * The eligibility rule, in one place.
+ *
+ * Both the preview and the locking read use this, so Quick Prepare cannot offer
+ * a profile the confirmation step would refuse.
+ */
+const eligibleAccount = and(
+  eq(accounts.status, "healthy"),
+  isNull(accounts.deletedAt),
+  noBlockingProblem,
+);
 
 /**
  * Reads candidates without locking. Preview only.

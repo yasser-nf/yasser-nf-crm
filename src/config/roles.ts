@@ -48,6 +48,20 @@ export const PERMISSIONS = {
   SEARCH: "search",
   OPEN_WHATSAPP: "open_whatsapp",
 
+  /*
+   * Problems (M08).
+   *
+   * Three permissions rather than one, because the M08 brief splits Worker
+   * access three ways: they may report, they may see everything, and they may
+   * act only on what is assigned to them. Ownership is not expressible as a
+   * permission — it depends on the row — so it is checked in the service and
+   * MANAGE_PROBLEMS covers only what no Worker may ever do: delete, change
+   * severity, and reassign a problem they do not own.
+   */
+  REPORT_PROBLEMS: "report_problems",
+  VIEW_PROBLEMS: "view_problems",
+  MANAGE_PROBLEMS: "manage_problems",
+
   /* Administration */
   MANAGE_USERS: "manage_users",
   MODIFY_PERMISSIONS: "modify_permissions",
@@ -64,10 +78,13 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 /**
  * What a Worker may do.
  *
- * Taken verbatim from the M06 brief's "Workers may" list. Expressed as an
- * allow-list rather than a deny-list, so a permission added later defaults to
- * denied for Workers instead of being silently granted — the direction a
- * mistake should fail in.
+ * Taken verbatim from the M06 brief's "Workers may" list, extended once by the
+ * M08 brief for problems. Expressed as an allow-list rather than a deny-list, so
+ * a permission added later defaults to denied for Workers instead of being
+ * silently granted — the direction a mistake should fail in.
+ *
+ * Adding to this list is a deliberate act, never a detail: M08 grants exactly
+ * REPORT_PROBLEMS and VIEW_PROBLEMS, and deliberately not MANAGE_PROBLEMS.
  */
 const WORKER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.VIEW_ACCOUNTS,
@@ -79,6 +96,8 @@ const WORKER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.EDIT_CUSTOMER_NOTES,
   PERMISSIONS.OPEN_WHATSAPP,
   PERMISSIONS.SEARCH,
+  PERMISSIONS.REPORT_PROBLEMS,
+  PERMISSIONS.VIEW_PROBLEMS,
 ];
 
 /** Super Admin holds everything. Listed by derivation so it cannot drift. */

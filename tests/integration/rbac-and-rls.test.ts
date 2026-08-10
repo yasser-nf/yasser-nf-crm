@@ -48,6 +48,9 @@ const TABLES = [
   "login_history",
   "backups",
   "settings",
+  /* M08. Added here in the same change that created them, not in a follow-up. */
+  "issues",
+  "issue_notes",
 ] as const;
 
 describe.skipIf(!configured)("RLS — anonymous access", () => {

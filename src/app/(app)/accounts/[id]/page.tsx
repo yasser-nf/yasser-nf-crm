@@ -8,6 +8,7 @@ import { NotFoundError } from "@/lib/errors";
 import { AccountHeader, AccountTimeline, ProfileCard, accountsService } from "@/modules/accounts";
 import type { AccountRow } from "@/lib/drizzle/schema";
 import type { ProfileAllocation } from "@/modules/accounts";
+import { ProblemSeverityBadge, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
 import { ReplaceAccountButton } from "@/modules/quick-prepare";
 import { ErrorState } from "@/shared/feedback/error-state";
 
@@ -103,7 +104,8 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
     return <ErrorState error={detail.error} title="Could not load this account" />;
   }
 
-  const { account, profiles, accountAllowsAllocation, hasProfileCountAnomaly } = detail.value;
+  const { account, profiles, accountAllowsAllocation, hasProfileCountAnomaly, activeProblems } =
+    detail.value;
 
   const timeline = await accountsService.getAccountTimeline(id, { limit: 25 });
 
@@ -128,12 +130,49 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
           <div className="flex flex-col gap-1">
             <p className="text-card-title text-foreground">All profiles are blocked</p>
             <p className="text-caption text-foreground-muted">
-              This account is not Healthy, so none of its five profiles can be allocated — whatever
-              their individual status says.
+              {activeProblems.length > 0
+                ? `${activeProblems.length} open problem${activeProblems.length === 1 ? "" : "s"} on this account. None of its five profiles can be allocated until they are resolved.`
+                : "This account is not Healthy, so none of its five profiles can be allocated — whatever their individual status says."}
             </p>
           </div>
         </div>
       ) : null}
+
+      {/*
+        Problems are reported and resolved only through the Problems module. This
+        screen links into it rather than acting on problems itself — the M08 rule
+        that no module creates or resolves a problem directly.
+      */}
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-section-title text-foreground">Problems</h2>
+          <ReportProblemDialog accountId={account.id} accountEmail={account.email} />
+        </div>
+
+        {activeProblems.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border px-6 py-6 text-center text-caption text-foreground-muted">
+            No open problems on this account.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {activeProblems.map((problem) => (
+              <li key={problem.id}>
+                <Link
+                  href={`${ROUTES.PROBLEMS}/${problem.id}`}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-4 py-3 transition-colors hover:bg-surface-raised"
+                >
+                  <span className="flex items-center gap-2 text-description text-foreground">
+                    <ProblemSeverityBadge severity={problem.severity} />
+                    {problem.description.slice(0, 80)}
+                    {problem.description.length > 80 ? "…" : ""}
+                  </span>
+                  <ProblemStatusBadge status={problem.status} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {hasProfileCountAnomaly ? (
         <div

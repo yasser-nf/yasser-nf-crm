@@ -117,7 +117,46 @@ export const auditEntityEnum = pgEnum("audit_entity", [
   "profile",
   "backup",
   "settings",
+  /* M08. The problem timeline is read from audit_logs, so problems must be nameable here. */
+  "issue",
 ]);
+
+/**
+ * Problem types.
+ *
+ * 03_DATABASE.md's Issue Type list, verbatim. Every value is account-level,
+ * which is why 03_DATABASE.md also states that issues belong to accounts and
+ * never to profiles — see ADR-010 Decision 2.
+ *
+ * These deliberately mirror `account_status` for the first four. They describe
+ * the same real-world conditions from two angles: the account's operational
+ * state, and the tracked piece of work to fix it.
+ */
+export const issueTypeEnum = pgEnum("issue_type", [
+  "payment_problem",
+  "incorrect_password",
+  "invalid_email",
+  "something_went_wrong",
+  "other",
+]);
+
+/**
+ * Problem lifecycle states, from the M08 brief.
+ *
+ * No document defined the transitions between them. ADR-010 Decision 1 records
+ * the graph, and `problem-lifecycle.ts` is the only place it is expressed.
+ */
+export const issueStatusEnum = pgEnum("issue_status", [
+  "open",
+  "in_progress",
+  "waiting",
+  "resolved",
+  "closed",
+  "cancelled",
+]);
+
+/** Severity, from the M08 brief. Ordered least to most urgent. */
+export const issueSeverityEnum = pgEnum("issue_severity", ["low", "medium", "high", "critical"]);
 
 /**
  * Authentication events, recorded in login_history.
