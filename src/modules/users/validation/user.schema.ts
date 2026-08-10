@@ -1,7 +1,7 @@
 import { createInsertSchema, createSelectSchema, createUpdateSchema } from "drizzle-zod";
 import { z } from "zod";
 
-import { users } from "@/lib/drizzle/schema";
+import { loginHistory, users } from "@/lib/drizzle/schema";
 
 /**
  * User validation.
@@ -56,6 +56,52 @@ export const userUpdateSchema = createUpdateSchema(users, {
   .refine((value) => Object.keys(value).length > 0, {
     message: "An update must change at least one field",
   });
+
+/**
+ * Login history insert.
+ *
+ * Derived from the table so it cannot drift. `failureReason` is capped and must
+ * never carry a password, a token, or anything a caller received from the user.
+ */
+export const loginHistoryInsertSchema = createInsertSchema(loginHistory, {
+  email: z.string().trim().max(320).optional(),
+  ipAddress: z.string().trim().max(64).optional(),
+  userAgent: z.string().trim().max(512).optional(),
+  failureReason: z.string().trim().max(200).optional(),
+}).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type LoginHistoryInsert = z.infer<typeof loginHistoryInsertSchema>;
+
+/**
+ * Inviting a Worker.
+ *
+ * No password field, and there never will be one. ADR-008 Decision 2: the CRM
+ * must never own a password, so a form that could accept one must not exist.
+ */
+export const inviteUserSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1, "Email is required")
+    .email("Enter a valid email address"),
+  name: z.string().trim().min(1, "Name is required").max(120),
+  role: z.enum(["super_admin", "worker"]),
+});
+
+export type InviteUserInput = z.infer<typeof inviteUserSchema>;
+
+/** Changing a role. Separated so a profile edit cannot carry one. */
+export const changeRoleSchema = z.object({
+  role: z.enum(["super_admin", "worker"]),
+});
+
+export const changeStatusSchema = z.object({
+  status: z.enum(["active", "suspended", "disabled"]),
+});
 
 export type UserSelect = z.infer<typeof userSelectSchema>;
 export type UserInsert = z.infer<typeof userInsertSchema>;

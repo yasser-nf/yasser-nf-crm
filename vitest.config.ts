@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vitest/config";
 import tsconfigPaths from "vite-tsconfig-paths";
 
@@ -23,8 +25,13 @@ export default defineConfig({
        * Stubbing it lets tests import exactly what the application imports,
        * rather than reaching past the barrel into internal paths — which would
        * mean the tests stop exercising the module's real contract.
+       *
+       * fileURLToPath, not URL.pathname: this project lives under a directory
+       * with a space in its name, and pathname percent-encodes it into a path
+       * that does not exist. The alias then silently failed to resolve, which
+       * went unnoticed until a test first imported a module barrel.
        */
-      "server-only": new URL("./tests/stubs/server-only.ts", import.meta.url).pathname,
+      "server-only": fileURLToPath(new URL("./tests/stubs/server-only.ts", import.meta.url)),
     },
   },
   test: {
@@ -34,6 +41,7 @@ export default defineConfig({
      * stay green without a project.
      */
     include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
+    setupFiles: ["tests/setup/env.ts"],
     testTimeout: 30_000,
     environment: "node",
     globals: false,

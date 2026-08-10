@@ -1,21 +1,39 @@
 /**
- * Users module — public API.
+ * Users module — public API. ADR-003 Rule 2.
  *
- * ADR-003 Rule 2: the only entry point. Everything else is internal.
+ * The security centre. Owns authorization decisions about people, session
+ * management and the activity feed.
  *
- * The repository is exported because M02 delivers the data layer and no service
- * exists yet to wrap it. When the users service arrives it becomes the public
- * face and the repository export is withdrawn — 02_ARCHITECTURE.md states that
- * only services communicate with the database, so a component must never reach a
- * repository, even through this barrel.
+ * Repositories are NOT exported. Every operation here carries an authorization
+ * check, and exposing a repository would offer a way past it — unlike earlier
+ * modules where the repository predates its service, this one has services from
+ * the start.
  */
-export type { UsersRepository, UserFilter } from "./repositories/users.repository";
-export { usersRepository } from "./repositories/users.repository";
+export { usersService, type UserDetail, type UserListEntry } from "./services/users.service";
+export { sessionsService } from "./services/sessions.service";
+export { activityService } from "./services/activity.service";
+export { derivePresence, type PresenceState } from "./services/presence";
+
+/* Components consumed by app/ page composition. */
+export { InviteUserButton, OnlineNow, UsersFilters, UsersTable } from "./components/users-table";
+export { InviteUserForm } from "./components/invite-user-form";
+export { UserDetailView } from "./components/user-detail";
+export { PresenceDot, RoleBadge, UserStatusBadge, describeDevice } from "./components/user-shared";
+
+export type { SessionRow } from "./repositories/sessions.repository";
+export type { ActivityEntry } from "./repositories/activity.repository";
+export type { UserFilter, UserSortField } from "./repositories/users.repository";
 
 export {
+  changeRoleSchema,
+  changeStatusSchema,
+  inviteUserSchema,
+  loginHistoryInsertSchema,
   userInsertSchema,
   userSelectSchema,
   userUpdateSchema,
+  type InviteUserInput,
+  type LoginHistoryInsert,
   type UserInsert,
   type UserSelect,
   type UserUpdate,

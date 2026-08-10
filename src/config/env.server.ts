@@ -38,12 +38,26 @@ const serverEnvSchema = z.object({
       `ENCRYPTION_KEY must be ${ENCRYPTION_KEY_HEX_LENGTH} hex characters (32 bytes for AES-256)`,
     )
     .regex(/^[0-9a-fA-F]+$/, "ENCRYPTION_KEY must be hexadecimal"),
+  /**
+   * Supabase service role key.
+   *
+   * Optional, because only the invitation flow needs it and the project must
+   * still build without one — CI runs on placeholders.
+   *
+   * ADR-008 Decision 4: this key bypasses RLS entirely and is the most
+   * dangerous value in the project. It lives here, in the `server-only`
+   * module, and must never be added to config/env.ts or referenced from a
+   * client component.
+   */
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 
 const parsed = serverEnvSchema.safeParse({
   DATABASE_URL: process.env.DATABASE_URL,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   NODE_ENV: process.env.NODE_ENV,
 });
 
@@ -75,4 +89,14 @@ export function isDatabaseConfigured(): boolean {
  */
 export function isEncryptionConfigured(): boolean {
   return serverEnv.ENCRYPTION_KEY !== PLACEHOLDER_ENCRYPTION_KEY;
+}
+
+/**
+ * Whether the invitation flow can run.
+ *
+ * Inviting a user is the one operation that needs the service role key, so the
+ * UI can explain the gap rather than failing at the point of sending.
+ */
+export function isInvitationConfigured(): boolean {
+  return Boolean(serverEnv.SUPABASE_SERVICE_ROLE_KEY);
 }
