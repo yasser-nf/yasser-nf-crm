@@ -230,6 +230,25 @@ attempt against an address that matches no user is still recorded.
 `recordAuthEvent` never fails its caller. A sign-in must not break because a log
 write did.
 
+### What writes it
+
+| Event | Written by |
+| ----- | ---------- |
+| `login_success` | `recordLoginAction`, after the server resolves the identity from the cookie |
+| `logout` | `recordLogoutAction`, **awaited before** `signOut` — afterwards no session remains to resolve |
+| `login_failed` | `recordFailedLoginAction`, `user_id` null, attempted address only |
+| `invitation_sent` | `usersService.invite` |
+| `session_revoked` | `sessionsService`, and `changeStatus` when disabling |
+
+`failure_reason` never carries a password, a token, or anything derived from
+one.
+
+**Known limitation:** the failed-login endpoint is reachable without a session,
+because a failed sign-in by definition has none. Someone who knows it could
+write rows into `login_history`. Accepted for a private deployment — the
+alternative is not recording failed attempts, which are the entries most worth
+having — but it wants a rate limit before anything wider.
+
 ---
 
 ## 8. Security
@@ -267,6 +286,18 @@ tables, so the same gap cannot reopen quietly.
 | `tests/unit/presence.test.ts` | 15 cases — thresholds, boundaries, null, clock skew |
 | `tests/unit/roles.test.ts` | 44 cases — permission matrix, Worker allow-list, status semantics |
 | `tests/integration/rbac-and-rls.test.ts` | anonymous access refused, RLS enabled on all 9 tables |
+| `tests/integration/users-module.test.ts` | 10 cases — the hand-written `auth.sessions` SQL executed live, the activity UNION's ordering, login history reads, nullable columns, the three-status enum |
+
+The `users-module` suite exists because the session and activity reads are raw
+SQL against a schema Supabase owns, which TypeScript cannot check. It is
+read-only by construction: a test that revoked a live session to prove
+revocation works would sign a real person out.
+
+It immediately earned its place by catching BUG-07 — `executor.execute` bypasses
+Drizzle's column mapping, so session timestamps arrived as strings behind a
+`Date` type, and `derivePresence` called `.getTime()` on a string. `/users/[id]`
+threw for any user holding a live session, and the `as unknown as SessionRow[]`
+cast is why `tsc` never saw it.
 
 The presence tests fix the thresholds deliberately: a later change that starts
 writing a `last_seen` column fails there rather than passing quietly.
@@ -280,3 +311,6 @@ writing a `last_seen` column fails there rather than passing quietly.
 | No Worker user exists | Worker-side RBAC is enforced in code and unit tested, but has never been exercised by a real Worker session |
 | Anon key not rotated | Pre-existing from M04.9; the exposure it created is closed, the key itself is unchanged |
 | `permissions` on `UserDetail` returns `[]` | Placeholder; the role matrix is the live source |
+| Failed-login endpoint has no rate limit | See section 7 |
+| Authenticated UI never rendered by a real Super Admin session in M06 | Every screen in this module is UNVERIFIED in the browser; see the M06 report |
+| Session revocation never executed | Both the single and bulk paths are unexercised — the tests are read-only by design |
