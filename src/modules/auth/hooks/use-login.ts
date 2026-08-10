@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { DEFAULT_AUTHENTICATED_ROUTE, REDIRECT_QUERY_PARAM } from "@/config/constants";
 import { unwrap } from "@/utils/result";
-import { recordLoginAction } from "../actions/session.actions";
+import { recordFailedLoginAction, recordLoginAction } from "../actions/session.actions";
 import { authService } from "../services/auth.service";
 import type { LoginInput } from "../validation/login.schema";
 
@@ -36,7 +36,19 @@ export function useLogin() {
   const searchParams = useSearchParams();
 
   return useMutation({
-    mutationFn: async (input: LoginInput) => unwrap(await authService.signIn(input)),
+    mutationFn: async (input: LoginInput) => {
+      try {
+        return unwrap(await authService.signIn(input));
+      } catch (error) {
+        /*
+         * Recorded here rather than in an onError handler so the attempted
+         * address is still in scope. Fire and forget — a rejected sign-in must
+         * not turn into a different error because the history write failed.
+         */
+        void recordFailedLoginAction(input.email);
+        throw error;
+      }
+    },
     onSuccess: () => {
       /*
        * Fire and forget. The server resolves who logged in from the session

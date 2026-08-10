@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { ROUTES } from "@/config/constants";
 import { unwrap } from "@/utils/result";
+import { recordLogoutAction } from "../actions/session.actions";
 import { authService } from "../services/auth.service";
 
 /**
@@ -21,6 +22,12 @@ export function useLogout() {
 
   return useMutation({
     mutationFn: async () => {
+      /*
+       * Awaited, and before signOut. Afterwards there is no session cookie left
+       * for the server to resolve an identity from, so a fire-and-forget call
+       * would race the sign-out and usually record nothing.
+       */
+      await recordLogoutAction();
       unwrap(await authService.signOut());
     },
     onSuccess: () => {
