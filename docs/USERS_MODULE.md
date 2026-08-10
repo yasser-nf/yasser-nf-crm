@@ -287,6 +287,13 @@ tables, so the same gap cannot reopen quietly.
 | `tests/unit/roles.test.ts` | 44 cases — permission matrix, Worker allow-list, status semantics |
 | `tests/integration/rbac-and-rls.test.ts` | anonymous access refused, RLS enabled on all 9 tables |
 | `tests/integration/users-module.test.ts` | 10 cases — the hand-written `auth.sessions` SQL executed live, the activity UNION's ordering, login history reads, nullable columns, the three-status enum |
+| `tests/integration/users-authorization.test.ts` | 25 cases — RBAC and every guard, as the real Super Admin and as a Worker, against the live database |
+
+The `users-authorization` suite is where RBAC is actually proven. It authorizes
+as the real Super Admin row and as a constructed Worker actor, and asserts the
+service refuses. Every case is a refusal or a read — nothing mutates, which is
+what makes it safe to run against a production database holding one Super Admin
+and one live session.
 
 The `users-module` suite exists because the session and activity reads are raw
 SQL against a schema Supabase owns, which TypeScript cannot check. It is
@@ -308,7 +315,8 @@ writing a `last_seen` column fails there rather than passing quietly.
 
 | Gap | Consequence |
 | --- | ----------- |
-| No Worker user exists | Worker-side RBAC is enforced in code and unit tested, but has never been exercised by a real Worker session |
+| No Worker user exists | Worker RBAC is now proven at the service layer against the live database, but no real Worker has ever signed in |
+| `users.last_login_at` is null for the only user | The sign-in recording path has never executed at runtime; `login_success` history writes share that action and are equally unproven |
 | Anon key not rotated | Pre-existing from M04.9; the exposure it created is closed, the key itself is unchanged |
 | `permissions` on `UserDetail` returns `[]` | Placeholder; the role matrix is the live source |
 | Failed-login endpoint has no rate limit | See section 7 |
