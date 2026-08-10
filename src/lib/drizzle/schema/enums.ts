@@ -142,8 +142,30 @@ export const authEventTypeEnum = pgEnum("auth_event_type", [
   "invitation_accepted",
 ]);
 
-/** 03_DATABASE.md backup strategy: hourly, daily, manual, restore point. */
-export const backupTypeEnum = pgEnum("backup_type", ["hourly", "daily", "manual"]);
+/**
+ * How a backup came to exist.
+ *
+ * The four scheduled frequencies are the union of two sources that disagreed.
+ * 01_MASTER_RULES.md, ADR-001, 02_ARCHITECTURE.md and 03_DATABASE.md all require
+ * `hourly`; the M07 brief omits it and adds `weekly` and `monthly`. Rather than
+ * override four LOCKED documents, both sets are kept — see ADR-009 Decision 3.
+ *
+ * `snapshot` is the M07 System Snapshot: a complete point-in-time capture taken
+ * before a risky operation. It is distinct from `manual` because a snapshot is
+ * automatically marked a restore point and is exempt from retention pruning.
+ *
+ * There is no `automatic` value. "Automatic" describes the four frequencies as a
+ * group, not a fifth kind of backup — storing it would make the frequency
+ * unknowable after the fact.
+ */
+export const backupTypeEnum = pgEnum("backup_type", [
+  "hourly",
+  "daily",
+  "weekly",
+  "monthly",
+  "manual",
+  "snapshot",
+]);
 
 /**
  * Backup lifecycle.

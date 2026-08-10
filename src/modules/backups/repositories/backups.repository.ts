@@ -1,4 +1,4 @@
-import { and, count, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import {
   databaseAdapter,
@@ -8,61 +8,87 @@ import {
   type Page,
   type PaginationInput,
 } from "@/lib/database";
-import { backups, type BackupRow } from "@/lib/drizzle/schema";
+import { backups, users, type BackupRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
-import type { BackupInsert, BackupUpdate } from "../validation/backup.schema";
 
 /**
- * Backups repository.
+ * Backup metadata repository.
  *
- * Metadata only. The backup artefact lives in object storage; these rows point
- * at it and record whether it has been verified.
- *
- * The lifecycle timestamps are set here rather than by callers, so a row cannot
- * claim to be completed without recording when. 01_MASTER_RULES.md requires
- * backups to be verifiable, and a completion time nobody wrote is not evidence.
+ * Owns the catalogue, never the artifact. The bytes live in Supabase Storage —
+ * see storage/backup-storage.ts.
  */
-
-const ENTITY = "Backup";
 
 export interface BackupFilter extends PaginationInput {
   readonly type?: BackupRow["type"] | undefined;
   readonly status?: BackupRow["status"] | undefined;
-  readonly restorePointsOnly?: boolean | undefined;
+}
+
+/**
+ * A backup with its creator's name resolved.
+ *
+ * Joined in the query rather than looked up per row: the list shows "Created
+ * By" for every entry, and a lookup per row is the N+1 the architecture forbids.
+ * Null for scheduled backups, which no person triggers.
+ */
+export interface BackupListEntry {
+  readonly backup: BackupRow;
+  readonly createdByName: string | null;
 }
 
 export interface BackupsRepository {
+  list(filter?: BackupFilter): Promise<Result<Page<BackupListEntry>>>;
   findById(id: string): Promise<Result<BackupRow>>;
-  list(filter?: BackupFilter): Promise<Result<Page<BackupRow>>>;
-  create(input: BackupInsert): Promise<Result<BackupRow>>;
-  update(id: string, input: BackupUpdate): Promise<Result<BackupRow>>;
+  create(input: typeof backups.$inferInsert): Promise<Result<BackupRow>>;
   markCompleted(
     id: string,
-    artifact: { filename: string; checksum: string; sizeBytes: number },
+    patch: {
+      filename: string;
+      checksum: string;
+      sizeBytes: number;
+      tableCounts: Record<string, number>;
+      appVersion: string;
+      databaseVersion: string;
+    },
   ): Promise<Result<BackupRow>>;
+  markFailed(id: string, reason: string): Promise<Result<BackupRow>>;
   markVerified(id: string): Promise<Result<BackupRow>>;
-  markFailed(id: string, errorMessage: string): Promise<Result<BackupRow>>;
-}
-
-function buildFilter(filter: BackupFilter) {
-  const conditions = [];
-
-  if (filter.type !== undefined) {
-    conditions.push(eq(backups.type, filter.type));
-  }
-
-  if (filter.status !== undefined) {
-    conditions.push(eq(backups.status, filter.status));
-  }
-
-  if (filter.restorePointsOnly === true) {
-    conditions.push(eq(backups.isRestorePoint, true));
-  }
-
-  return conditions.length > 0 ? and(...conditions) : undefined;
+  /** Everything a retention decision needs, without loading whole rows. */
+  retentionCandidates(): Promise<
+    Result<readonly { id: string; createdAt: Date; type: string; isRestorePoint: boolean }[]>
+  >;
+  deleteMany(ids: readonly string[]): Promise<Result<readonly BackupRow[]>>;
 }
 
 export const backupsRepository: BackupsRepository = {
+  async list(filter = {}) {
+    const { limit, offset } = normalizePagination(filter);
+
+    const conditions = [
+      filter.type ? eq(backups.type, filter.type) : undefined,
+      filter.status ? eq(backups.status, filter.status) : undefined,
+    ].filter((condition) => condition !== undefined);
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    return databaseAdapter.transaction("backups.list", async (executor) => {
+      const rows = await executor
+        .select({ backup: backups, createdByName: users.name })
+        .from(backups)
+        .leftJoin(users, eq(users.id, backups.createdBy))
+        .where(where)
+        .orderBy(desc(backups.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      const totals = await executor
+        .select({ count: sql<number>`count(*)::int` })
+        .from(backups)
+        .where(where);
+
+      return { items: rows, total: readCount(totals), limit, offset };
+    });
+  },
+
   async findById(id) {
     const result = await databaseAdapter.query("backups.findById", (executor) =>
       executor.select().from(backups).where(eq(backups.id, id)).limit(1),
@@ -72,26 +98,7 @@ export const backupsRepository: BackupsRepository = {
       return result;
     }
 
-    return requireFound(result.value[0], ENTITY, id);
-  },
-
-  async list(filter = {}) {
-    const { limit, offset } = normalizePagination(filter);
-    const where = buildFilter(filter);
-
-    return databaseAdapter.transaction("backups.list", async (executor) => {
-      const items = await executor
-        .select()
-        .from(backups)
-        .where(where)
-        .orderBy(desc(backups.createdAt))
-        .limit(limit)
-        .offset(offset);
-
-      const totals = await executor.select({ count: count() }).from(backups).where(where);
-
-      return { items, total: readCount(totals), limit, offset };
-    });
+    return requireFound(result.value[0], "Backup", id);
   },
 
   async create(input) {
@@ -103,26 +110,23 @@ export const backupsRepository: BackupsRepository = {
       return result;
     }
 
-    return requireFound(result.value[0], ENTITY, input.type);
+    return requireFound(result.value[0], "Backup", "created");
   },
 
-  async update(id, input) {
-    const result = await databaseAdapter.query("backups.update", (executor) =>
-      executor.update(backups).set(input).where(eq(backups.id, id)).returning(),
-    );
-
-    if (!result.ok) {
-      return result;
-    }
-
-    return requireFound(result.value[0], ENTITY, id);
-  },
-
-  async markCompleted(id, artifact) {
+  async markCompleted(id, patch) {
     const result = await databaseAdapter.query("backups.markCompleted", (executor) =>
       executor
         .update(backups)
-        .set({ ...artifact, status: "completed", completedAt: sql`now()` })
+        .set({
+          status: "completed",
+          filename: patch.filename,
+          checksum: patch.checksum,
+          sizeBytes: patch.sizeBytes,
+          tableCounts: patch.tableCounts,
+          appVersion: patch.appVersion,
+          databaseVersion: patch.databaseVersion,
+          completedAt: new Date(),
+        })
         .where(eq(backups.id, id))
         .returning(),
     );
@@ -131,21 +135,31 @@ export const backupsRepository: BackupsRepository = {
       return result;
     }
 
-    return requireFound(result.value[0], ENTITY, id);
+    return requireFound(result.value[0], "Backup", id);
   },
 
-  /**
-   * Records that the checksum was confirmed.
-   *
-   * Deliberately separate from completion. A backup that finished writing is not
-   * yet known to be restorable, and collapsing the two is how organisations
-   * discover their backups are empty during a restore.
-   */
+  async markFailed(id, reason) {
+    const result = await databaseAdapter.query("backups.markFailed", (executor) =>
+      executor
+        .update(backups)
+        /* The table's check constraint requires a reason on every failure. */
+        .set({ status: "failed", errorMessage: reason.slice(0, 2000) })
+        .where(eq(backups.id, id))
+        .returning(),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return requireFound(result.value[0], "Backup", id);
+  },
+
   async markVerified(id) {
     const result = await databaseAdapter.query("backups.markVerified", (executor) =>
       executor
         .update(backups)
-        .set({ status: "verified", verifiedAt: sql`now()` })
+        .set({ status: "verified", verifiedAt: new Date() })
         .where(eq(backups.id, id))
         .returning(),
     );
@@ -154,22 +168,40 @@ export const backupsRepository: BackupsRepository = {
       return result;
     }
 
-    return requireFound(result.value[0], ENTITY, id);
+    return requireFound(result.value[0], "Backup", id);
   },
 
-  async markFailed(id, errorMessage) {
-    const result = await databaseAdapter.query("backups.markFailed", (executor) =>
-      executor
-        .update(backups)
-        .set({ status: "failed", errorMessage })
-        .where(eq(backups.id, id))
-        .returning(),
-    );
+  async retentionCandidates() {
+    return databaseAdapter.query("backups.retentionCandidates", async (executor) => {
+      const rows = await executor
+        .select({
+          id: backups.id,
+          createdAt: backups.createdAt,
+          type: backups.type,
+          isRestorePoint: backups.isRestorePoint,
+        })
+        .from(backups)
+        /*
+         * Only finished backups compete for retention slots. A failed row has no
+         * artifact, and counting it would let failures evict good backups.
+         */
+        .where(inArray(backups.status, ["completed", "verified"]))
+        .orderBy(desc(backups.createdAt));
 
-    if (!result.ok) {
-      return result;
+      return rows;
+    });
+  },
+
+  async deleteMany(ids) {
+    if (ids.length === 0) {
+      return databaseAdapter.query("backups.deleteMany", async () => []);
     }
 
-    return requireFound(result.value[0], ENTITY, id);
+    return databaseAdapter.query("backups.deleteMany", (executor) =>
+      executor
+        .delete(backups)
+        .where(inArray(backups.id, [...ids]))
+        .returning(),
+    );
   },
 };

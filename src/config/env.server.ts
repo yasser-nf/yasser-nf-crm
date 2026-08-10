@@ -92,11 +92,22 @@ export function isEncryptionConfigured(): boolean {
 }
 
 /**
- * Whether the invitation flow can run.
+ * Whether the service role key is present.
  *
- * Inviting a user is the one operation that needs the service role key, so the
- * UI can explain the gap rather than failing at the point of sending.
+ * Two features need it: inviting users (M06) and backup storage (M07). Both ask
+ * before acting so the UI can explain the gap rather than failing at the point
+ * of use.
  */
-export function isInvitationConfigured(): boolean {
+export function isServiceRoleConfigured(): boolean {
   return Boolean(serverEnv.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+/** Whether the invitation flow can run. */
+export function isInvitationConfigured(): boolean {
+  return isServiceRoleConfigured();
+}
+
+/** Whether backups can be written to and read from object storage. */
+export function isBackupStorageConfigured(): boolean {
+  return isServiceRoleConfigured();
 }

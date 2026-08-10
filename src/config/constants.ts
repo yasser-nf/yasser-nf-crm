@@ -44,6 +44,16 @@ export const APP_NAME = "Yasser NF CRM";
 export const APP_DESCRIPTION = "Internal Netflix subscription management system";
 
 /**
+ * Application version, recorded inside every backup.
+ *
+ * Declared here rather than imported from package.json: importing it would pull
+ * the whole manifest — including devDependencies — into the bundle. A unit test
+ * asserts this equals package.json's version, so the duplication cannot drift
+ * silently, which is the only real objection to declaring it twice.
+ */
+export const APP_VERSION = "0.1.0";
+
+/**
  * Pagination.
  * 01_MASTER_RULES.md: all lists are paginated.
  */

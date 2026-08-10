@@ -2,7 +2,7 @@ import { config } from "dotenv";
 import postgres from "postgres";
 
 /**
- * Read-only snapshot of the tables M06 touches.
+ * Read-only snapshot of the tables M06 and M07 touch.
  *
  * Verification tooling: it reports state so runtime claims can be checked
  * against the database rather than against a service's return value. It writes
@@ -18,20 +18,18 @@ const users = await sql`
   from public.users order by created_at
 `;
 
-const sessions = await sql`
-  select id, user_id, created_at, updated_at from auth.sessions order by updated_at desc
+const backups = await sql`
+  select id, name, type, status, size_bytes, format_version, app_version,
+         is_restore_point, table_counts, left(checksum, 12) as checksum_head,
+         created_at, verified_at, error_message
+  from public.backups order by created_at desc limit 10
 `;
 
 const audit = await sql`
   select entity, action, entity_id, created_at from public.audit_logs
-  order by created_at desc limit 8
+  order by created_at desc limit 6
 `;
 
-const history = await sql`
-  select event_type, email, failure_reason, ip_address, created_at
-  from public.login_history order by created_at desc limit 10
-`;
-
-console.log(JSON.stringify({ users, sessions, audit, history }, null, 2));
+console.log(JSON.stringify({ users, backups, audit }, null, 2));
 
 await sql.end();

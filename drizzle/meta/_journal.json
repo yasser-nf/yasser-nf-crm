@@ -50,6 +50,13 @@
       "when": 1786305035595,
       "tag": "0006_login_history_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786464000000,
+      "tag": "0007_backup_module",
+      "breakpoints": true
     }
   ]
 }

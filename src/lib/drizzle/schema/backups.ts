@@ -4,6 +4,8 @@ import {
   boolean,
   check,
   index,
+  integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -31,6 +33,13 @@ export const backups = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
 
+    /**
+     * Human-readable label, shown in the list. Generated from type and time
+     * rather than typed by a person: a backup nobody named is still a backup
+     * somebody has to recognise during an incident.
+     */
+    name: text("name").notNull(),
+
     type: backupTypeEnum("type").notNull(),
     status: backupStatusEnum("status").notNull().default("pending"),
 
@@ -48,6 +57,28 @@ export const backups = pgTable(
      * backup. 01_MASTER_RULES.md lists restore points as their own concept.
      */
     isRestorePoint: boolean("is_restore_point").notNull().default(false),
+
+    /**
+     * Backup file format version.
+     *
+     * Bumped when the artifact's shape changes. Import refuses a version it does
+     * not understand rather than guessing — a restore driven by a
+     * misinterpreted file is worse than a refused one.
+     */
+    formatVersion: integer("format_version").notNull().default(1),
+
+    /** Versions of the system that produced it, for compatibility reporting. */
+    appVersion: text("app_version"),
+    databaseVersion: text("database_version"),
+
+    /**
+     * Tables captured, with their row counts: `{ "accounts": 120, ... }`.
+     *
+     * Stored rather than derived because the whole point is to answer "what is
+     * in this backup" without downloading and decompressing it. It is also the
+     * only surviving record of scale once a backup is pruned.
+     */
+    tableCounts: jsonb("table_counts").notNull().default({}),
 
     /** Null for scheduled backups, which no person triggers. */
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
