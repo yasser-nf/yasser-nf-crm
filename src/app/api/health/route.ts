@@ -1,7 +1,24 @@
 import { sql } from "drizzle-orm";
 
 import { APP_VERSION } from "@/config/constants";
+import { env, isSupabaseConfigured } from "@/config/env";
 import { databaseAdapter } from "@/lib/database";
+
+/**
+ * The Supabase project reference from its URL.
+ *
+ * `https://abcdefgh.supabase.co` → `abcdefgh`. This is the value
+ * `@supabase/ssr` uses to name its auth cookie, which is why it is the one
+ * piece of configuration worth exposing here. It is not a secret: it is already
+ * visible in the browser bundle and in every request the client makes.
+ */
+function projectRefFrom(url: string): string {
+  try {
+    return new URL(url).hostname.split(".")[0] ?? "unknown";
+  } catch {
+    return "unparseable";
+  }
+}
 
 /**
  * Health endpoint.
@@ -77,6 +94,22 @@ export async function GET(request: Request): Promise<Response> {
       database: {
         status: database.ok ? "ok" : "failing",
         latencyMs: database.latencyMs,
+      },
+      /*
+       * The Supabase project this *runtime* is configured for, as a project ref
+       * only — never the URL, never a key.
+       *
+       * `NEXT_PUBLIC_*` is inlined into the browser bundle at build time while
+       * the proxy reads it at runtime. If the two disagree, the browser writes
+       * `sb-<A>-auth-token` and the proxy looks for `sb-<B>-auth-token`, finds
+       * nothing, and redirects an authenticated user back to /login. Comparing
+       * this value against the cookie name in the browser identifies that in
+       * one request instead of by inspection.
+       */
+      auth: {
+        projectRef: projectRefFrom(env.NEXT_PUBLIC_SUPABASE_URL),
+        expectedCookiePrefix: `sb-${projectRefFrom(env.NEXT_PUBLIC_SUPABASE_URL)}-auth-token`,
+        configured: isSupabaseConfigured(),
       },
     },
   };
