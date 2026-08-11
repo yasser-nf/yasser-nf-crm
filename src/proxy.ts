@@ -1,11 +1,14 @@
-import { NextResponse, type NextRequest } from "next/server";
+﻿import { NextResponse, type NextRequest } from "next/server";
 
 import {
   DEFAULT_AUTHENTICATED_ROUTE,
   PUBLIC_ROUTES,
   REDIRECT_QUERY_PARAM,
   ROUTES,
+  UNAUTHENTICATED_ENDPOINTS,
 } from "@/config/constants";
+import { env } from "@/config/env";
+import { securityHeaders } from "@/lib/security/headers";
 import { updateSupabaseSession } from "@/lib/supabase/middleware";
 
 /**
@@ -13,7 +16,7 @@ import { updateSupabaseSession } from "@/lib/supabase/middleware";
  *
  * 02_ARCHITECTURE.md: protected routes, session validation, never trust the
  * frontend. Running this at the edge means an unauthenticated request is turned
- * away before any page code or data fetching runs — a client-side guard would
+ * away before any page code or data fetching runs â€” a client-side guard would
  * render first and redirect afterwards, briefly exposing the shell.
  *
  * Named `proxy` rather than `middleware`: Next.js 16 deprecated the middleware
@@ -43,7 +46,7 @@ function redirectPreservingSession(
     url.searchParams.set(key, value);
   }
 
-  const redirect = NextResponse.redirect(url);
+  const redirect = withSecurityHeaders(NextResponse.redirect(url));
 
   for (const cookie of sessionResponse.cookies.getAll()) {
     redirect.cookies.set(cookie);
@@ -52,9 +55,40 @@ function redirectPreservingSession(
   return redirect;
 }
 
+/**
+ * Applies the security headers to whatever response is about to be returned.
+ *
+ * M12 Part 2: the application previously set none of these. Applied here rather
+ * than in `next.config.ts` so they cover every response this proxy can produce â€”
+ * pages, redirects, Server Action responses and the export Route Handler alike.
+ */
+function withSecurityHeaders(response: NextResponse): NextResponse {
+  const headers = securityHeaders({
+    supabaseUrl: env.NEXT_PUBLIC_SUPABASE_URL,
+    isDevelopment: process.env.NODE_ENV !== "production",
+  });
+
+  for (const [name, value] of Object.entries(headers)) {
+    response.headers.set(name, value);
+  }
+
+  return response;
+}
+
 export default async function proxy(request: NextRequest): Promise<NextResponse> {
-  const { response, user } = await updateSupabaseSession(request);
   const { pathname } = request.nextUrl;
+
+  /*
+   * The health endpoint is answered before the session is touched. Resolving a
+   * session would add a Supabase round trip to every uptime probe, and — worse —
+   * would make the health check fail when Supabase Auth is down, which is
+   * precisely the moment it needs to answer.
+   */
+  if (UNAUTHENTICATED_ENDPOINTS.includes(pathname)) {
+    return withSecurityHeaders(NextResponse.next());
+  }
+
+  const { response, user } = await updateSupabaseSession(request);
 
   const isAuthenticated = user !== null;
   const isPublicRoute = PUBLIC_ROUTES.includes(pathname);
@@ -82,7 +116,7 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
     return redirectPreservingSession(request, DEFAULT_AUTHENTICATED_ROUTE, response);
   }
 
-  return response;
+  return withSecurityHeaders(response);
 }
 
 export const config = {

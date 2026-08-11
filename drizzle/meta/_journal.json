@@ -71,6 +71,13 @@
       "when": 1786636800000,
       "tag": "0009_report_presets",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786723200000,
+      "tag": "0010_foreign_key_indexes",
+      "breakpoints": true
     }
   ]
 }

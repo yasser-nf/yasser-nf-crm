@@ -31,6 +31,20 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 /** The only route a guest may reach. Everything else redirects here. */
 export const PUBLIC_ROUTES: readonly string[] = [ROUTES.LOGIN];
 
+/**
+ * Reachable without a session, and never redirected.
+ *
+ * Only the health endpoint. A health check a load balancer cannot reach is not
+ * a health check — an authenticated one would report "unhealthy" for every
+ * probe. It is written to disclose nothing beyond liveness for exactly this
+ * reason. M12 Part 5; recorded in ADR-013.
+ *
+ * Separate from PUBLIC_ROUTES because those redirect an *authenticated* user
+ * away to the dashboard, which would break a monitor that happens to hold a
+ * session cookie.
+ */
+export const UNAUTHENTICATED_ENDPOINTS: readonly string[] = ["/api/health"];
+
 /** Where an authenticated user lands. */
 export const DEFAULT_AUTHENTICATED_ROUTE = ROUTES.DASHBOARD;
 
