@@ -53,6 +53,15 @@ export default defineConfig({
      * blames the wrong thing is worse.
      */
     fileParallelism: false,
+    /*
+     * Stop the dev server before running the integration suite.
+     *
+     * Supabase's session pooler caps this project at 15 clients and the Next
+     * dev server holds a pool of up to 10. With it running, the suite starves
+     * for connections: the same tests that finish in 12 seconds took nearly
+     * eight hours and reported five failures that had nothing to do with the
+     * code. Recorded here because the symptom points at the wrong thing.
+     */
     testTimeout: 30_000,
     /*
      * Hooks get the same budget as tests. The default is 10s, and an integration

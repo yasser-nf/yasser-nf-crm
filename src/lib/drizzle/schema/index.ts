@@ -26,5 +26,6 @@ export * from "./audit-logs";
 export * from "./login-history";
 export * from "./backups";
 export * from "./settings";
+export * from "./report-presets";
 
 export * from "./relations";
