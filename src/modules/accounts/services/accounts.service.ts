@@ -4,6 +4,7 @@ import type { AppUser } from "@/lib/auth";
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
 import { auditService, type AuditContext } from "@/modules/audit";
 import { problemsService } from "@/modules/problems";
 import type { Page, PaginationInput } from "@/lib/database";
@@ -386,7 +387,25 @@ async function getAccountTimeline(id: string, pagination: PaginationInput) {
   return profilesRepository.listAccountEvents(id, pagination);
 }
 
-/** Converts Zod issues into a ValidationError carrying field-level messages. */
+/**
+ * Converts Zod issues into a ValidationError carrying field-level messages.
+ *
+ * Also LOGS them, and that is not incidental.
+ *
+ * Account creation was broken from the day it was written: the schema demanded
+ * `healthScore`, which no form collects. The field error had no input to attach
+ * to, so it rendered nowhere and the screen showed only "Could not create
+ * account" — a generic message hiding a precise, fixable cause. Nothing on the
+ * server said anything at all.
+ *
+ * A rejected input is not an application error, so this logs at warn: it is the
+ * caller's data that was wrong. But it must leave a trace naming the fields,
+ * because a validation failure the user cannot see and the server does not
+ * record is undiagnosable from either side.
+ *
+ * Field NAMES and messages only — never the submitted values. An account
+ * payload carries a plaintext Netflix password.
+ */
 function toValidationError(
   issues: readonly { path: PropertyKey[]; message: string }[],
   message: string,
@@ -399,6 +418,15 @@ function toValidationError(
       fieldErrors[field] = issue.message;
     }
   }
+
+  logger.warn("Account input rejected by validation", {
+    message,
+    fields: Object.keys(fieldErrors),
+    issues: issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message,
+    })),
+  });
 
   return new ValidationError(message, { fieldErrors });
 }

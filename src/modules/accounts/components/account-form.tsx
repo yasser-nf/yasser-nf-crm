@@ -113,6 +113,23 @@ export function AccountForm({
     return (formError?.message as string | undefined) ?? serverFieldErrors[name];
   };
 
+  /**
+   * Server errors naming a field this form does not render.
+   *
+   * Account creation was broken from the day it was written and nobody could
+   * see why: the schema rejected `healthScore`, which no input collects, so the
+   * error attached to nothing and the form looked like it had simply refused
+   * without saying anything.
+   *
+   * An error with nowhere to go must still be shown. Silence is the one
+   * response a form must never give.
+   */
+  const RENDERED_FIELDS = ["email", "password", "country", "notes", "status"];
+
+  const unmappedErrors = Object.entries(serverFieldErrors).filter(
+    ([field]) => !RENDERED_FIELDS.includes(field),
+  );
+
   const submit = handleSubmit((values) => {
     const payload: Record<string, unknown> = {
       email: values.email,
@@ -143,6 +160,20 @@ export function AccountForm({
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+      {unmappedErrors.length > 0 ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-1 rounded-md border border-danger/30 bg-danger-subtle p-4"
+        >
+          <p className="text-card-title text-foreground">The server rejected this account</p>
+          {unmappedErrors.map(([field, message]) => (
+            <p key={field} className="text-caption text-foreground-muted">
+              <span className="font-mono">{field}</span>: {message}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
       <FormField
         label="Netflix email"
         type="email"

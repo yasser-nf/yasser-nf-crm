@@ -29,7 +29,24 @@ const baseAccountInsert = createInsertSchema(accounts, {
     .toUpperCase()
     .optional(),
   notes: z.string().trim().max(2000).optional(),
-  healthScore: z.number().int().min(0).max(100),
+  /**
+   * Defaulted, not required.
+   *
+   * The column is `integer().notNull().default(100)`, so drizzle-zod would have
+   * generated this optional. Supplying a refinement REPLACES the generated
+   * schema — including its optionality — which silently made it mandatory.
+   *
+   * Nothing in the create form collects a health score, so every account
+   * creation failed validation on a field the user could not see and could not
+   * fill in. The resulting field error had no input to attach to, so the screen
+   * showed only "Could not create account".
+   *
+   * This is the same drizzle-zod trap already recorded for the update schemas
+   * in M02; it survived here because no account was ever created successfully
+   * to reveal it. The range is still enforced, and so is the check constraint
+   * on the table.
+   */
+  healthScore: z.number().int().min(0).max(100).default(100),
 }).omit({
   id: true,
   passwordEncrypted: true,
