@@ -46,14 +46,23 @@ export function isDue(frequency: BackupFrequency, lastRunAt: Date | null, now: D
   const elapsedMs = now.getTime() - lastRunAt.getTime();
 
   const HOUR = 60 * 60 * 1000;
-  const intervals: Record<Exclude<BackupFrequency, "off">, number> = {
-    hourly: HOUR,
-    daily: 24 * HOUR,
-    weekly: 7 * 24 * HOUR,
-    monthly: 30 * 24 * HOUR,
-  };
 
-  return elapsedMs >= intervals[frequency];
+  /*
+   * A switch rather than a Record lookup. `noUncheckedIndexedAccess` types any
+   * index read as possibly undefined, and a `?? 0` to silence it would make an
+   * unknown frequency mean "always due" — the wrong direction for something
+   * that triggers backups.
+   */
+  switch (frequency) {
+    case "hourly":
+      return elapsedMs >= HOUR;
+    case "daily":
+      return elapsedMs >= 24 * HOUR;
+    case "weekly":
+      return elapsedMs >= 7 * 24 * HOUR;
+    case "monthly":
+      return elapsedMs >= 30 * 24 * HOUR;
+  }
 }
 
 export const snapshotService = { take, isDue } as const;

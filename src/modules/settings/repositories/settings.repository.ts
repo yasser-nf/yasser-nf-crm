@@ -1,9 +1,24 @@
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { databaseAdapter, requireFound } from "@/lib/database";
-import { settings, type SettingsRow } from "@/lib/drizzle/schema";
+import { auditLogs, settings, users, type SettingsRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 import type { SettingsUpdate } from "../validation/settings.schema";
+
+/**
+ * One recorded settings change.
+ *
+ * Read from `audit_logs` rather than a second history table — every settings
+ * write already records before and after there, which is exactly what the
+ * change history needs to show.
+ */
+export interface SettingsChange {
+  readonly id: string;
+  readonly actorName: string | null;
+  readonly before: unknown;
+  readonly after: unknown;
+  readonly createdAt: Date;
+}
 
 /**
  * Settings repository.
@@ -26,6 +41,8 @@ export interface SettingsRepository {
    */
   ensureExists(): Promise<Result<SettingsRow>>;
   update(input: SettingsUpdate): Promise<Result<SettingsRow>>;
+  /** Change history, newest first, from the audit log. */
+  history(limit?: number): Promise<Result<readonly SettingsChange[]>>;
 }
 
 export const settingsRepository: SettingsRepository = {
@@ -64,5 +81,23 @@ export const settingsRepository: SettingsRepository = {
     }
 
     return requireFound(result.value[0], ENTITY, "singleton");
+  },
+
+  async history(limit = 50) {
+    return databaseAdapter.query("settings.history", (executor) =>
+      executor
+        .select({
+          id: auditLogs.id,
+          actorName: users.name,
+          before: auditLogs.before,
+          after: auditLogs.after,
+          createdAt: auditLogs.createdAt,
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(users.id, auditLogs.userId))
+        .where(and(eq(auditLogs.entity, "settings"), eq(auditLogs.action, "update")))
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(limit),
+    );
   },
 };
