@@ -1,3 +1,4 @@
+import { remainingDays } from "@/lib/dates";
 import type { CustomerRow } from "@/lib/drizzle/schema";
 
 /**
@@ -21,25 +22,18 @@ export interface SubscriptionSummary {
 /**
  * Whole days until expiry. Negative once past.
  *
- * Both dates are reduced to UTC midnight before subtracting. Comparing raw
- * timestamps would make "expires today" flip at an arbitrary time of day
- * depending on when the sale happened.
+ * Re-exported from lib/dates rather than implemented here.
+ *
+ * This file carried its own byte-identical copy until M13 Phase B, and ADR-013
+ * Decision 7 claimed the copy had been removed when it had not. Two identical
+ * implementations are not harmless: M13 compares a customer's remaining days
+ * against an account's remaining days, and if the two ever diverged the result
+ * would be an off-by-one that sells a subscription the account cannot cover —
+ * on exactly one day, in the boundary case.
+ *
+ * The name is kept so no caller changed.
  */
-export function remainingDays(expirationDate: string | null, today: Date): number | null {
-  if (!expirationDate) {
-    return null;
-  }
-
-  const expiry = Date.parse(`${expirationDate}T00:00:00Z`);
-
-  if (Number.isNaN(expiry)) {
-    return null;
-  }
-
-  const midnightToday = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-
-  return Math.round((expiry - midnightToday) / 86_400_000);
-}
+export { remainingDays };
 
 export type ExpiryUrgency = "expired" | "today" | "tomorrow" | "soon" | "later" | "none";
 

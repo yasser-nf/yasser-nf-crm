@@ -1,5 +1,7 @@
 import "server-only";
 
+import { sql } from "drizzle-orm";
+
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AppUser } from "@/lib/auth";
 import { databaseAdapter } from "@/lib/database";
@@ -70,6 +72,36 @@ export interface RestoreOutcome {
   readonly orphans: readonly OrphanUser[];
   readonly nulledReferences: number;
 }
+
+/**
+ * Drill-only options.
+ *
+ * M12 P0-4: a backup system is only as good as its last successful restore, and
+ * this one had never been run — `restoreService.restore` appeared in exactly one
+ * test, checking that a Worker is refused. Proving it works needs somewhere safe
+ * to point it, and there is no second database or Supabase project.
+ *
+ * `schema` redirects the apply transaction at a disposable schema, exactly as
+ * `scripts/rollback-drill.mjs` already does for migrations: the Drizzle tables
+ * are declared unqualified, so `search_path` decides where they resolve.
+ *
+ * Omitted — which is every production and application call — nothing is issued
+ * and the transaction runs against the existing search_path. The default path is
+ * byte-for-byte what it was.
+ */
+export interface RestoreOptions {
+  /** A disposable schema to apply into. Never set outside a drill. */
+  readonly schema?: string;
+}
+
+/**
+ * A schema name safe to interpolate, checked rather than trusted.
+ *
+ * `sql.identifier` quotes it, but this is a drill seam reachable from a service,
+ * and the cost of being wrong is a statement running somewhere unintended. The
+ * allowlist is narrow on purpose: lower-case, digits and underscores only.
+ */
+const SAFE_SCHEMA = /^[a-z_][a-z0-9_]*$/;
 
 function requireBackupAccess(actor: AppUser | null, action: string): Result<AppUser> {
   if (!actor) {
@@ -331,11 +363,23 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
  * every step. Everything is inside one transaction: a failure on the last table
  * unwinds the first.
  */
-async function restore(backupId: string, context: AuditContext): Promise<Result<RestoreOutcome>> {
+async function restore(
+  backupId: string,
+  context: AuditContext,
+  options?: RestoreOptions,
+): Promise<Result<RestoreOutcome>> {
   const permitted = requireBackupAccess(context.actor, "restore a backup");
 
   if (!permitted.ok) {
     return permitted;
+  }
+
+  if (options?.schema !== undefined && !SAFE_SCHEMA.test(options.schema)) {
+    return fail(
+      new ValidationError(`Refusing to restore into an unsafe schema name`, {
+        userMessage: "That restore target is not a valid schema.",
+      }),
+    );
   }
 
   const loaded = await load(backupId);
@@ -361,6 +405,18 @@ async function restore(backupId: string, context: AuditContext): Promise<Result<
   let nulledReferences = 0;
 
   const outcome = await databaseAdapter.transaction("restore.apply", async (executor) => {
+    /*
+     * The FIRST statement, before a single row is read or written.
+     *
+     * `SET LOCAL` is scoped to this transaction and reverts on commit or
+     * rollback, so it cannot leak onto a pooled connection and change where a
+     * later caller writes. That property is why the redirect belongs here and
+     * not around the transaction.
+     */
+    if (options?.schema !== undefined) {
+      await executor.execute(sql`set local search_path to ${sql.identifier(options.schema)}`);
+    }
+
     /*
      * Which user ids will exist once this transaction commits: the restorable
      * ones from the backup, plus any already present that the backup does not

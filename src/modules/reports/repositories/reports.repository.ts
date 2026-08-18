@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { databaseAdapter } from "@/lib/database";
+import { rawSellableSlot } from "@/lib/drizzle/predicates";
 import type { Result } from "@/types/result";
 import type { ReportKey } from "../services/report-definitions";
 import type { ReportFilters } from "../validation/report.schema";
@@ -74,8 +75,12 @@ function datasetQuery(report: ReportKey, filters: ReportFilters): SQL {
           a.status::text as "status",
           a.health_score as "healthScore",
           count(p.id)::int as "totalProfiles",
-          count(p.id) filter (where p.status = 'available')::int as "availableProfiles",
+          /* Sellable slots only. M13: rows above a.profile_slots are not stock. */
+          count(p.id) filter (
+            where p.status = 'available' and ${rawSellableSlot("p", "a")}
+          )::int as "availableProfiles",
           count(p.id) filter (where p.status = 'sold')::int as "soldProfiles",
+          count(p.id) filter (where not ${rawSellableSlot("p", "a")})::int as "notForSaleProfiles",
           (
             select count(*)::int from issues i
             where i.account_id = a.id and i.status in ('open', 'in_progress', 'waiting')
@@ -298,11 +303,39 @@ function summaryQuery(report: ReportKey, filters: ReportFilters): SQL | null {
             select count(distinct account_id)::int from issues
             where status in ('open', 'in_progress', 'waiting')
           ) as "problemAccounts",
-          (select count(*)::int from profiles) as "stockTotal",
-          (select count(*)::int from profiles where status = 'available') as "stockAvailable",
+          /*
+           * Stock is SELLABLE capacity, not raw row count. M13: an account with
+           * profile_slots = 2 has five rows and two of them are stock, so
+           * counting rows would overstate the catalogue by the slots nobody can
+           * ever sell.
+           */
+          (
+            select count(*)::int from profiles p
+            join accounts a2 on a2.id = p.account_id
+            where ${rawSellableSlot("p", "a2")}
+          ) as "stockTotal",
+          (
+            select count(*)::int from profiles p
+            join accounts a2 on a2.id = p.account_id
+            where p.status = 'available' and ${rawSellableSlot("p", "a2")}
+          ) as "stockAvailable",
+          /*
+           * Measured against sellable capacity for the same reason, and to match
+           * the utilization figure in the profiles report. Dividing by all five
+           * rows would cap a two-slot account at 40% however completely it sold
+           * out, which reads as poor performance rather than as a full account.
+           */
           coalesce(round(
-            100.0 * (select count(*) from profiles where status = 'sold')
-              / nullif((select count(*) from profiles), 0), 1
+            100.0 * (
+              select count(*) from profiles p
+              join accounts a2 on a2.id = p.account_id
+              where p.status = 'sold' and ${rawSellableSlot("p", "a2")}
+            )
+              / nullif((
+                select count(*) from profiles p
+                join accounts a2 on a2.id = p.account_id
+                where ${rawSellableSlot("p", "a2")}
+              ), 0), 1
           ), 0)::float8 as "allocationRate"
         from accounts
         where ${dateBounds(filters, sql`created_at`)}
@@ -311,16 +344,26 @@ function summaryQuery(report: ReportKey, filters: ReportFilters): SQL | null {
     case "profiles":
       return sql`
         select
-          count(*) filter (where status = 'available')::int as "available",
-          count(*) filter (where status = 'reserved')::int as "reserved",
-          count(*) filter (where status = 'sold')::int as "sold",
-          count(*) filter (where expiration_date >= current_date and expiration_date <= current_date + 7)::int as "expiring",
-          count(*) filter (where expiration_date < current_date)::int as "expired",
+          count(*) filter (
+            where p.status = 'available' and ${rawSellableSlot("p", "a")}
+          )::int as "available",
+          count(*) filter (where p.status = 'reserved')::int as "reserved",
+          count(*) filter (where p.status = 'sold')::int as "sold",
+          count(*) filter (where not ${rawSellableSlot("p", "a")})::int as "notForSale",
+          count(*) filter (where p.expiration_date >= current_date and p.expiration_date <= current_date + 7)::int as "expiring",
+          count(*) filter (where p.expiration_date < current_date)::int as "expired",
           (select count(*)::int from profile_events where event_type = 'replaced') as "replacementCount",
+          /*
+           * Utilization is measured against SELLABLE capacity, not against every
+           * row. Counting slots the account does not sell would permanently cap
+           * a three-profile account at 60% and make the number meaningless.
+           */
           coalesce(round(
-            100.0 * count(*) filter (where status in ('sold', 'reserved')) / nullif(count(*), 0), 1
+            100.0 * count(*) filter (where p.status in ('sold', 'reserved'))
+              / nullif(count(*) filter (where ${rawSellableSlot("p", "a")}), 0), 1
           ), 0)::float8 as "utilization"
-        from profiles
+        from profiles p
+        join accounts a on a.id = p.account_id
       `;
 
     case "customers":

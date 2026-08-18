@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { databaseAdapter } from "@/lib/database";
+import { rawSellableSlot } from "@/lib/drizzle/predicates";
 import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 
@@ -36,6 +37,8 @@ export interface ProfileCounts {
   readonly sold: number;
   readonly expiringSoon: number;
   readonly expired: number;
+  /** Profile rows above their account's profile_slots. Not stock. M13. */
+  readonly notForSale: number;
 }
 
 export interface CustomerCounts {
@@ -187,29 +190,43 @@ export const dashboardRepository: DashboardRepository = {
         from accounts
       `);
 
+      /*
+       * Joined to accounts since M13. `available` must exclude profile rows
+       * above the account's profile_slots, and that fact lives on the account —
+       * the rule is derived rather than stored, precisely so it cannot drift
+       * away from profile_slots. The join is the cost of that guarantee.
+       *
+       * The predicate itself comes from lib/drizzle/predicates so this aggregate
+       * and the allocation path cannot disagree about what "available" means.
+       */
       const profileRows = await executor.execute(sql`
         select
           count(*)::int as total,
-          count(*) filter (where status = 'available')::int as available,
-          count(*) filter (where status = 'reserved')::int as reserved,
-          count(*) filter (where status = 'sold')::int as sold,
-          count(*) filter (where status = 'expiring_soon')::int as expiring_soon,
-          count(*) filter (where status = 'expired')::int as expired,
+          count(*) filter (
+            where p.status = 'available' and ${rawSellableSlot("p", "a")}
+          )::int as available,
+          count(*) filter (where p.status = 'reserved')::int as reserved,
+          count(*) filter (where p.status = 'sold')::int as sold,
+          count(*) filter (where p.status = 'expiring_soon')::int as expiring_soon,
+          count(*) filter (where p.status = 'expired')::int as expired,
+          /* Slots the account does not sell. Never stock, never will be. */
+          count(*) filter (where not ${rawSellableSlot("p", "a")})::int as not_for_sale,
           /*
            * Expiry buckets read expiration_date directly rather than the status
            * column. 03_DATABASE.md warns those enum values are not written by
            * anything yet, so trusting them here would report zero forever.
            */
-          count(*) filter (where expiration_date = current_date)::int as expiring_today,
-          count(*) filter (where expiration_date = current_date + 1)::int as expiring_tomorrow,
+          count(*) filter (where p.expiration_date = current_date)::int as expiring_today,
+          count(*) filter (where p.expiration_date = current_date + 1)::int as expiring_tomorrow,
           count(*) filter (
-            where expiration_date > current_date and expiration_date <= current_date + 3
+            where p.expiration_date > current_date and p.expiration_date <= current_date + 3
           )::int as expiring_three,
           count(*) filter (
-            where expiration_date > current_date and expiration_date <= current_date + 7
+            where p.expiration_date > current_date and p.expiration_date <= current_date + 7
           )::int as expiring_seven,
-          count(*) filter (where expiration_date < current_date)::int as already_expired
-        from profiles
+          count(*) filter (where p.expiration_date < current_date)::int as already_expired
+        from profiles p
+        join accounts a on a.id = p.account_id
       `);
 
       const customerRows = await executor.execute(sql`
@@ -296,6 +313,7 @@ export const dashboardRepository: DashboardRepository = {
           sold: readNumber(profile, "sold"),
           expiringSoon: readNumber(profile, "expiring_soon"),
           expired: readNumber(profile, "expired"),
+          notForSale: readNumber(profile, "not_for_sale"),
         },
         expirations: {
           today: readNumber(profile, "expiring_today"),

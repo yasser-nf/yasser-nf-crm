@@ -248,6 +248,9 @@ async function stock(actor: AppUser | null): Promise<Result<StockSummary>> {
 
   let excludedForProblems = 0;
 
+  /* One clock for the whole snapshot, so no two accounts straddle midnight. */
+  const today = new Date();
+
   const entries: StockEntry[] = candidates.value.map((candidate) => {
     if (candidate.hasActiveProblem) {
       excludedForProblems += 1;
@@ -255,7 +258,16 @@ async function stock(actor: AppUser | null): Promise<Result<StockSummary>> {
 
     const allocatable = candidate.profiles.filter(
       (profile) =>
-        evaluateAllocation(candidate.account, profile, candidate.hasActiveProblem).isAllocatable,
+        /*
+         * No requestedDurationDays: the dashboard reports stock on hand, not
+         * stock for a particular sale. Since M13 this count also excludes
+         * not-for-sale slots and expired accounts, and includes profiles whose
+         * customer has expired — all through the one shared rule.
+         */
+        evaluateAllocation(candidate.account, profile, {
+          hasActiveProblem: candidate.hasActiveProblem,
+          today,
+        }).isAllocatable,
     ).length;
 
     return {

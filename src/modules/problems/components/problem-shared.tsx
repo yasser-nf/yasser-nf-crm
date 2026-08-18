@@ -1,66 +1,32 @@
-import { cn } from "@/utils/cn";
+import {
+  PROBLEM_TYPE_LABELS,
+  ProblemSeverityBadgeBase,
+  ProblemStatusBadgeBase,
+} from "@/shared/ui/problem-badges";
 import type { ProblemSeverity, ProblemStatus } from "../services/problem-lifecycle";
 
 /**
  * Shared problem presentation.
  *
- * Every map is `Record<Union, …>`, so adding a status or severity without a
- * colour becomes a compile error rather than an unstyled badge.
+ * The badges themselves live in `@/shared/ui/problem-badges`, shared with Quick
+ * Replace's problems panel — a Client Component, which cannot import this
+ * module's barrel because that barrel re-exports `server-only` services.
+ *
+ * These wrappers stay because the module barrel, the problems table and the
+ * detail screen all reference them by name. They also pin the design system's
+ * unions to the DOMAIN types: if `ProblemStatus` gains a member the design
+ * system has no colour for, these stop typechecking rather than rendering an
+ * unstyled badge.
  */
 
-const BADGE = "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-caption font-medium";
-
-export const PROBLEM_TYPE_LABELS: Record<string, string> = {
-  payment_problem: "Payment problem",
-  incorrect_password: "Incorrect password",
-  invalid_email: "Invalid email",
-  something_went_wrong: "Something went wrong",
-  other: "Other",
-};
-
-const STATUS_STYLES: Record<ProblemStatus, { className: string; label: string }> = {
-  open: { className: "bg-danger-subtle text-danger", label: "Open" },
-  in_progress: { className: "bg-primary-subtle text-primary", label: "In progress" },
-  waiting: { className: "bg-warning-subtle text-warning", label: "Waiting" },
-  resolved: { className: "bg-success-subtle text-success", label: "Resolved" },
-  closed: { className: "bg-surface-raised text-foreground-muted", label: "Closed" },
-  cancelled: { className: "bg-neutral-subtle text-foreground-subtle", label: "Cancelled" },
-};
+export { PROBLEM_TYPE_LABELS };
 
 export function ProblemStatusBadge({ status }: { status: ProblemStatus }) {
-  const style = STATUS_STYLES[status];
-
-  return <span className={cn(BADGE, style.className)}>{style.label}</span>;
+  return <ProblemStatusBadgeBase status={status} />;
 }
 
-const SEVERITY_STYLES: Record<ProblemSeverity, { className: string; label: string }> = {
-  low: { className: "bg-surface-raised text-foreground-muted", label: "Low" },
-  medium: { className: "bg-primary-subtle text-primary", label: "Medium" },
-  high: { className: "bg-warning-subtle text-warning", label: "High" },
-  critical: { className: "bg-danger-subtle text-danger", label: "Critical" },
-};
-
 export function ProblemSeverityBadge({ severity }: { severity: ProblemSeverity }) {
-  const style = SEVERITY_STYLES[severity];
-
-  return (
-    <span className={cn(BADGE, style.className)}>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          severity === "critical"
-            ? "bg-danger"
-            : severity === "high"
-              ? "bg-warning"
-              : severity === "medium"
-                ? "bg-primary"
-                : "bg-neutral",
-        )}
-        aria-hidden="true"
-      />
-      {style.label}
-    </span>
-  );
+  return <ProblemSeverityBadgeBase severity={severity} />;
 }
 
 /**
