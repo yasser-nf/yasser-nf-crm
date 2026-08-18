@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   formatAccountCredentials,
   formatCustomer,
+  formatEmailAndPassword,
   formatPassword,
   formatPreparation,
+  formatPreparedProfile,
 } from "@/lib/clipboard";
 import {
   ActionError,
@@ -99,6 +101,90 @@ describe("formatPreparation", () => {
 
   it("returns an empty string for no accounts", () => {
     expect(formatPreparation([])).toBe("");
+  });
+});
+
+/**
+ * The strings behind "Copy all" and the labelled credential block.
+ *
+ * Both are what an operator pastes into WhatsApp after a Quick Prepare or a
+ * Quick Replace, and both were untested until the replacement result screen
+ * started using them. A layout regression here is invisible in our UI and
+ * perfectly visible to the customer.
+ */
+describe("formatPreparedProfile — the M13 §6 block", () => {
+  it("matches the specified layout exactly", () => {
+    const text = formatPreparedProfile({
+      email: "someone@example.com",
+      password: "the-password",
+      profileNumber: 2,
+      pin: "9121",
+    });
+
+    expect(text).toBe(
+      "Email\nsomeone@example.com\n\nPassword\nthe-password\n\nProfile number\n2\n\nCode pin\n9121",
+    );
+  });
+
+  it("labels every field on its own line, so nothing runs together", () => {
+    const lines = formatPreparedProfile({
+      email: "a@b.co",
+      password: "pw",
+      profileNumber: 5,
+      pin: "0001",
+    }).split("\n");
+
+    expect(lines[0]).toBe("Email");
+    expect(lines[1]).toBe("a@b.co");
+    expect(lines[3]).toBe("Password");
+    expect(lines[4]).toBe("pw");
+    expect(lines[6]).toBe("Profile number");
+    expect(lines[7]).toBe("5");
+    expect(lines[9]).toBe("Code pin");
+    expect(lines[10]).toBe("0001");
+  });
+
+  it("shows a dash for a missing PIN rather than the word null", () => {
+    /* "Code pin\nnull" would be sent to a customer verbatim. */
+    const text = formatPreparedProfile({
+      email: "a@b.co",
+      password: "pw",
+      profileNumber: 1,
+      pin: null,
+    });
+
+    expect(text.endsWith("Code pin\n—")).toBe(true);
+    expect(text).not.toContain("null");
+  });
+
+  it("stays distinct from the older M04 delivery block", () => {
+    /*
+     * Both formats are specified and both are kept: this one by M13 §6, the
+     * other by the M04 brief. Silently unifying them would change every message
+     * the existing screens produce.
+     */
+    const m13 = formatPreparedProfile({
+      email: "a@b.co",
+      password: "pw",
+      profileNumber: 2,
+      pin: "9121",
+    });
+
+    const m04 = formatAccountCredentials({
+      email: "a@b.co",
+      password: "pw",
+      profiles: [{ profileNumber: 2, pin: "9121", profileName: null }],
+    });
+
+    expect(m13).not.toBe(m04);
+    expect(m13).toContain("Profile number");
+    expect(m04).toContain("Profile : 2");
+  });
+});
+
+describe("formatEmailAndPassword", () => {
+  it("labels both halves", () => {
+    expect(formatEmailAndPassword("a@b.co", "pw")).toBe("Email\na@b.co\n\nPassword\npw");
   });
 });
 

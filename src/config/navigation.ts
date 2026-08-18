@@ -2,6 +2,7 @@ import {
   ChartColumn,
   DatabaseBackup,
   LayoutDashboard,
+  RefreshCcw,
   ScrollText,
   Settings,
   TriangleAlert,
@@ -41,6 +42,7 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { label: "Dashboard", href: ROUTES.DASHBOARD, icon: LayoutDashboard },
   { label: "Accounts", href: ROUTES.ACCOUNTS, icon: Tv },
   { label: "Quick Prepare", href: ROUTES.QUICK_PREPARE, icon: Zap },
+  { label: "Quick Replace", href: ROUTES.QUICK_REPLACE, icon: RefreshCcw },
   { label: "Customers", href: ROUTES.CUSTOMERS, icon: Users },
   { label: "Problems", href: ROUTES.PROBLEMS, icon: TriangleAlert },
   {

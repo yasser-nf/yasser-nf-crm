@@ -8,6 +8,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { UnauthorizedError, isAppError, type AppError } from "@/lib/errors";
 import type { AuditContext } from "@/modules/audit";
 import { quickPrepareService } from "../services/quick-prepare.service";
+import { quickReplaceService } from "../services/quick-replace.service";
 
 /**
  * Quick Prepare server actions.
@@ -88,9 +89,17 @@ async function run<T>(
   }
 }
 
-/** Read-only. Shows what would be allocated, taking nothing. */
-export async function previewAllocationAction(profileCount: number) {
-  return run(async () => quickPrepareService.preview(profileCount));
+/**
+ * Read-only. Shows what would be allocated, taking nothing.
+ *
+ * Takes the whole request as one opaque input rather than positional arguments.
+ * The previous signature was `(profileCount: number)` and silently dropped the
+ * duration, so the preview stopped filtering by account validity and could
+ * offer stock that `confirmPreparationAction` then refused. The service now
+ * validates both fields, so an incomplete call fails loudly.
+ */
+export async function previewAllocationAction(input: unknown) {
+  return run(async () => quickPrepareService.preview(input));
 }
 
 /** Allocates and returns credentials. Revalidates the screens whose data moved. */
@@ -101,9 +110,36 @@ export async function confirmPreparationAction(input: unknown) {
   );
 }
 
-export async function replaceAllocationAction(input: unknown) {
+/**
+ * Quick Replace, step one: look up a customer's allocation by account email.
+ *
+ * Read-only and revalidates nothing — it writes nothing at all. The whole point
+ * of the preview/commit split is that an operator sees the full picture before
+ * any allocation is released, so this must stay free of side effects.
+ */
+export async function previewReplacementAction(input: unknown) {
+  return run(async () => quickReplaceService.preview(input));
+}
+
+/**
+ * Quick Replace, step two: commit a replacement the operator confirmed.
+ *
+ * The ONLY action in the application that commits a replacement.
+ *
+ * `replaceAllocationAction` used to sit beside it and commit directly, with no
+ * bound replacement account and no password-change gate. A Server Action is a
+ * POST endpoint anybody holding a session can call, so "the UI always previews
+ * first" was never a guarantee — the endpoint itself had to stop existing. It
+ * was deleted rather than deprecated, along with its hook and service function.
+ *
+ * This one verifies the preview is still current, binds the commit to the
+ * approved replacement account, enforces the password-change confirmation
+ * against the LOCKED account, and refuses an already-expired allocation — the
+ * M13 §10 guards.
+ */
+export async function confirmReplacementAction(input: unknown) {
   return run(
-    async (context) => quickPrepareService.replaceAllocation(input, context),
+    async (context) => quickPrepareService.confirmReplacement(input, context),
     [ROUTES.ACCOUNTS, ROUTES.QUICK_PREPARE],
   );
 }

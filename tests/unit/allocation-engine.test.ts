@@ -29,6 +29,10 @@ function account(id: string, healthScore = 100): AccountRow {
     passwordEncrypted: "v1:a:b:c",
     status: "healthy",
     healthScore,
+    /* M13 defaults: sells all five, open-ended coverage. */
+    profileSlots: 5,
+    validFrom: null,
+    validUntil: null,
     country: "DZ",
     notes: null,
     createdBy: null,
@@ -58,13 +62,21 @@ function profile(id: string, accountId: string, profileNumber: number): ProfileR
   };
 }
 
-function candidate(id: string, free: number, soldCount = 0, health = 100): AllocationCandidate {
+function candidate(
+  id: string,
+  free: number,
+  soldCount = 0,
+  health = 100,
+  /* Null is open-ended coverage — the pre-M13 behaviour every old test assumes. */
+  remainingValidityDays: number | null = null,
+): AllocationCandidate {
   return {
     account: account(id, health),
     availableProfiles: Array.from({ length: free }, (_, i) =>
       profile(`${id}-p${i + 1}`, id, i + 1),
     ),
     soldCount,
+    remainingValidityDays,
   };
 }
 
@@ -202,6 +214,157 @@ describe("buildAllocationPlan — determinism", () => {
     const pool = [candidate("a", 5)];
     buildAllocationPlan(pool, 2);
     expect(pool[0]?.availableProfiles).toHaveLength(5);
+  });
+});
+
+describe("buildAllocationPlan — account validity (M13)", () => {
+  it("behaves exactly as before when no duration is supplied", () => {
+    /* The preview count path. Nothing about M13 changes it. */
+    const plan = buildAllocationPlan([candidate("short", 5, 0, 100, 3)], 2);
+
+    expect(plan.isShort).toBe(false);
+    expect(plan.excludedForValidity).toBe(0);
+    expect(plan.rejected).toEqual([]);
+  });
+
+  it("excludes an account that cannot cover the requested duration", () => {
+    const plan = buildAllocationPlan([candidate("short", 5, 0, 100, 30)], 2, {
+      requestedDurationDays: 90,
+    });
+
+    expect(plan.isShort).toBe(true);
+    expect(plan.availableTotal).toBe(0);
+    expect(plan.excludedForValidity).toBe(5);
+  });
+
+  it("keeps an account whose validity exactly matches the request", () => {
+    /* The boundary is inclusive: 90 days left covers a 90-day sale. */
+    const plan = buildAllocationPlan([candidate("exact", 5, 0, 100, 90)], 2, {
+      requestedDurationDays: 90,
+    });
+
+    expect(plan.isShort).toBe(false);
+    expect(plan.slices[0]?.account.id).toBe("exact");
+  });
+
+  it("treats open-ended validity as covering anything", () => {
+    const plan = buildAllocationPlan([candidate("open", 5, 0, 100, null)], 2, {
+      requestedDurationDays: 730,
+    });
+
+    expect(plan.isShort).toBe(false);
+  });
+
+  it("reports the numbers behind a rejection", () => {
+    /* So the service can say "Only 18 days remaining, 90 requested". */
+    const plan = buildAllocationPlan([candidate("short", 3, 0, 100, 18)], 2, {
+      requestedDurationDays: 90,
+    });
+
+    expect(plan.rejected).toHaveLength(1);
+    expect(plan.rejected[0]).toMatchObject({
+      accountId: "short",
+      freeProfiles: 3,
+      remainingDays: 18,
+      requestedDays: 90,
+    });
+  });
+
+  it("distinguishes no stock from short-dated stock", () => {
+    /*
+     * Two problems with opposite answers: buy more accounts, versus sell this
+     * customer a shorter subscription. Reporting both as "not enough profiles"
+     * hides the second one.
+     */
+    const noStock = buildAllocationPlan([], 2, { requestedDurationDays: 90 });
+    const shortDated = buildAllocationPlan([candidate("s", 5, 0, 100, 10)], 2, {
+      requestedDurationDays: 90,
+    });
+
+    expect(noStock.excludedForValidity).toBe(0);
+    expect(shortDated.excludedForValidity).toBe(5);
+    expect(noStock.isShort && shortDated.isShort).toBe(true);
+  });
+
+  it("counts only usable stock in availableTotal", () => {
+    /*
+     * Telling a worker "8 available" when none of it can be sold for this
+     * duration is worse than telling them nothing.
+     */
+    const plan = buildAllocationPlan(
+      [candidate("good", 3, 0, 100, 365), candidate("short", 5, 0, 100, 5)],
+      10,
+      { requestedDurationDays: 90 },
+    );
+
+    expect(plan.availableTotal).toBe(3);
+    expect(plan.excludedForValidity).toBe(5);
+  });
+});
+
+describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
+  it("prefers a long-dated account over a short-dated one", () => {
+    const plan = buildAllocationPlan(
+      [candidate("expiring", 5, 0, 100, 10), candidate("fresh", 5, 0, 100, 365)],
+      2,
+      { requestedDurationDays: 5 },
+    );
+
+    expect(plan.slices[0]?.account.id).toBe("fresh");
+  });
+
+  it("still uses a short-dated account when it is the only one that fits", () => {
+    /*
+     * The approval is explicit: "Accounts nearing expiration should not
+     * immediately disappear... Only reject when remaining validity is
+     * insufficient." A penalty reorders; it never excludes.
+     */
+    const plan = buildAllocationPlan([candidate("expiring", 5, 0, 100, 10)], 2, {
+      requestedDurationDays: 5,
+    });
+
+    expect(plan.isShort).toBe(false);
+    expect(plan.slices[0]?.account.id).toBe("expiring");
+  });
+
+  it("outranks both health and partial-sale concentration", () => {
+    /*
+     * The penalty must be big enough that a perfect-health, partly-sold,
+     * nearly-expired account still loses to a plain healthy one.
+     */
+    const plan = buildAllocationPlan(
+      [candidate("expiring", 5, 3, 100, 2), candidate("fresh", 5, 0, 60, 365)],
+      2,
+      { requestedDurationDays: 1 },
+    );
+
+    expect(plan.slices[0]?.account.id).toBe("fresh");
+  });
+
+  it("does not penalise an open-ended account", () => {
+    const plan = buildAllocationPlan(
+      [candidate("open", 5, 0, 50, null), candidate("expiring", 5, 0, 100, 3)],
+      2,
+      { requestedDurationDays: 1 },
+    );
+
+    expect(plan.slices[0]?.account.id).toBe("open");
+  });
+
+  it("does not stop a short-dated account from covering the whole order alone", () => {
+    /*
+     * Splitting a customer across two accounts to save a few days of shelf life
+     * is a worse outcome for that customer, so coversRequest outranks the
+     * penalty deliberately.
+     */
+    const plan = buildAllocationPlan(
+      [candidate("expiring", 4, 0, 100, 5), candidate("fresh", 2, 0, 100, 365)],
+      4,
+      { requestedDurationDays: 3 },
+    );
+
+    expect(plan.slices).toHaveLength(1);
+    expect(plan.slices[0]?.account.id).toBe("expiring");
   });
 });
 

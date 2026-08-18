@@ -6,8 +6,9 @@ import { toast } from "sonner";
 import { ActionError } from "@/lib/errors";
 import {
   confirmPreparationAction,
+  confirmReplacementAction,
   previewAllocationAction,
-  replaceAllocationAction,
+  previewReplacementAction,
   type ActionResult,
 } from "../actions/quick-prepare.actions";
 
@@ -27,10 +28,47 @@ function unwrapAction<T>(result: ActionResult<T>): T {
   throw new ActionError(result.message, result.code, result.fieldErrors);
 }
 
+/**
+ * Previews an allocation.
+ *
+ * Takes the whole request, not just the profile count. The earlier version
+ * passed only the count, so the preview never applied account validity and
+ * could show stock that confirmation then refused. The action validates both
+ * fields now, so this cannot regress silently.
+ */
 export function usePreviewAllocation() {
   return useMutation({
-    mutationFn: async (profileCount: number) =>
-      unwrapAction(await previewAllocationAction(profileCount)),
+    mutationFn: async (input: { profileCount: number; durationDays: number }) =>
+      unwrapAction(await previewAllocationAction(input)),
+  });
+}
+
+/** Quick Replace step one. Read-only: looks up an allocation, releases nothing. */
+export function usePreviewReplacement() {
+  return useMutation({
+    mutationFn: async (input: unknown) => unwrapAction(await previewReplacementAction(input)),
+    onError: (error) => {
+      if (!(error instanceof ActionError) || !error.fieldErrors) {
+        toast.error("Could not look that up", { description: error.userMessage });
+      }
+    },
+  });
+}
+
+/** Quick Replace step two. Commits only what the operator confirmed. */
+export function useConfirmReplacement() {
+  return useMutation({
+    mutationFn: async (input: unknown) => unwrapAction(await confirmReplacementAction(input)),
+    onSuccess: () => {
+      toast.success("Replacement allocated", {
+        description: "The customer keeps their original expiry date.",
+      });
+    },
+    onError: (error) => {
+      if (!(error instanceof ActionError) || !error.fieldErrors) {
+        toast.error("Could not replace", { description: error.userMessage });
+      }
+    },
   });
 }
 
@@ -43,17 +81,5 @@ export function useConfirmPreparation() {
         toast.error("Could not prepare", { description: error.userMessage });
       }
     },
-  });
-}
-
-export function useReplaceAllocation() {
-  return useMutation({
-    mutationFn: async (input: unknown) => unwrapAction(await replaceAllocationAction(input)),
-    onSuccess: () => {
-      toast.success("Replacement allocated", {
-        description: "The previous profiles were released and the sale moved.",
-      });
-    },
-    onError: (error) => toast.error("Could not replace", { description: error.userMessage }),
   });
 }

@@ -2,31 +2,21 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Check,
-  Copy,
-  LoaderCircle,
-  MessageCircle,
-  RotateCcw,
-  TriangleAlert,
-  Zap,
-} from "lucide-react";
+import { ArrowLeft, Check, LoaderCircle, TriangleAlert, Zap } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { toast } from "sonner";
 import { z } from "zod";
 
 import { DURATION, EASING } from "@/config/theme";
-import { copyToClipboard } from "@/lib/clipboard";
 import { ActionError } from "@/lib/errors";
 import { formatPhoneForDisplay, isValidAlgerianPhone, normalizePhone } from "@/lib/phone";
 import { FormField } from "@/shared/forms/form-field";
+import { CredentialResult } from "./credential-result";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Textarea } from "@/shared/ui/textarea";
 import { useConfirmPreparation, usePreviewAllocation } from "../hooks/use-quick-prepare";
-import type { PreparationResult } from "../services/quick-prepare.service";
+import type { PreparationPreview, PreparationResult } from "../services/quick-prepare.service";
 
 /**
  * Quick Prepare wizard.
@@ -62,6 +52,8 @@ type Stage = "form" | "review" | "done";
 export function QuickPrepareWizard({ availableStock }: { availableStock: number }) {
   const [stage, setStage] = useState<Stage>("form");
   const [result, setResult] = useState<PreparationResult | null>(null);
+  /* M13 §8. Reset whenever a new preview arrives, so it is never carried over. */
+  const [passwordChanged, setPasswordChanged] = useState(false);
 
   const preview = usePreviewAllocation();
   const confirm = useConfirmPreparation();
@@ -93,9 +85,25 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
   }
 
   const goToReview = handleSubmit((values) => {
-    preview.mutate(Number(values.profileCount), {
-      onSuccess: () => setStage("review"),
-    });
+    /*
+     * The duration travels with the count. Without it the preview would not
+     * apply account validity, and a worker could be shown an account that the
+     * confirm step then refuses — after they had already named it to the
+     * customer.
+     */
+    preview.mutate(
+      {
+        profileCount: Number(values.profileCount),
+        durationDays: Number(values.durationDays),
+      },
+      {
+        onSuccess: () => {
+          /* A fresh preview means a fresh decision about the password. */
+          setPasswordChanged(false);
+          setStage("review");
+        },
+      },
+    );
   });
 
   function submitConfirmation() {
@@ -107,14 +115,24 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         durationDays: Number(values.durationDays),
         phone: values.phone,
         notes: values.notes || undefined,
+        /*
+         * Permission to proceed, not evidence. The server re-derives whether a
+         * password change is required from the accounts it actually locks, and
+         * refuses if this is missing — see `confirm` in quick-prepare.service.
+         */
+        passwordChangeConfirmed: passwordChanged,
       },
       {
         onSuccess: (data) => {
           setResult(data);
           setStage("done");
         },
-        /* Stock moved under us. Send them back to re-preview rather than guess. */
-        onError: () => setStage("form"),
+        /*
+         * Stock moved under us, or the server refused the confirmation. Stay on
+         * the review step so the error is visible next to what caused it —
+         * bouncing back to the form would hide it.
+         */
+        onError: () => setStage("review"),
       },
     );
   }
@@ -128,7 +146,14 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
   }
 
   if (stage === "done" && result) {
-    return <PreparationOutput result={result} onStartOver={startOver} />;
+    return (
+      <CredentialResult
+        result={result}
+        title={`Prepared${result.customerIsNew ? " for a new customer" : ""}`}
+        restartLabel="Prepare another"
+        onStartOver={startOver}
+      />
+    );
   }
 
   return (
@@ -228,8 +253,10 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         <ReviewStep
           preview={preview.data}
           phone={getValues("phone")}
-          durationDays={Number(getValues("durationDays"))}
           isConfirming={confirm.isPending}
+          passwordChanged={passwordChanged}
+          onPasswordChangedChange={setPasswordChanged}
+          confirmError={confirm.error}
           onBack={() => setStage("form")}
           onConfirm={submitConfirmation}
         />
@@ -265,30 +292,40 @@ function StockBanner({ available }: { available: number }) {
   );
 }
 
+/**
+ * Step 2: what the server would allocate, before it allocates anything.
+ *
+ * Everything here comes from the preview the SERVER produced. The component
+ * computes no eligibility, no expiry and no reuse — M13 §5 is explicit that the
+ * backend decides whether a password change is required, and this renders that
+ * decision rather than reaching one.
+ */
 function ReviewStep({
   preview,
   phone,
-  durationDays,
   isConfirming,
+  passwordChanged,
+  onPasswordChangedChange,
+  confirmError,
   onBack,
   onConfirm,
 }: {
-  preview: {
-    accounts: readonly {
-      accountId: string;
-      email: string;
-      healthScore: number;
-      profileNumbers: readonly number[];
-    }[];
-    requested: number;
-  };
+  preview: PreparationPreview;
   phone: string;
-  durationDays: number;
   isConfirming: boolean;
+  passwordChanged: boolean;
+  onPasswordChangedChange: (next: boolean) => void;
+  confirmError: unknown;
   onBack: () => void;
   onConfirm: () => void;
 }) {
   const normalized = normalizePhone(phone);
+
+  const serverError = confirmError instanceof ActionError ? confirmError : null;
+  const confirmationError = serverError?.fieldErrors?.["passwordChangeConfirmed"];
+
+  /* The server refuses without this; the button mirrors that rather than owning it. */
+  const blocked = preview.requiresPasswordChange && !passwordChanged;
 
   return (
     <motion.div
@@ -312,7 +349,11 @@ function ReviewStep({
           </div>
           <div className="flex flex-col">
             <dt className="text-foreground-subtle">Duration</dt>
-            <dd className="text-foreground">{durationDays} days</dd>
+            <dd className="text-foreground">{preview.durationDays} days</dd>
+          </div>
+          <div className="flex flex-col">
+            <dt className="text-foreground-subtle">Expires</dt>
+            <dd className="text-foreground">{preview.expirationDate}</dd>
           </div>
         </dl>
 
@@ -320,25 +361,82 @@ function ReviewStep({
           {preview.accounts.map((account) => (
             <li
               key={account.accountId}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background-secondary px-4 py-3"
+              className="flex flex-col gap-1 rounded-md bg-background-secondary px-4 py-3"
             >
-              <span className="min-w-0 truncate text-description text-foreground">
-                {account.email}
-              </span>
-              <span className="text-caption text-foreground-muted">
-                Profiles {account.profileNumbers.join(", ")} · health {account.healthScore}
-              </span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-description text-foreground">
+                  {account.email}
+                </span>
+                <span className="text-caption text-foreground-muted">
+                  Profile{account.profileNumbers.length === 1 ? "" : "s"}{" "}
+                  {account.profileNumbers.join(", ")} · health {account.healthScore}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-3 text-caption">
+                <span className="text-foreground-subtle">
+                  Account validity:{" "}
+                  {account.remainingValidityDays === null
+                    ? "Open-ended"
+                    : `${account.remainingValidityDays} days left`}
+                </span>
+                {account.requiresPasswordChange ? (
+                  <span className="text-warning">· password change required</span>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>
       </div>
 
-      {/* The warning the brief requires before anything is allocated. */}
-      <div
-        role="alert"
-        className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning-subtle p-4"
-      >
-        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+      {/*
+        M13 §7. Shown only when the SERVER flagged reuse, so it keeps its force:
+        a warning on every preparation is a warning nobody reads.
+      */}
+      {preview.requiresPasswordChange ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-md border border-warning/40 bg-warning-subtle p-4"
+        >
+          <div className="flex items-start gap-3">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+            <div className="flex flex-col gap-1">
+              <p className="text-card-title text-foreground">Important</p>
+              <p className="text-caption text-foreground-muted">
+                This account previously belonged to another customer whose subscription has expired.
+                You must change the account password and update the profile before giving it to the
+                new customer.
+              </p>
+            </div>
+          </div>
+
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-background-secondary p-3">
+            <input
+              type="checkbox"
+              checked={passwordChanged}
+              disabled={isConfirming}
+              onChange={(event) => onPasswordChangedChange(event.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-primary"
+            />
+            <span className="text-caption text-foreground">
+              I have changed the Netflix password on this account.
+            </span>
+          </label>
+
+          {confirmationError ? (
+            <p role="alert" className="text-caption text-danger">
+              {confirmationError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* The checks the brief requires before anything is allocated. */}
+      <div className="flex items-start gap-3 rounded-md border border-border bg-surface p-4">
+        <TriangleAlert
+          className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
+          aria-hidden="true"
+        />
         <div className="flex flex-col gap-2">
           <p className="text-card-title text-foreground">Before you confirm</p>
           <ul className="flex list-disc flex-col gap-1 pl-4 text-caption text-foreground-muted">
@@ -349,6 +447,15 @@ function ReviewStep({
         </div>
       </div>
 
+      {serverError && !confirmationError ? (
+        <p
+          role="alert"
+          className="rounded-md border border-danger/30 bg-danger-subtle p-4 text-caption text-danger"
+        >
+          {serverError.userMessage}
+        </p>
+      ) : null}
+
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
         <Button variant="ghost" onClick={onBack} disabled={isConfirming} className="gap-2">
           <ArrowLeft className="size-4" aria-hidden="true" />
@@ -357,7 +464,7 @@ function ReviewStep({
         <Button
           size="lg"
           onClick={onConfirm}
-          disabled={isConfirming}
+          disabled={isConfirming || blocked}
           className="h-11 min-w-44 gap-2"
         >
           {isConfirming ? (
@@ -371,90 +478,6 @@ function ReviewStep({
               Confirm allocation
             </>
           )}
-        </Button>
-      </div>
-    </motion.div>
-  );
-}
-
-/**
- * The delivery block.
- *
- * One-click copy is the point of the screen — a worker pastes this straight into
- * WhatsApp. The text comes from the Clipboard Engine so it is identical wherever
- * it is produced.
- */
-function PreparationOutput({
-  result,
-  onStartOver,
-}: {
-  result: PreparationResult;
-  onStartOver: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    const success = await copyToClipboard(result.clipboardText);
-
-    if (!success) {
-      toast.error("Could not copy", { description: "Your browser blocked clipboard access." });
-      return;
-    }
-
-    setCopied(true);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: DURATION.base, ease: EASING.out }}
-      className="flex flex-col gap-5"
-    >
-      <div className="flex items-start gap-3 rounded-md border border-success/30 bg-success-subtle p-4">
-        <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-        <div className="flex flex-col gap-1">
-          <p className="text-card-title text-foreground">
-            Prepared{result.customerIsNew ? " for a new customer" : ""}
-          </p>
-          <p className="text-caption text-foreground-muted">
-            {formatPhoneForDisplay(result.customerPhone)} · {result.durationDays} days · expires{" "}
-            {new Date(result.expirationDate).toLocaleDateString(undefined, { dateStyle: "medium" })}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-6">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-section-title text-foreground">Credentials</h2>
-          <Button onClick={copy} className="gap-2">
-            {copied ? (
-              <Check className="size-4" aria-hidden="true" />
-            ) : (
-              <Copy className="size-4" aria-hidden="true" />
-            )}
-            {copied ? "Copied" : "Copy all"}
-          </Button>
-        </div>
-
-        <pre className="overflow-x-auto rounded-md bg-background-secondary p-4 font-mono text-description whitespace-pre-wrap text-foreground">
-          {result.clipboardText}
-        </pre>
-      </div>
-
-      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" asChild className="gap-2">
-          <a href={result.whatsappUrl} target="_blank" rel="noopener noreferrer">
-            <MessageCircle className="size-4" aria-hidden="true" />
-            Open WhatsApp
-          </a>
-        </Button>
-
-        <Button variant="ghost" onClick={onStartOver} className="gap-2">
-          <RotateCcw className="size-4" aria-hidden="true" />
-          Prepare another
         </Button>
       </div>
     </motion.div>

@@ -1,3 +1,4 @@
+import { addDays, todayAsDateString } from "@/lib/dates";
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
 import type { AllocationCandidate } from "../repositories/allocation.repository";
 
@@ -22,14 +23,65 @@ export interface AllocationSlice {
   readonly profiles: readonly ProfileRow[];
 }
 
+/**
+ * An account that had free profiles but could not serve THIS request.
+ *
+ * Carried out of the engine so the failure can be explained with numbers. The
+ * M13 Phase B approval asks for exactly this: not just a blocked reason, but
+ * "Only 18 days remaining. Customer requested 90 days."
+ */
+export interface RejectedCandidate {
+  readonly accountId: string;
+  readonly email: string;
+  readonly freeProfiles: number;
+  readonly remainingDays: number | null;
+  readonly requestedDays: number;
+}
+
 export interface AllocationPlan {
   readonly slices: readonly AllocationSlice[];
   readonly allocated: number;
   readonly requested: number;
   /** True when stock could not cover the request. Nothing is allocated then. */
   readonly isShort: boolean;
+  /** Profiles the engine was allowed to consider, after validity filtering. */
   readonly availableTotal: number;
+  /**
+   * Profiles that existed but were excluded for insufficient account validity.
+   *
+   * Separated from availableTotal so a shortfall can distinguish "there is no
+   * stock" from "there is stock, but none of it lasts long enough" — two
+   * problems with completely different answers for the operator.
+   */
+  readonly excludedForValidity: number;
+  readonly rejected: readonly RejectedCandidate[];
 }
+
+/** Options that make the plan duration-aware. Omit for a pure count-based plan. */
+export interface PlanOptions {
+  /**
+   * The subscription length being sold.
+   *
+   * When given, an account whose remaining validity cannot cover it is excluded
+   * — 01_MASTER_RULES.md via M13 §1: an allocation must never outlive the
+   * account carrying it. When omitted the engine behaves exactly as it did
+   * before M13, which is what the preview count uses.
+   */
+  readonly requestedDurationDays?: number | undefined;
+}
+
+/**
+ * Remaining validity below which an account is heavily deprioritised.
+ *
+ * Defined here because scoring is the only thing that uses it. The hard rule —
+ * can this account cover the request at all — lives in account-validity.ts and
+ * is a different question: this threshold NEVER rejects anything.
+ *
+ * From the M13 Phase B approval: "Accounts nearing expiration should not
+ * immediately disappear... Quick Prepare only chooses them if no better account
+ * exists. Only reject when remaining validity is insufficient."
+ */
+export const NEAR_EXPIRY_DAYS = 15;
 
 /**
  * How desirable an account is for a request of `remaining` profiles.
@@ -49,6 +101,11 @@ export interface AllocationPlan {
  *
  *   4. Least waste.                  Prefer the account whose free capacity most
  *      closely matches what is still needed, so large blocks stay intact.
+ *
+ * M13 adds a penalty rather than a fifth factor. An account with days left to
+ * run is still perfectly good stock — it just should not be spent while
+ * something longer-lived would do. So it is pushed down the order, not out of
+ * it, and it still wins when it is the only thing that fits.
  */
 function scoreCandidate(candidate: AllocationCandidate, remaining: number): number {
   const free = candidate.availableProfiles.length;
@@ -62,12 +119,39 @@ function scoreCandidate(candidate: AllocationCandidate, remaining: number): numb
   const health = candidate.account.healthScore * 100;
 
   /*
+   * Sized to outrank every preference below it — partial-sale concentration
+   * (100_000) and health (max 10_000) together cannot pull a nearly-expired
+   * account back above a healthy one. It sits BELOW coversRequest on purpose:
+   * an account that can serve the whole order alone is still worth choosing,
+   * because splitting a customer across two accounts to save a few days of
+   * shelf life is a worse outcome for them.
+   */
+  const nearExpiryPenalty = isNearExpiry(candidate) ? 500_000 : 0;
+
+  /*
    * Waste is how much capacity is left untouched after taking what is needed.
    * Subtracted, so a tighter fit scores higher.
    */
   const waste = Math.max(free - remaining, 0);
 
-  return coversRequest + partiallySold + health - waste;
+  return coversRequest + partiallySold + health - nearExpiryPenalty - waste;
+}
+
+/** Short-dated but still usable. Null validity is open-ended and never near expiry. */
+function isNearExpiry(candidate: AllocationCandidate): boolean {
+  const days = candidate.remainingValidityDays;
+  return days !== null && days >= 0 && days < NEAR_EXPIRY_DAYS;
+}
+
+/**
+ * Whether this account can carry a subscription of the requested length.
+ *
+ * The hard rule from M13 §1: requested_duration_days <= account_remaining_days.
+ * Open-ended coverage (null) carries anything.
+ */
+function canCover(candidate: AllocationCandidate, requestedDurationDays: number): boolean {
+  const days = candidate.remainingValidityDays;
+  return days === null || days >= requestedDurationDays;
 }
 
 /**
@@ -82,8 +166,40 @@ function scoreCandidate(candidate: AllocationCandidate, remaining: number): numb
 export function buildAllocationPlan(
   candidates: readonly AllocationCandidate[],
   requested: number,
+  options: PlanOptions = {},
 ): AllocationPlan {
-  const availableTotal = candidates.reduce(
+  const requestedDays = options.requestedDurationDays;
+
+  /*
+   * Validity filtering happens BEFORE anything is counted, so availableTotal
+   * reports what could actually be sold for this duration rather than raw free
+   * capacity. A worker told "8 profiles available" who then cannot buy any of
+   * them for 90 days has been told something worse than nothing.
+   */
+  const eligible =
+    requestedDays === undefined
+      ? [...candidates]
+      : candidates.filter((candidate) => canCover(candidate, requestedDays));
+
+  const rejected: RejectedCandidate[] =
+    requestedDays === undefined
+      ? []
+      : candidates
+          .filter((candidate) => !canCover(candidate, requestedDays))
+          .map((candidate) => ({
+            accountId: candidate.account.id,
+            email: candidate.account.email,
+            freeProfiles: candidate.availableProfiles.length,
+            remainingDays: candidate.remainingValidityDays,
+            requestedDays,
+          }));
+
+  const excludedForValidity = rejected.reduce(
+    (total, candidate) => total + candidate.freeProfiles,
+    0,
+  );
+
+  const availableTotal = eligible.reduce(
     (total, candidate) => total + candidate.availableProfiles.length,
     0,
   );
@@ -99,10 +215,12 @@ export function buildAllocationPlan(
        */
       isShort: true,
       availableTotal,
+      excludedForValidity,
+      rejected,
     };
   }
 
-  const pool = [...candidates];
+  const pool = eligible;
   const slices: AllocationSlice[] = [];
   let remaining = requested;
 
@@ -154,6 +272,8 @@ export function buildAllocationPlan(
     requested,
     isShort: allocated < requested,
     availableTotal,
+    excludedForValidity,
+    rejected,
   };
 }
 
@@ -163,20 +283,17 @@ export function buildAllocationPlan(
  * Whole days on a `date` column, deliberately: a timezone on a subscription
  * boundary produces off-by-one expiries at midnight, and a customer whose
  * service ends a day early does not care that the cause was a timezone.
+ *
+ * Delegates to lib/dates since M13. The arithmetic used to live here and was
+ * copied in customer-status.ts; M13 compares the two against each other, and
+ * two subtly different subtractions would produce a boundary bug that appears
+ * on one day and vanishes.
  */
 export function computeExpirationDate(saleDate: Date, durationDays: number): string {
-  const expiry = new Date(
-    Date.UTC(saleDate.getUTCFullYear(), saleDate.getUTCMonth(), saleDate.getUTCDate()),
-  );
-
-  expiry.setUTCDate(expiry.getUTCDate() + durationDays);
-
-  return expiry.toISOString().slice(0, 10);
+  return addDays(saleDate, durationDays);
 }
 
 /** Today as a `date` string, in the same UTC frame as expiry. */
 export function todayAsDate(now: Date): string {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-    .toISOString()
-    .slice(0, 10);
+  return todayAsDateString(now);
 }

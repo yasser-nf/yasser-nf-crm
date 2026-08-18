@@ -64,6 +64,67 @@ export function formatPassword(password: string): string {
   return password;
 }
 
+/**
+ * Email and password only, labelled, for the accounts list and detail screens.
+ *
+ * The exact block the M13 brief specifies:
+ *
+ *   Email
+ *   someone@example.com
+ *
+ *   Password
+ *   the-password
+ *
+ * Distinct from `formatAccountCredentials`, which is the customer-facing
+ * delivery block and carries profile numbers and PINs. This one is what an
+ * operator pastes when they need the credentials alone — labelled, because it
+ * often lands in a note beside other text where a bare pair is ambiguous.
+ */
+export function formatEmailAndPassword(email: string, password: string): string {
+  return `Email\n${email}\n\nPassword\n${password}`;
+}
+
+/**
+ * One prepared profile, in the exact layout M13 §6 specifies.
+ *
+ *   Email
+ *   someone@example.com
+ *
+ *   Password
+ *   the-password
+ *
+ *   Profile number
+ *   2
+ *
+ *   Code pin
+ *   9121
+ *
+ * Distinct from `formatAccountCredentials`, which is the older delivery block
+ * using `Profile : 2` / `PIN : 9121`. Both are kept because both are specified:
+ * that one by the M04 brief and this one by M13 §6, and silently changing the
+ * older format would alter every message the existing screens produce.
+ */
+export function formatPreparedProfile(profile: {
+  readonly email: string;
+  readonly password: string;
+  readonly profileNumber: number;
+  readonly pin: string | null;
+}): string {
+  return [
+    "Email",
+    profile.email,
+    "",
+    "Password",
+    profile.password,
+    "",
+    "Profile number",
+    String(profile.profileNumber),
+    "",
+    "Code pin",
+    profile.pin ?? "—",
+  ].join("\n");
+}
+
 /** Customer contact line, for pasting into a note or a message. */
 export function formatCustomer(customer: {
   readonly displayPhone: string;

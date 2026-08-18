@@ -1,8 +1,14 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseExecutor } from "@/lib/database";
+import {
+  accountStillCoveredSql,
+  isSellableSlotSql,
+  profileIsFreeSql,
+} from "@/lib/drizzle/predicates";
 import { accounts, issues, profiles, type AccountRow, type ProfileRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
+import { ok } from "@/utils/result";
 
 /**
  * Allocation repository.
@@ -22,6 +28,15 @@ export interface AllocationCandidate {
   readonly availableProfiles: readonly ProfileRow[];
   /** Profiles already sold on this account. Drives the anti-fragmentation preference. */
   readonly soldCount: number;
+  /**
+   * Days left on the account's own coverage. Null means open-ended.
+   *
+   * Computed here, in SQL, rather than in the engine. The engine is pure and
+   * has no clock; handing it a number keeps it that way, and keeps "today" a
+   * single value decided by the database for the whole query instead of one
+   * `new Date()` per candidate.
+   */
+  readonly remainingValidityDays: number | null;
 }
 
 /**
@@ -63,12 +78,34 @@ const noBlockingProblem = sql`not exists (
  *
  * Both the preview and the locking read use this, so Quick Prepare cannot offer
  * a profile the confirmation step would refuse.
+ *
+ * `accountStillCoveredSql` is the hard cut only. It removes accounts that can
+ * serve NOBODY. Whether an account has enough time left for a PARTICULAR
+ * request is a different question, decided by the engine against the requested
+ * duration, so that a rejection can say "18 days remaining, 90 requested"
+ * instead of silently returning nothing.
  */
 const eligibleAccount = and(
   eq(accounts.status, "healthy"),
   isNull(accounts.deletedAt),
   noBlockingProblem,
+  accountStillCoveredSql,
 );
+
+/**
+ * A profile row that can be sold right now.
+ *
+ * Both halves come from lib/drizzle/predicates so the accounts list, the
+ * dashboard and the reports aggregates apply the identical rule — M13 §11
+ * requires these enforced centrally, and six copies of a WHERE clause is the
+ * duplication that requirement exists to prevent.
+ *
+ * Expressed in SQL rather than filtered afterwards, for the same reason the
+ * problem check is: the locking read takes row locks with SKIP LOCKED, and
+ * filtering after the fact would lock rows this engine then discards, holding
+ * stock nobody can allocate until the transaction ends.
+ */
+const allocatableProfile = and(isSellableSlotSql, profileIsFreeSql);
 
 /**
  * Reads candidates without locking. Preview only.
@@ -115,19 +152,29 @@ async function readCandidates(
    */
   const profileRows = lock
     ? await executor
-        .select({ profile: profiles, account: accounts })
+        .select({
+          profile: profiles,
+          account: accounts,
+          /* Null stays null: open-ended coverage, not zero days left. */
+          remainingValidityDays: sql<number | null>`(${accounts.validUntil} - current_date)::int`,
+        })
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
-        .where(and(eq(profiles.status, "available"), eligibleAccount))
+        .where(and(allocatableProfile, eligibleAccount))
         .orderBy(desc(accounts.healthScore), asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5)
         /* Lock the profile rows only; the account row is read for context. */
         .for("update", { of: profiles, skipLocked: true })
     : await executor
-        .select({ profile: profiles, account: accounts })
+        .select({
+          profile: profiles,
+          account: accounts,
+          /* Null stays null: open-ended coverage, not zero days left. */
+          remainingValidityDays: sql<number | null>`(${accounts.validUntil} - current_date)::int`,
+        })
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
-        .where(and(eq(profiles.status, "available"), eligibleAccount))
+        .where(and(allocatableProfile, eligibleAccount))
         .orderBy(desc(accounts.healthScore), asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5);
 
@@ -152,12 +199,20 @@ async function readCandidates(
 
   const soldByAccount = new Map(soldCounts.map((row) => [row.accountId, row.soldCount]));
 
-  const grouped = new Map<string, { account: AccountRow; availableProfiles: ProfileRow[] }>();
+  const grouped = new Map<
+    string,
+    {
+      account: AccountRow;
+      availableProfiles: ProfileRow[];
+      remainingValidityDays: number | null;
+    }
+  >();
 
   for (const row of profileRows) {
     const entry = grouped.get(row.account.id) ?? {
       account: row.account,
       availableProfiles: [],
+      remainingValidityDays: row.remainingValidityDays,
     };
 
     entry.availableProfiles.push(row.profile);
@@ -168,6 +223,7 @@ async function readCandidates(
     account: entry.account,
     availableProfiles: entry.availableProfiles,
     soldCount: soldByAccount.get(entry.account.id) ?? 0,
+    remainingValidityDays: entry.remainingValidityDays,
   }));
 }
 
@@ -178,14 +234,54 @@ async function countAvailable(): Promise<Result<number>> {
       .select({ total: sql<number>`count(*)::int` })
       .from(profiles)
       .innerJoin(accounts, eq(profiles.accountId, accounts.id))
-      .where(and(eq(profiles.status, "available"), eligibleAccount));
+      .where(and(allocatableProfile, eligibleAccount));
 
     return rows[0]?.total ?? 0;
   });
+}
+
+/**
+ * Which of these accounts have ever carried an allocation that has since lapsed.
+ *
+ * M13 §7: an account whose previous customer expired must have its password
+ * changed before it is handed to somebody new — the old customer still knows the
+ * credentials. This is the query that detects it.
+ *
+ * Read from the DATE, not from `profiles.status`: nothing writes `expired`, so a
+ * status check would report "no reuse" forever.
+ *
+ * Batched deliberately. The preview asks about every candidate account at once,
+ * and one query for a page beats one per account.
+ */
+async function accountsNeedingPasswordChange(
+  accountIds: readonly string[],
+): Promise<Result<ReadonlySet<string>>> {
+  if (accountIds.length === 0) {
+    return ok(new Set());
+  }
+
+  const rows = await databaseAdapter.query("allocation.reuseCheck", async (executor) =>
+    executor
+      .selectDistinct({ accountId: profiles.accountId })
+      .from(profiles)
+      .where(
+        and(
+          inArray(profiles.accountId, [...accountIds]),
+          sql`${profiles.expirationDate} is not null and ${profiles.expirationDate} < current_date`,
+        ),
+      ),
+  );
+
+  if (!rows.ok) {
+    return rows;
+  }
+
+  return ok(new Set(rows.value.map((row) => row.accountId)));
 }
 
 export const allocationRepository = {
   findCandidates,
   lockCandidates,
   countAvailable,
+  accountsNeedingPasswordChange,
 } as const;
