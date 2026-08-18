@@ -5,7 +5,14 @@ import { notFound } from "next/navigation";
 
 import { ROUTES } from "@/config/constants";
 import { NotFoundError } from "@/lib/errors";
-import { AccountHeader, AccountTimeline, ProfileCard, accountsService } from "@/modules/accounts";
+import {
+  AccountHeader,
+  AccountTimeline,
+  ProfileCard,
+  ProfileIndicatorLegend,
+  ProfileIndicators,
+  accountsService,
+} from "@/modules/accounts";
 import type { AccountRow } from "@/lib/drizzle/schema";
 import type { ProfileAllocation } from "@/modules/accounts";
 import { ProblemSeverityBadge, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
@@ -40,7 +47,9 @@ function ReplaceAllocations({
   account,
   profiles,
 }: {
-  account: AccountRow;
+  /* Only what the button reads. Keeps the credential off this page entirely. */
+  /* `email` is how the replacement preview looks the account up. */
+  account: Pick<AccountRow, "id" | "status" | "email">;
   profiles: readonly ProfileAllocation[];
 }) {
   const byCustomer = new Map<string, number>();
@@ -104,8 +113,15 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
     return <ErrorState error={detail.error} title="Could not load this account" />;
   }
 
-  const { account, profiles, accountAllowsAllocation, hasProfileCountAnomaly, activeProblems } =
-    detail.value;
+  const {
+    account,
+    profiles,
+    indicators,
+    accountAllowsAllocation,
+    hasProfileCountAnomaly,
+    activeProblems,
+    remainingValidityDays,
+  } = detail.value;
 
   const timeline = await accountsService.getAccountTimeline(id, { limit: 25 });
 
@@ -119,7 +135,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         All accounts
       </Link>
 
-      <AccountHeader account={account} />
+      <AccountHeader account={account} remainingValidityDays={remainingValidityDays} />
 
       {!accountAllowsAllocation ? (
         <div
@@ -193,7 +209,18 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
       <ReplaceAllocations account={account} profiles={profiles} />
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-section-title text-foreground">Profiles</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-section-title text-foreground">Profiles</h2>
+
+          {/*
+            The same P1..P5 strip as the accounts list, from the same
+            `profileCellState` derivation. M13 §7: one interpretation.
+          */}
+          <div className="flex flex-wrap items-center gap-4">
+            <ProfileIndicators indicators={indicators} />
+            <ProfileIndicatorLegend />
+          </div>
+        </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {profiles.map((allocation, index) => (

@@ -34,7 +34,23 @@ export const accountStatusEnum = pgEnum("account_status", [
  * `expiring_soon` and `expired` are not set by any user action — they are
  * functions of expiration_date and the current date. M02 stores the values; the
  * milestone that owns expiry decides what transitions into them. Nothing in M02
- * writes either value.
+ * writes either value, and after M13 nothing ever will: expiry is computed from
+ * expiration_date at read time, so these two labels remain unused rather than
+ * becoming a second, staler answer to the same question.
+ *
+ * M13 considered adding a sixth value, `not_for_sale`, for profile rows above
+ * `accounts.profile_slots`. It was NOT added.
+ *
+ * The attraction was real: six existing queries filter on `status = 'available'`
+ * and every one of them would have excluded unsellable slots for free. The
+ * problem was that the label would have been a second source of truth for a fact
+ * profile_slots already records, and the two could drift — `profileUpdateSchema`
+ * permits writing `status`, so a profile update could return a parked slot to
+ * stock while profile_slots still said otherwise, and no CHECK constraint can
+ * object because it cannot reference another table.
+ *
+ * Sellability is therefore derived, from `profile_number <= profile_slots`,
+ * expressed once in lib/drizzle/predicates.ts. ADR-013 Decision 2.
  */
 export const profileStatusEnum = pgEnum("profile_status", [
   "available",

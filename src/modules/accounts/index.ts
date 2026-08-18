@@ -11,10 +11,54 @@
 export {
   accountsService,
   evaluateAllocation,
+  /*
+   * The credential-dropping projections. Exported so every module that sends an
+   * account or a profile to a browser strips it the same way, in one function.
+   */
+  toAccountView,
+  toProfileView,
   type AccountDetail,
+  type AccountListRow,
+  type AccountView,
+  type AllocationBlockedReason,
+  type AllocationContext,
+  type AllocationValidity,
+  type BulkCreateResult,
   type ProfileAllocation,
+  type ProfileIndicator,
+  type ProfileView,
 } from "./services/accounts.service";
 export { profilesService } from "./services/profiles.service";
+
+/*
+ * Account validity is pure and carries no `server-only`, so it is safe for a
+ * unit test or another module to import through this barrel. The service beside
+ * it is not — which is why tests of the allocation engine still reach that file
+ * directly rather than coming through here.
+ */
+export {
+  accountRemainingDays,
+  canCoverDuration,
+  isAccountExpired,
+  isAllocationExpired,
+  isProfileFree,
+  isSellableSlot,
+  profileCellState,
+  remainingCustomerDays,
+  resolveValidity,
+  type ProfileCellState,
+} from "./services/account-validity";
+
+export {
+  parseBulkAccounts,
+  previewBulkAccounts,
+  BULK_COLUMNS,
+  BULK_TEMPLATE,
+  type BulkParseResult,
+  type BulkPreview,
+  type BulkPreviewRow,
+  type BulkRowError,
+} from "./services/bulk-accounts.service";
 
 /* Components consumed by app/ page composition. */
 export { AccountsTable } from "./components/accounts-table";
@@ -22,7 +66,10 @@ export { AccountsFilters } from "./components/accounts-filters";
 export { AccountHeader } from "./components/account-header";
 export { AccountTimeline } from "./components/account-timeline";
 export { ProfileCard } from "./components/profile-card";
+export { ProfileIndicators, ProfileIndicatorLegend } from "./components/profile-indicators";
+export { CopyCredentials } from "./components/copy-credentials";
 export { CreateAccountDialog, EditAccountDialog } from "./components/account-dialogs";
+export { BulkAccountsDialog } from "./components/bulk-accounts-dialog";
 export {
   AccountStatusBadge,
   ProfileStatusBadge,
@@ -47,9 +94,16 @@ export {
   accountInsertSchema,
   accountSelectSchema,
   accountUpdateSchema,
+  changePasswordSchema,
+  profileSlotsSchema,
+  MAX_ACCOUNT_DURATION_DAYS,
+  MAX_PROFILE_SLOTS,
+  MIN_PROFILE_SLOTS,
   type AccountInsert,
   type AccountSelect,
   type AccountUpdate,
+  type ChangePasswordInput,
+  type ProfileSlotsInput,
 } from "./validation/account.schema";
 
 export {

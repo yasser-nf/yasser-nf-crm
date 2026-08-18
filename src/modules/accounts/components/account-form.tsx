@@ -6,7 +6,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { ActionError } from "@/lib/errors";
-import type { AccountRow } from "@/lib/drizzle/schema";
+import type { AccountView } from "../services/accounts.service";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
@@ -43,9 +43,32 @@ const baseFields = {
   notes: z.string().trim().max(2000, "Notes are limited to 2000 characters").optional(),
 };
 
+/**
+ * How the operator wants to express the account's coverage.
+ *
+ * A mode rather than three loose fields, because "open-ended" and "expires in
+ * 90 days" are different intentions and a blank date cannot distinguish them —
+ * an empty box could mean either "no boundary" or "I forgot". The mode makes
+ * the choice explicit, and only the fields it needs are then rendered.
+ */
+const VALIDITY_MODES = ["open", "duration", "date"] as const;
+type ValidityMode = (typeof VALIDITY_MODES)[number];
+
 const createAccountFormSchema = z.object({
   ...baseFields,
   password: z.string().min(1, "Password is required").max(200),
+
+  /*
+   * Coerced: a <select> yields a string. Bounds mirror MIN/MAX_PROFILE_SLOTS in
+   * the account schema — the server revalidates, and a test pins the two
+   * together so this copy cannot quietly widen.
+   */
+  profileSlots: z.coerce.number().int().min(1).max(5),
+
+  validityMode: z.enum(VALIDITY_MODES),
+  validFrom: z.string().optional(),
+  validUntil: z.string().optional(),
+  durationDays: z.string().optional(),
 });
 
 const editAccountFormSchema = z.object({
@@ -68,7 +91,8 @@ export type EditAccountFormValues = z.infer<typeof editAccountFormSchema>;
 
 interface AccountFormProps {
   readonly mode: "create" | "edit";
-  readonly account?: AccountRow | undefined;
+  /* A projection without the credential — this form never edits a password hash. */
+  readonly account?: AccountView | undefined;
   readonly isSubmitting: boolean;
   readonly error?: unknown;
   readonly onSubmit: (values: Record<string, unknown>) => void;
@@ -93,7 +117,16 @@ export function AccountForm({
       password: "",
       country: account?.country ?? "",
       notes: account?.notes ?? "",
-      ...(isEdit ? { status: account?.status ?? "healthy" } : {}),
+      ...(isEdit
+        ? { status: account?.status ?? "healthy" }
+        : {
+            /* Five and open-ended: exactly how every pre-M13 account behaves. */
+            profileSlots: 5,
+            validityMode: "open" as ValidityMode,
+            validFrom: "",
+            validUntil: "",
+            durationDays: "",
+          }),
     },
   });
 
@@ -124,7 +157,17 @@ export function AccountForm({
    * An error with nowhere to go must still be shown. Silence is the one
    * response a form must never give.
    */
-  const RENDERED_FIELDS = ["email", "password", "country", "notes", "status"];
+  const RENDERED_FIELDS = [
+    "email",
+    "password",
+    "country",
+    "notes",
+    "status",
+    "profileSlots",
+    "validFrom",
+    "validUntil",
+    "durationDays",
+  ];
 
   const unmappedErrors = Object.entries(serverFieldErrors).filter(
     ([field]) => !RENDERED_FIELDS.includes(field),
@@ -144,7 +187,33 @@ export function AccountForm({
         payload["password"] = values.password;
       }
     } else {
+      const created = values as CreateAccountFormValues;
+
       payload["password"] = values.password;
+      payload["profileSlots"] = Number(created.profileSlots);
+
+      /*
+       * Only the fields the chosen mode actually means are sent. The service
+       * turns a duration into `valid_until` through `resolveValidity` — the UI
+       * deliberately performs NO date arithmetic, so there is exactly one
+       * implementation of "90 days from now" and it lives on the server.
+       *
+       * Open-ended sends nothing at all, which is how the model already spells
+       * "no boundary": both columns stay null.
+       */
+      if (created.validFrom) {
+        payload["validFrom"] = created.validFrom;
+      }
+
+      if (created.validityMode === "duration") {
+        const days = created.durationDays;
+        /* Sent as typed when unparseable, so the server's message names the real input. */
+        payload["durationDays"] = days === "" || days === undefined ? undefined : Number(days);
+      }
+
+      if (created.validityMode === "date") {
+        payload["validUntil"] = created.validUntil || undefined;
+      }
     }
 
     onSubmit(payload);
@@ -157,6 +226,16 @@ export function AccountForm({
    * stays compiler-friendly.
    */
   const status = useWatch({ control, name: "status" as never });
+
+  /*
+   * `useWatch` over a discriminated form union widens to that union, so both
+   * are narrowed here once rather than cast at each use — the same treatment
+   * `status` already gets two lines above.
+   */
+  const profileSlots = Number(useWatch({ control, name: "profileSlots" as never }) ?? 5);
+  const validityMode = String(
+    useWatch({ control, name: "validityMode" as never }) ?? "open",
+  ) as ValidityMode;
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
@@ -207,6 +286,107 @@ export function AccountForm({
         hint="Two-letter code. Optional."
         {...register("country")}
       />
+
+      {!isEdit ? (
+        <>
+          <div className="flex flex-col gap-2">
+            <Label
+              htmlFor="account-profile-slots"
+              className="text-description font-medium text-foreground"
+            >
+              Sellable profiles
+            </Label>
+            <Select
+              value={String(profileSlots ?? 5)}
+              onValueChange={(value) => setValue("profileSlots" as never, Number(value) as never)}
+              disabled={isSubmitting}
+            >
+              <SelectTrigger id="account-profile-slots" className="h-11 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 2, 3, 4, 5].map((count) => (
+                  <SelectItem key={count} value={String(count)}>
+                    {count} profile{count === 1 ? "" : "s"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-caption text-foreground-subtle">
+              The account always contains five profile rows. This sets how many of them may be sold
+              — the rest are permanently marked Not for sale.
+            </p>
+            {fieldError("profileSlots") ? (
+              <p role="alert" className="text-caption text-danger">
+                {fieldError("profileSlots")}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label
+              htmlFor="account-validity-mode"
+              className="text-description font-medium text-foreground"
+            >
+              Account validity
+            </Label>
+            <Select
+              value={String(validityMode ?? "open")}
+              onValueChange={(value) => setValue("validityMode" as never, value as never)}
+              disabled={isSubmitting}
+            >
+              <SelectTrigger id="account-validity-mode" className="h-11 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="open">Open-ended — no expiry</SelectItem>
+                <SelectItem value="duration">Lasts a number of days</SelectItem>
+                <SelectItem value="date">Expires on a date</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-caption text-foreground-subtle">
+              How long this account can serve customers. Quick Prepare refuses a subscription longer
+              than the account&apos;s remaining validity.
+            </p>
+          </div>
+
+          {validityMode === "duration" ? (
+            <FormField
+              label="Duration (days)"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={730}
+              placeholder="90"
+              disabled={isSubmitting}
+              error={fieldError("durationDays")}
+              hint="Counted from the start date below, or from today if none is given."
+              {...register("durationDays")}
+            />
+          ) : null}
+
+          {validityMode === "date" ? (
+            <FormField
+              label="Valid until"
+              type="date"
+              disabled={isSubmitting}
+              error={fieldError("validUntil")}
+              {...register("validUntil")}
+            />
+          ) : null}
+
+          {validityMode !== "open" ? (
+            <FormField
+              label="Valid from"
+              type="date"
+              disabled={isSubmitting}
+              error={fieldError("validFrom")}
+              hint="Optional. Leave blank for an account that starts today."
+              {...register("validFrom")}
+            />
+          ) : null}
+        </>
+      ) : null}
 
       {isEdit ? (
         <div className="flex flex-col gap-2">

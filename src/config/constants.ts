@@ -17,6 +17,7 @@ export const ROUTES = {
   DASHBOARD: "/dashboard",
   ACCOUNTS: "/accounts",
   QUICK_PREPARE: "/quick-prepare",
+  QUICK_REPLACE: "/quick-replace",
   CUSTOMERS: "/customers",
   PROBLEMS: "/problems",
   USERS: "/users",

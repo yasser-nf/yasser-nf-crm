@@ -84,16 +84,51 @@ export const profileUpdateSchema = createUpdateSchema(profiles, {
 /**
  * The only fields a person may edit on a profile.
  *
- * M03 forbids changing the profile number, creating profiles and deleting them.
- * Expressing the permitted set as its own schema means a form cannot submit a
- * field the milestone forbids, even by accident.
+ * An explicit allowlist, not an omit-list. M03 forbids changing the profile
+ * number, creating profiles and deleting them; M13 adds the allocation fields.
+ * Writing the permitted set out means a form cannot submit something the
+ * milestone forbids even by accident — `accountId`, `profileNumber`, `status`,
+ * `workerId`, the timestamps and the ids are absent because they are absent,
+ * not because something remembered to strip them.
+ *
+ * `status` in particular is NOT here. Expiry is derived from expiration_date
+ * (ADR-013 D2), so an editor that could write `expired` would be creating the
+ * second source of truth the whole milestone exists to avoid.
  */
 export const profileEditSchema = z.object({
+  /* Identity — always editable, on any slot. */
   profileName: z.string().trim().min(1, "Profile name is required").max(60).optional(),
   pin: z
     .string()
     .trim()
     .regex(/^[0-9]{4}$/, "PIN must be exactly 4 digits")
+    .optional(),
+  notes: z.string().trim().max(2000, "Notes are limited to 2000 characters").optional(),
+
+  /*
+   * Allocation. Every one of these is validated against the account's own
+   * validity by the service before it is written — the profile editor is a
+   * consumer of the allocation rules, never a way around them.
+   */
+
+  /**
+   * The customer, identified the way the rest of the system identifies one.
+   *
+   * A phone number rather than a customer id, resolved through
+   * `customersService.findOrCreateByPhone` — the same path Quick Prepare uses.
+   * 01_MASTER_RULES.md makes the normalized number the identity key, so
+   * accepting an id here would let a caller attach a profile to a customer that
+   * the Phone Engine would have matched to a different, existing record.
+   */
+  customerPhone: z.string().trim().min(1).optional(),
+
+  saleDate: z.iso.date("Use a calendar date such as 2026-03-31").optional(),
+  expirationDate: z.iso.date("Use a calendar date such as 2026-03-31").optional(),
+  durationDays: z
+    .number()
+    .int("Duration must be a whole number of days")
+    .positive("Duration must be at least one day")
+    .max(730, "Duration cannot exceed two years")
     .optional(),
 });
 

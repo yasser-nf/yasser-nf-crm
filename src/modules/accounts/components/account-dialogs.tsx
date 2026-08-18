@@ -3,7 +3,7 @@
 import { Plus } from "lucide-react";
 import { useState } from "react";
 
-import type { AccountRow } from "@/lib/drizzle/schema";
+import type { AccountView } from "../services/accounts.service";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -77,7 +77,8 @@ export function EditAccountDialog({
   open,
   onOpenChange,
 }: {
-  account: AccountRow;
+  /* Never the full row: this is a Client Component. See AccountHeader. */
+  account: AccountView;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {

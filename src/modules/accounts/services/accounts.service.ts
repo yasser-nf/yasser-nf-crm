@@ -16,8 +16,23 @@ import {
   type AccountWithCounts,
 } from "../repositories/accounts.repository";
 import { profilesRepository } from "../repositories/profiles.repository";
-import { accountInsertSchema, accountUpdateSchema } from "../validation/account.schema";
+import {
+  accountInsertSchema,
+  accountUpdateSchema,
+  changePasswordSchema,
+  profileSlotsSchema,
+} from "../validation/account.schema";
 import { PROFILES_PER_ACCOUNT } from "../validation/profile.schema";
+import {
+  accountRemainingDays,
+  canCoverDuration,
+  isAccountExpired,
+  isProfileFree,
+  isSellableSlot,
+  profileCellState,
+  type ProfileCellState,
+} from "./account-validity";
+import { parseBulkAccounts, type BulkRowError } from "./bulk-accounts.service";
 
 /**
  * Accounts service.
@@ -36,6 +51,38 @@ import { PROFILES_PER_ACCOUNT } from "../validation/profile.schema";
  * failed halfway.
  */
 
+/**
+ * Why a profile cannot be allocated.
+ *
+ * Ordered by how the checks run, which is also least to most specific. M13
+ * added three: two account-validity reasons and the sellable-slot one.
+ */
+export type AllocationBlockedReason =
+  | "account_not_healthy"
+  | "account_has_problem"
+  | "account_expired"
+  | "profile_not_for_sale"
+  | "profile_not_available"
+  | "insufficient_account_validity";
+
+/**
+ * How much time the account has, against how much was asked for.
+ *
+ * Returned on EVERY evaluation, not only on the failing one, so a caller can
+ * show remaining validity while things are still fine. The M13 Phase B approval
+ * requires both numbers to reach the UI so it can say
+ *
+ *   Only 18 days remaining. Customer requested 90 days.
+ *
+ * rather than only naming the blocked reason.
+ */
+export interface AllocationValidity {
+  /** Days left on the account itself. Null means open-ended, never zero. */
+  readonly remainingDays: number | null;
+  /** What the caller asked for, when it asked for anything. */
+  readonly requestedDays: number | null;
+}
+
 /** A profile with the account-level rule already applied. */
 export interface ProfileAllocation {
   readonly profile: ProfileRow;
@@ -44,21 +91,54 @@ export interface ProfileAllocation {
    *
    * Never read `profile.status === "available"` on its own. That answer ignores
    * the account, and is the single easiest way to sell a profile on a broken
-   * account.
+   * account. Since M13 it is also wrong in the other direction: a profile whose
+   * customer has expired still reads `sold` and IS allocatable.
    */
   readonly isAllocatable: boolean;
   /** Why not, when it is not. Null when allocatable. */
-  readonly blockedReason:
-    "account_not_healthy" | "account_has_problem" | "profile_not_available" | null;
+  readonly blockedReason: AllocationBlockedReason | null;
+  /** Always present, so the UI can explain a rejection with numbers. */
+  readonly validity: AllocationValidity;
+}
+
+/** Everything `evaluateAllocation` needs beyond the two rows themselves. */
+export interface AllocationContext {
+  /** From problemsService. An open problem blocks every profile on the account. */
+  readonly hasActiveProblem?: boolean | undefined;
+  /**
+   * The subscription length being asked for, when there is one.
+   *
+   * Omitted by screens that are only describing current state, such as the
+   * account detail page — those have no duration in hand and must not be told
+   * a profile is blocked for failing a check nobody made.
+   */
+  readonly requestedDurationDays?: number | undefined;
+  /** Injected so the rule is testable without mocking a clock. */
+  readonly today?: Date | undefined;
 }
 
 export interface AccountDetail {
-  readonly account: AccountRow;
+  /**
+   * Without the credential.
+   *
+   * The detail page passes this straight into `AccountHeader`, which is a Client
+   * Component — so the full row would have put the AES ciphertext into the RSC
+   * payload on every account view. The plaintext was never here (ADR-006 D4),
+   * but the ciphertext was, and it did not need to be.
+   */
+  readonly account: AccountView;
   readonly profiles: readonly ProfileAllocation[];
+  /** Per-profile display state, from the same rule the accounts list uses. */
+  readonly indicators: readonly ProfileIndicator[];
   /** Open problems blocking this account. Empty when nothing is wrong. */
   readonly activeProblems: readonly IssueRow[];
-  /** False when the account's status or an open problem blocks every profile. */
+  /**
+   * False when the account's status, an open problem, or its own expiry blocks
+   * every profile.
+   */
   readonly accountAllowsAllocation: boolean;
+  /** Days left on the account's own coverage. Null means open-ended. */
+  readonly remainingValidityDays: number | null;
   /** True when the profile count is not exactly five. Signals corrupt data. */
   readonly hasProfileCountAnomaly: boolean;
 }
@@ -78,10 +158,25 @@ export interface AccountDetail {
 export function evaluateAllocation(
   account: AccountRow,
   profile: ProfileRow,
-  hasActiveProblem = false,
+  context: AllocationContext = {},
 ): ProfileAllocation {
+  const today = context.today ?? new Date();
+  const requestedDays = context.requestedDurationDays ?? null;
+
+  const validity: AllocationValidity = {
+    remainingDays: accountRemainingDays(account, today),
+    requestedDays,
+  };
+
+  const blocked = (reason: AllocationBlockedReason): ProfileAllocation => ({
+    profile,
+    isAllocatable: false,
+    blockedReason: reason,
+    validity,
+  });
+
   if (account.status !== "healthy") {
-    return { profile, isAllocatable: false, blockedReason: "account_not_healthy" };
+    return blocked("account_not_healthy");
   }
 
   /*
@@ -89,15 +184,50 @@ export function evaluateAllocation(
    * both unhealthy and has an open problem reports the status, which is what a
    * worker can act on directly.
    */
-  if (hasActiveProblem) {
-    return { profile, isAllocatable: false, blockedReason: "account_has_problem" };
+  if (context.hasActiveProblem === true) {
+    return blocked("account_has_problem");
   }
 
-  if (profile.status !== "available") {
-    return { profile, isAllocatable: false, blockedReason: "profile_not_available" };
+  /*
+   * The account's own coverage, before anything about this particular profile.
+   * An expired account cannot serve anyone, so the reason should name the
+   * account rather than sending a worker to look at the profile.
+   */
+  if (isAccountExpired(account, today)) {
+    return blocked("account_expired");
   }
 
-  return { profile, isAllocatable: true, blockedReason: null };
+  /*
+   * M13: a slot above accounts.profile_slots is not stock and never becomes
+   * stock. Distinct from "not available", because there is nothing to wait for
+   * — no expiry will free it and no release will return it.
+   */
+  if (!isSellableSlot(profile, account)) {
+    return blocked("profile_not_for_sale");
+  }
+
+  /*
+   * Occupancy, derived. `available` is free; so is a profile whose customer's
+   * time has run out — 03_DATABASE.md: "Expired Profile → Automatically
+   * Available if account is Healthy." Reading profile.status alone would keep a
+   * long-expired allocation off the market forever, which is what it did until
+   * M13.
+   */
+  if (!isProfileFree(profile, today)) {
+    return blocked("profile_not_available");
+  }
+
+  /*
+   * Last, because it is the only check that depends on what the caller wants
+   * rather than on what is true. Skipped entirely when no duration was supplied
+   * — a screen describing current state must not be told a healthy free profile
+   * is blocked.
+   */
+  if (requestedDays !== null && !canCoverDuration(account, requestedDays, today)) {
+    return blocked("insufficient_account_validity");
+  }
+
+  return { profile, isAllocatable: true, blockedReason: null, validity };
 }
 
 /**
@@ -130,8 +260,117 @@ function assertMayDelete(actor: AppUser | null): Result<AppUser> {
   return ok(actor);
 }
 
-async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountWithCounts>>> {
-  return accountsRepository.listWithCounts(filter);
+/** One profile indicator on the accounts list. Carries no secret. */
+export interface ProfileIndicator {
+  readonly profileId: string;
+  readonly profileNumber: number;
+  readonly state: ProfileCellState;
+  /** For the tooltip. Null when the profile has never been sold. */
+  readonly expirationDate: string | null;
+}
+
+/**
+ * An account as a browser may see it: everything except the credential.
+ *
+ * `passwordEncrypted` is removed at the service boundary rather than trusted to
+ * every component that renders a list. It is ciphertext, not plaintext, so this
+ * is not a plaintext leak — but a page listing twenty-five accounts would have
+ * shipped twenty-five AES blobs into the RSC payload, where they sit in the HTML
+ * source, in the browser cache and in any DevTools session. Offline material an
+ * attacker does not need to be given.
+ */
+export type AccountView = Omit<AccountRow, "passwordEncrypted">;
+
+/**
+ * Drops the credential. The one place an account crosses to a browser.
+ *
+ * Exported so Quick Replace's preview projects through the same function rather
+ * than writing a second one. A duplicated projection is a projection that can
+ * fall behind when a credential column is added.
+ */
+export function toAccountView(account: AccountRow): AccountView {
+  const { passwordEncrypted: _password, ...view } = account;
+  return view;
+}
+
+/**
+ * A profile as a browser may see it: everything except the PIN.
+ *
+ * The profile-shaped counterpart to `AccountView`, and it exists for the same
+ * reason. A PIN is a credential the customer receives once, at handover, from
+ * the Quick Prepare result screen. Nothing that merely *describes* stock — a
+ * list, an indicator, a replacement preview — has any reason to carry one, and a
+ * payload that never contains it cannot leak it.
+ *
+ * `AccountListRow` already solves this by dropping profile rows entirely. Views
+ * that must show individual slots need the row minus the credential instead.
+ */
+export type ProfileView = Omit<ProfileRow, "pin">;
+
+/** Drops the PIN. Mirrors `toAccountView`. */
+export function toProfileView(profile: ProfileRow): ProfileView {
+  const { pin: _pin, ...view } = profile;
+  return view;
+}
+
+/**
+ * An account list row, with its five indicators already derived.
+ *
+ * Deliberately does NOT carry the raw profile rows. They hold PINs and customer
+ * ids that the list never displays, and the safest way to keep them out of the
+ * payload is to never put them in it. The component gets `indicators`, which
+ * carry a profile number, a state and a date.
+ */
+export interface AccountListRow extends Omit<AccountWithCounts, "account" | "profiles"> {
+  readonly account: AccountView;
+  readonly indicators: readonly ProfileIndicator[];
+  /** Days left on the account's own coverage. Null means open-ended. */
+  readonly remainingValidityDays: number | null;
+}
+
+/**
+ * The accounts list.
+ *
+ * Derives every profile indicator HERE rather than in the table component.
+ *
+ * M13 §7 requires the list, the detail page and Quick Prepare to show the same
+ * state, and the only way to guarantee that is for one function to decide it.
+ * `profileCellState` is that function; the component receives four literal
+ * strings and renders colours.
+ *
+ * It also keeps the client honest by omission: the payload carries no password,
+ * no PIN and no customer identity, so a component cannot leak what it was never
+ * given.
+ */
+async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountListRow>>> {
+  const page = await accountsRepository.listWithCounts(filter);
+
+  if (!page.ok) {
+    return page;
+  }
+
+  /* One clock for the whole page, so two rows cannot straddle midnight. */
+  const today = new Date();
+
+  return ok({
+    ...page.value,
+    items: page.value.items.map((row) => {
+      /* Both dropped on purpose — see AccountView and AccountListRow. */
+      const { profiles: rawProfiles, ...rest } = row;
+
+      return {
+        ...rest,
+        account: toAccountView(row.account),
+        remainingValidityDays: accountRemainingDays(row.account, today),
+        indicators: rawProfiles.map((profile) => ({
+          profileId: profile.id,
+          profileNumber: profile.profileNumber,
+          state: profileCellState(profile, row.account, today),
+          expirationDate: profile.expirationDate,
+        })),
+      };
+    }),
+  });
 }
 
 /**
@@ -162,13 +401,33 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
   const problems = activeProblems.ok ? activeProblems.value : [];
   const hasActiveProblem = problems.length > 0;
 
+  /* One clock for the whole page, so five profiles cannot straddle midnight. */
+  const today = new Date();
+
   return ok({
-    account,
+    account: toAccountView(account),
     activeProblems: problems,
+    /*
+     * Same function as the accounts list, so the cells on this page and the
+     * cells on that one can never tell different stories. M13 §7.
+     */
+    indicators: profilesResult.value.map((profile) => ({
+      profileId: profile.id,
+      profileNumber: profile.profileNumber,
+      state: profileCellState(profile, account, today),
+      expirationDate: profile.expirationDate,
+    })),
     profiles: profilesResult.value.map((profile) =>
-      evaluateAllocation(account, profile, hasActiveProblem),
+      /*
+       * No requestedDurationDays: this screen describes what is true, it is not
+       * asking to allocate anything. Supplying one would mark free profiles
+       * blocked against a duration nobody entered.
+       */
+      evaluateAllocation(account, profile, { hasActiveProblem, today }),
     ),
-    accountAllowsAllocation: account.status === "healthy" && !hasActiveProblem,
+    accountAllowsAllocation:
+      account.status === "healthy" && !hasActiveProblem && !isAccountExpired(account, today),
+    remainingValidityDays: accountRemainingDays(account, today),
     /*
      * Surfaced rather than thrown. A count other than five means data arrived
      * outside accountsRepository.create — a migration or a manual insert. The
@@ -208,6 +467,264 @@ async function createAccount(input: unknown, context: AuditContext): Promise<Res
   );
 
   return created;
+}
+
+/** What a bulk import did, row by row. Every submitted row appears in exactly one list. */
+export interface BulkCreateResult {
+  /**
+   * `AccountView`, not `AccountRow`.
+   *
+   * This value is returned through a Server Action, so it is serialized to the
+   * browser in full. Returning the raw rows shipped the AES ciphertext of every
+   * freshly created account to the client at once — the same leak already fixed
+   * on the accounts list and the detail page, and the worst of the three
+   * because a bulk import creates many at a time.
+   */
+  readonly created: readonly AccountView[];
+  readonly rejected: readonly BulkRowError[];
+  /** Submitted rows, so a UI can assert created + rejected accounts for all of them. */
+  readonly submitted: number;
+  /** What the parser assumed, so the UI can say "read as tab-separated". */
+  readonly delimiter: string;
+  readonly headerDropped: boolean;
+}
+
+/**
+ * Creates many accounts from pasted text.
+ *
+ * Partial success with a complete report. An earlier draft refused the entire
+ * batch if any row failed; that was wrong for the actual job. An operator
+ * importing a hundred accounts should not lose ninety-nine because one row has
+ * a typo, and asking them to re-paste a corrected list is worse than it sounds
+ * — the rows that already imported would come back as duplicate errors.
+ *
+ * The safety the brief actually asks for is "no SILENT partial creation", and
+ * that is what this guarantees:
+ *
+ *   1. Every row is validated first, against the same schema a single creation
+ *      uses. There is no laxer import path.
+ *   2. Valid rows are written under ONE transaction, so a crash cannot leave an
+ *      account without its five profiles.
+ *   3. An email already taken skips that row — decided by the unique index, not
+ *      by a prior SELECT, so two operators importing overlapping lists cannot
+ *      race.
+ *   4. EVERY submitted row comes back either created or rejected with a reason
+ *      and a line number. `submitted` is the arithmetic check on that claim.
+ */
+async function createAccountsInBulk(
+  input: unknown,
+  context: AuditContext,
+): Promise<Result<BulkCreateResult>> {
+  if (typeof input !== "string" || input.trim() === "") {
+    return fail(
+      new ValidationError("Bulk import received no text", {
+        userMessage: "Paste at least one account first.",
+        fieldErrors: { rows: "Paste at least one row" },
+      }),
+    );
+  }
+
+  const parsed = parseBulkAccounts(input);
+  const submitted = parsed.valid.length + parsed.errors.length;
+
+  if (submitted === 0) {
+    return fail(
+      new ValidationError("Bulk import found no rows", {
+        userMessage: "No rows were found in that text.",
+        fieldErrors: { rows: "No rows were found" },
+      }),
+    );
+  }
+
+  /* Rows that failed parsing or validation. Carried through, not fatal. */
+  const rejected: BulkRowError[] = [...parsed.errors];
+
+  if (parsed.errors.length > 0) {
+    logger.warn("Bulk account import had invalid rows", {
+      submitted,
+      rejected: parsed.errors.length,
+      /* Line numbers and field names only. Never a cell value. */
+      lines: parsed.errors.map((error) => error.line),
+    });
+  }
+
+  let created: readonly AccountView[] = [];
+
+  if (parsed.valid.length > 0) {
+    const write = await accountsRepository.createMany(parsed.valid, context.actor?.id ?? null);
+
+    if (!write.ok) {
+      return write;
+    }
+
+    /*
+     * Mapped, not merely re-typed. `AccountRow` is structurally assignable to
+     * `AccountView` — extra properties are permitted — so narrowing the type
+     * alone would compile cleanly while the ciphertext stayed in the object at
+     * runtime. The type would have been lying. This actually removes it.
+     */
+    created = write.value.created.map(toAccountView);
+
+    /*
+     * Emails the database refused because they already exist. Reported against
+     * the line the operator actually typed, which is why parseBulkAccounts
+     * tracks line numbers rather than array indices.
+     */
+    for (const email of write.value.skippedEmails) {
+      rejected.push({
+        line: parsed.lineForEmail(email) ?? 0,
+        email,
+        fieldErrors: { email: "An account with this email already exists" },
+        message: "Skipped — this email is already registered",
+      });
+    }
+  }
+
+  /* One audit entry per account, matching what a single creation records. */
+  for (const account of created) {
+    await auditService.recordOrWarn(
+      {
+        entity: "account",
+        entityId: account.id,
+        action: "create",
+        after: { ...account, importedInBulk: true },
+      },
+      context,
+    );
+  }
+
+  return ok({
+    created,
+    /*
+     * By line, so the operator reads them in the order they typed them. Parse
+     * failures are collected first and database rejections appended, which
+     * otherwise lists line 3 above line 2 for no reason a reader can see.
+     */
+    rejected: [...rejected].sort((left, right) => left.line - right.line),
+    submitted,
+    delimiter: parsed.delimiter,
+    headerDropped: parsed.headerDropped,
+  });
+}
+
+/**
+ * Changes how many of the five profile rows are sellable.
+ *
+ * A dedicated method rather than a field on updateAccount, for three reasons
+ * the generic path cannot satisfy:
+ *
+ *   1. The profile rows must move with it. Raising the count returns rows to
+ *      `available`; lowering it marks them `not_for_sale`. Both happen in the
+ *      same transaction as the column change, so the two can never disagree.
+ *
+ *   2. Lowering below an occupied slot must be refused. Somebody has paid for
+ *      that profile; taking it out of stock would either strand them or force
+ *      an un-sale, and neither is a thing an inventory setting should do
+ *      silently.
+ *
+ *   3. The M13 Phase B approval requires this specific change to be audited
+ *      with the old and new value, by name.
+ */
+async function setProfileSlots(
+  id: string,
+  input: unknown,
+  context: AuditContext,
+): Promise<Result<AccountRow>> {
+  const parsed = profileSlotsSchema.safeParse(input);
+
+  if (!parsed.success) {
+    return fail(toValidationError(parsed.error.issues, "Profile slots failed validation"));
+  }
+
+  const before = await accountsRepository.findById(id);
+
+  if (!before.ok) {
+    return before;
+  }
+
+  const previousSlots = before.value.profileSlots;
+  const nextSlots = parsed.data.profileSlots;
+
+  if (previousSlots === nextSlots) {
+    /* Nothing moved. Writing an audit entry for a no-op would be noise. */
+    return ok(before.value);
+  }
+
+  const updated = await accountsRepository.setProfileSlots(id, nextSlots);
+
+  if (!updated.ok) {
+    return updated;
+  }
+
+  await auditService.recordOrWarn(
+    {
+      entity: "account",
+      entityId: id,
+      action: "update",
+      /*
+       * Named explicitly rather than left to a whole-row diff. The approval
+       * asks who changed it, when, from what, to what — actor and timestamp
+       * come from the audit context, these two are the payload.
+       */
+      before: { profileSlots: previousSlots },
+      after: { event: "profile_slots_changed", profileSlots: nextSlots },
+    },
+    context,
+  );
+
+  return updated;
+}
+
+/**
+ * Replaces the stored Netflix password.
+ *
+ * Separate from updateAccount because M13 §8 needs it to be: the Quick Prepare
+ * reuse flow asks an operator to change a reused account's password and record
+ * that they did, and that is a different operation from editing an account's
+ * details. It gets its own confirmation rules and its own audit event.
+ *
+ * The CRM does not and cannot change the password AT Netflix. This records the
+ * new value so the next customer receives the right one, and nothing more.
+ *
+ * The plaintext reaches lib/crypto and the repository. It is never logged,
+ * never placed in the audit payload, and never returned.
+ */
+async function changePassword(
+  id: string,
+  input: unknown,
+  context: AuditContext,
+): Promise<Result<AccountRow>> {
+  const parsed = changePasswordSchema.safeParse(input);
+
+  if (!parsed.success) {
+    return fail(toValidationError(parsed.error.issues, "Password change failed validation"));
+  }
+
+  const before = await accountsRepository.findById(id);
+
+  if (!before.ok) {
+    return before;
+  }
+
+  /* The same encryption path as creation. There is no second one. */
+  const updated = await accountsRepository.update(id, { password: parsed.data.newPassword });
+
+  if (!updated.ok) {
+    return updated;
+  }
+
+  await auditService.recordOrWarn(
+    {
+      entity: "account",
+      entityId: id,
+      action: "update",
+      /* The event, never the value — not the old one and not the new one. */
+      after: { event: "password_changed", confirmedByOperator: true },
+    },
+    context,
+  );
+
+  return updated;
 }
 
 /**
@@ -435,6 +952,9 @@ export const accountsService = {
   listAccounts,
   getAccountDetail,
   createAccount,
+  createAccountsInBulk,
+  setProfileSlots,
+  changePassword,
   updateAccount,
   archiveAccount,
   restoreAccount,

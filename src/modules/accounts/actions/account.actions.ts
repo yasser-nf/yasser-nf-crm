@@ -9,6 +9,7 @@ import { UnauthorizedError, isAppError, type AppError } from "@/lib/errors";
 import type { AuditContext } from "@/modules/audit";
 import type { AccountFilter } from "../repositories/accounts.repository";
 import { accountsService } from "../services/accounts.service";
+import { previewBulkAccounts } from "../services/bulk-accounts.service";
 import { profilesService } from "../services/profiles.service";
 
 /**
@@ -109,6 +110,63 @@ async function run<T>(
 
 export async function createAccountAction(input: unknown) {
   return run(async (context) => accountsService.createAccount(input, context), [ROUTES.ACCOUNTS]);
+}
+
+/**
+ * Creates many accounts from pasted text.
+ *
+ * The text arrives as an opaque string and is parsed server-side. Parsing in
+ * the browser and posting a structured array would make the client's parser the
+ * authority on where a password ends, which is not a decision that belongs
+ * there — and it would let a crafted payload skip the row validation entirely.
+ */
+export async function createAccountsInBulkAction(input: unknown) {
+  return run(
+    async (context) => accountsService.createAccountsInBulk(input, context),
+    [ROUTES.ACCOUNTS],
+  );
+}
+
+/**
+ * Parses pasted text for the bulk preview. Writes nothing.
+ *
+ * Runs the parser on the SERVER rather than shipping it to the browser, so the
+ * rows an operator approves are the rows the submit step will validate. A
+ * client-side copy could disagree about quoting or delimiter detection, and the
+ * operator would have approved something other than what was imported.
+ *
+ * The returned rows carry no password — see `BulkPreviewRow`.
+ */
+export async function previewBulkAccountsAction(input: unknown) {
+  return run(async () => {
+    if (typeof input !== "string") {
+      return { ok: true as const, value: previewBulkAccounts("") };
+    }
+
+    return { ok: true as const, value: previewBulkAccounts(input) };
+  });
+}
+
+/** Changes how many of the five profiles an account sells. Audited by the service. */
+export async function setProfileSlotsAction(id: string, input: unknown) {
+  return run(
+    async (context) => accountsService.setProfileSlots(id, input, context),
+    [ROUTES.ACCOUNTS, `${ROUTES.ACCOUNTS}/${id}`],
+  );
+}
+
+/**
+ * Replaces the stored Netflix password.
+ *
+ * The plaintext travels in the POST body, never in the URL or a query string —
+ * a Server Action is a POST by construction, which is part of why M13 §4 and §8
+ * can be satisfied without inventing a new transport.
+ */
+export async function changeAccountPasswordAction(id: string, input: unknown) {
+  return run(
+    async (context) => accountsService.changePassword(id, input, context),
+    [`${ROUTES.ACCOUNTS}/${id}`],
+  );
 }
 
 export async function updateAccountAction(id: string, input: unknown) {

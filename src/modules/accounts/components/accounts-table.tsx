@@ -7,11 +7,14 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { ROUTES } from "@/config/constants";
 import { DURATION, EASING } from "@/config/theme";
-import type { AccountWithCounts, AccountSortField } from "../repositories/accounts.repository";
+import type { AccountSortField } from "../repositories/accounts.repository";
+import type { AccountListRow } from "../services/accounts.service";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/feedback/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
 import { cn } from "@/utils/cn";
+import { CopyCredentials } from "./copy-credentials";
+import { ProfileIndicators, ProfileIndicatorLegend } from "./profile-indicators";
 import { AccountStatusBadge } from "./status-badge";
 
 /**
@@ -28,12 +31,43 @@ import { AccountStatusBadge } from "./status-badge";
  */
 
 interface AccountsTableProps {
-  readonly items: readonly AccountWithCounts[];
+  readonly items: readonly AccountListRow[];
   readonly total: number;
   readonly limit: number;
   readonly offset: number;
   readonly sortBy: AccountSortField;
   readonly sortDirection: "asc" | "desc";
+}
+
+/**
+ * Remaining account validity, in words.
+ *
+ * Open-ended is stated rather than rendered as a date, because an account with
+ * no boundary is not the same as one expiring today and showing "—" invites the
+ * reader to supply their own meaning. No arithmetic here: the number arrives
+ * already computed by `accountRemainingDays`.
+ */
+function validityLabel(remainingDays: number | null, validUntil: string | null): string {
+  if (remainingDays === null || validUntil === null) {
+    return "Open-ended";
+  }
+
+  if (remainingDays < 0) {
+    return `Expired ${Math.abs(remainingDays)}d ago`;
+  }
+
+  if (remainingDays === 0) {
+    return "Expires today";
+  }
+
+  return `${remainingDays}d left`;
+}
+
+function validityTone(remainingDays: number | null): string {
+  if (remainingDays === null) return "text-foreground-muted";
+  if (remainingDays < 0) return "text-danger";
+  if (remainingDays < 15) return "text-warning";
+  return "text-foreground-muted";
 }
 
 const COLUMNS: readonly { field: AccountSortField; label: string; className?: string }[] = [
@@ -102,6 +136,8 @@ export function AccountsTable({
 
   return (
     <div className="flex flex-col gap-4">
+      <ProfileIndicatorLegend />
+
       {/* Desktop */}
       <div className="hidden overflow-x-auto rounded-lg border border-border lg:block">
         <Table>
@@ -147,10 +183,9 @@ export function AccountsTable({
                   </TableHead>
                 );
               })}
-              <TableHead className="text-right text-caption text-foreground-muted">
-                Available
-              </TableHead>
-              <TableHead className="text-right text-caption text-foreground-muted">Sold</TableHead>
+              <TableHead className="text-caption text-foreground-muted">Profiles</TableHead>
+              <TableHead className="text-caption text-foreground-muted">Validity</TableHead>
+              <TableHead className="text-right text-caption text-foreground-muted">Copy</TableHead>
             </TableRow>
           </TableHeader>
 
@@ -188,11 +223,27 @@ export function AccountsTable({
                 <TableCell className="text-foreground-muted">
                   {formatDate(row.account.createdAt)}
                 </TableCell>
-                <TableCell className="text-right font-medium text-success">
-                  {row.availableProfiles}
+
+                {/* All five, on the same row. M13 §1. */}
+                <TableCell>
+                  <ProfileIndicators indicators={row.indicators} />
                 </TableCell>
-                <TableCell className="text-right font-medium text-accent-purple">
-                  {row.soldProfiles}
+
+                <TableCell className={cn("text-caption", validityTone(row.remainingValidityDays))}>
+                  <span className="whitespace-nowrap">
+                    {validityLabel(row.remainingValidityDays, row.account.validUntil)}
+                  </span>
+                  <span className="block text-foreground-subtle">
+                    {row.account.profileSlots} of 5 sellable
+                  </span>
+                </TableCell>
+
+                <TableCell className="text-right">
+                  <CopyCredentials
+                    accountId={row.account.id}
+                    email={row.account.email}
+                    className="justify-end"
+                  />
                 </TableCell>
               </motion.tr>
             ))}
@@ -200,20 +251,30 @@ export function AccountsTable({
         </Table>
       </div>
 
-      {/* Mobile — cards, per 04_UI_GUIDELINES.md */}
+      {/*
+        Mobile — cards, per 04_UI_GUIDELINES.md.
+
+        The card is no longer a single <Link>: it now contains copy buttons, and
+        nesting interactive controls inside an anchor is invalid HTML and makes
+        the whole card unusable with a keyboard. The email is the link instead.
+      */}
       <div className="flex flex-col gap-3 lg:hidden">
         {items.map((row) => (
-          <Link
+          <article
             key={row.account.id}
-            href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
-            className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong"
+            className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
           >
             <div className="flex items-start justify-between gap-3">
-              <span className="min-w-0 flex-1 truncate text-card-title text-foreground">
+              <Link
+                href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
+                className="min-w-0 flex-1 truncate text-card-title text-foreground hover:text-primary"
+              >
                 {row.account.email}
-              </span>
+              </Link>
               <AccountStatusBadge status={row.account.status} />
             </div>
+
+            <ProfileIndicators indicators={row.indicators} />
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-foreground-muted">
               <span>
@@ -222,16 +283,21 @@ export function AccountsTable({
                   {row.account.healthScore}
                 </span>
               </span>
-              <span>
-                Available <span className="text-success">{row.availableProfiles}</span>
+              <span className={validityTone(row.remainingValidityDays)}>
+                {validityLabel(row.remainingValidityDays, row.account.validUntil)}
               </span>
-              <span>
-                Sold <span className="text-accent-purple">{row.soldProfiles}</span>
-              </span>
+              <span>{row.account.profileSlots} of 5 sellable</span>
               <span>{row.account.country ?? "—"}</span>
               <span>{formatDate(row.account.createdAt)}</span>
             </div>
-          </Link>
+
+            <CopyCredentials
+              accountId={row.account.id}
+              email={row.account.email}
+              variant="full"
+              className="flex-wrap"
+            />
+          </article>
         ))}
       </div>
 

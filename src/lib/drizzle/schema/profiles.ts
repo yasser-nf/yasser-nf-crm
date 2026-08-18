@@ -141,6 +141,10 @@ export const profiles = pgTable(
      * `expired` is deliberately unconstrained. Whether an expired profile keeps
      * its customer for history or is cleared on recycling is a business rule no
      * document states, and 01_MASTER_RULES.md forbids inventing one.
+     *
+     * Unchanged by M13. A profile row above accounts.profile_slots is still
+     * `available` at the column level and simply never selected — sellability is
+     * derived rather than stored, so this constraint needs no new branch.
      */
     check(
       "profiles_held_requires_customer",

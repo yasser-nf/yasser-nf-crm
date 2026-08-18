@@ -8,6 +8,7 @@ import {
   type Page,
   type PaginationInput,
 } from "@/lib/database";
+import { accountStillCoveredSql, isSellableSlotSql } from "@/lib/drizzle/predicates";
 import {
   accounts,
   profileEvents,
@@ -147,6 +148,21 @@ export const profilesRepository: ProfilesRepository = {
             /* The unhealthy-account rule, applied in SQL rather than trusted to callers. */
             eq(accounts.status, "healthy"),
             isNull(accounts.deletedAt),
+            /*
+             * M13. This method currently has no callers, which is precisely why
+             * these two lines matter: without them it is a correct-looking
+             * helper that quietly ignores sellable slots and account expiry, and
+             * the next person to reach for "give me available profiles" would
+             * offer stock that does not exist.
+             *
+             * It deliberately does NOT implement the expired-allocation
+             * recycling rule. That belongs to the allocation path, which holds
+             * row locks while it decides; a read helper returning profiles that
+             * still read `sold` would invite a caller to treat them as free
+             * without taking one. Allocation goes through allocationRepository.
+             */
+            isSellableSlotSql,
+            accountStillCoveredSql,
           ),
         )
         /* Highest health first — the Smart Stock Engine must never take the first match. */

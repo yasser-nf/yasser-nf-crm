@@ -15,7 +15,7 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 
-import type { AccountRow } from "@/lib/drizzle/schema";
+import type { AccountView } from "../services/accounts.service";
 import { Button } from "@/shared/ui/button";
 import {
   AlertDialog,
@@ -34,6 +34,7 @@ import {
   useRevealPassword,
 } from "../hooks/use-account-mutations";
 import { EditAccountDialog } from "./account-dialogs";
+import { CopyCredentials } from "./copy-credentials";
 import { AccountStatusBadge } from "./status-badge";
 
 /**
@@ -51,7 +52,28 @@ function formatDateTime(value: Date | string): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-export function AccountHeader({ account }: { account: AccountRow }) {
+/**
+ * `AccountView`, not `AccountRow`.
+ *
+ * This is a Client Component, so whatever it accepts is serialized into the RSC
+ * payload and lands in the page source. `AccountView` has no
+ * `passwordEncrypted`, which makes shipping the ciphertext to a browser a type
+ * error rather than an oversight.
+ */
+export function AccountHeader({
+  account,
+  remainingValidityDays,
+}: {
+  account: AccountView;
+  /**
+   * Computed by the service through `accountRemainingDays`, never here.
+   *
+   * M13 §3 forbids new date arithmetic in the UI, and this component has no
+   * clock it could trust anyway — a value derived in the browser would drift
+   * from the one the allocation engine used on the server.
+   */
+  remainingValidityDays: number | null;
+}) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -129,6 +151,40 @@ export function AccountHeader({ account }: { account: AccountRow }) {
         </div>
       </div>
 
+      {/* Inventory. M13 §3. */}
+      <div className="grid gap-4 border-t border-border pt-5 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Sellable profiles">
+          <span className="text-foreground">
+            {account.profileSlots} of 5
+            <span className="ml-2 text-caption text-foreground-subtle">
+              {account.profileSlots === 5
+                ? "all sellable"
+                : `${5 - account.profileSlots} not for sale`}
+            </span>
+          </span>
+        </Field>
+
+        <Field label="Valid from">
+          <span className="text-foreground">{account.validFrom ?? "—"}</span>
+        </Field>
+
+        <Field label="Valid until">
+          <span className="text-foreground">
+            {account.validUntil ?? <span className="text-foreground-muted">Open-ended</span>}
+          </span>
+        </Field>
+
+        <Field label="Remaining validity">
+          <RemainingValidity remainingDays={remainingValidityDays} />
+        </Field>
+      </div>
+
+      {/* M13 §2 and §4: the same three controls the accounts list offers. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-5">
+        <span className="text-caption text-foreground-subtle">Credentials</span>
+        <CopyCredentials accountId={account.id} email={account.email} variant="full" />
+      </div>
+
       {account.notes ? (
         <Field label="Notes">
           <p className="text-description whitespace-pre-wrap text-foreground-muted">
@@ -182,6 +238,36 @@ export function AccountHeader({ account }: { account: AccountRow }) {
         </AlertDialogContent>
       </AlertDialog>
     </section>
+  );
+}
+
+/**
+ * Remaining account validity, in words.
+ *
+ * Open-ended is stated rather than shown as a dash, because "no boundary" and
+ * "no data" look identical otherwise and mean opposite things for allocation.
+ */
+function RemainingValidity({ remainingDays }: { remainingDays: number | null }) {
+  if (remainingDays === null) {
+    return <span className="text-foreground-muted">Open-ended</span>;
+  }
+
+  if (remainingDays < 0) {
+    return (
+      <span className="text-danger">
+        Expired {Math.abs(remainingDays)} day{Math.abs(remainingDays) === 1 ? "" : "s"} ago
+      </span>
+    );
+  }
+
+  if (remainingDays === 0) {
+    return <span className="text-warning">Expires today</span>;
+  }
+
+  return (
+    <span className={remainingDays < 15 ? "text-warning" : "text-foreground"}>
+      {remainingDays} day{remainingDays === 1 ? "" : "s"} left
+    </span>
   );
 }
 

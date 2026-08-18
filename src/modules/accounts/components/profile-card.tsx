@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { DURATION, EASING } from "@/config/theme";
 import { ActionError } from "@/lib/errors";
+import type { ProfileRow } from "@/lib/drizzle/schema";
 import type { ProfileAllocation } from "../services/accounts.service";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
@@ -19,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Textarea } from "@/shared/ui/textarea";
 import { useUpdateProfile } from "../hooks/use-account-mutations";
 import { ProfileStatusBadge } from "./status-badge";
 
@@ -34,7 +36,16 @@ import { ProfileStatusBadge } from "./status-badge";
  * profile, and the rule lives on the account.
  */
 
-/** Only name and PIN are editable. M03 forbids everything else. */
+/**
+ * The editable set, mirroring `profileEditSchema` on the server.
+ *
+ * M13 §5 adds the allocation fields to M03's name and PIN. Everything here is
+ * optional and blank means "leave it alone", so an operator editing a PIN never
+ * has to retype a sale date.
+ *
+ * The server revalidates all of it and owns every business rule — this copy
+ * exists only to catch a typo before a round trip.
+ */
 const profileEditFormSchema = z.object({
   profileName: z.string().trim().max(60).optional(),
   pin: z
@@ -43,6 +54,11 @@ const profileEditFormSchema = z.object({
     .regex(/^[0-9]{4}$/, "PIN must be exactly 4 digits")
     .or(z.literal(""))
     .optional(),
+  notes: z.string().trim().max(2000, "Notes are limited to 2000 characters").optional(),
+  customerPhone: z.string().trim().optional(),
+  saleDate: z.string().optional(),
+  expirationDate: z.string().optional(),
+  durationDays: z.string().optional(),
 });
 
 type ProfileEditFormValues = z.infer<typeof profileEditFormSchema>;
@@ -94,7 +110,18 @@ export function ProfileCard({
           </div>
         </div>
 
-        <ProfileStatusBadge status={profile.status} />
+        {/*
+          The badge must agree with the indicator strip above the cards.
+
+          Reading `profile.status` alone renders a green "Available" on a slot
+          the allocator will never sell — the column says available because
+          sellability is derived, not stored. `blockedReason` is the derived
+          answer, from the same `evaluateAllocation` the strip uses.
+        */}
+        <ProfileStatusBadge
+          status={profile.status}
+          notForSale={blockedReason === "profile_not_for_sale"}
+        />
       </header>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
@@ -145,15 +172,14 @@ export function ProfileCard({
         className="mt-auto gap-2 self-start"
       >
         <Pencil className="size-3.5" aria-hidden="true" />
-        Edit name &amp; PIN
+        Edit profile
       </Button>
 
       <EditProfileDialog
+        profile={profile}
         accountId={accountId}
-        profileId={profile.id}
-        profileNumber={profile.profileNumber}
-        currentName={profile.profileName}
-        currentPin={profile.pin}
+        /* Allocation fields are hidden on a slot that cannot hold one. */
+        canAllocate={blockedReason !== "profile_not_for_sale"}
         open={isEditing}
         onOpenChange={setIsEditing}
       />
@@ -161,24 +187,38 @@ export function ProfileCard({
   );
 }
 
+/**
+ * The profile editor.
+ *
+ * Three groups, because they carry different risk: identity is always safe to
+ * change, the allocation block can only be edited on a sellable slot and is
+ * validated against the account's own validity, and notes are free text.
+ *
+ * Every field is optional and blank means "leave it alone", so editing a PIN
+ * does not require retyping a sale date.
+ *
+ * The customer is entered as a PHONE NUMBER, not an id — the server resolves it
+ * through the same `findOrCreateByPhone` Quick Prepare uses, so the Phone Engine
+ * matches an existing customer rather than creating a duplicate.
+ *
+ * No account credential is passed to this component and none is rendered. The
+ * PIN is shown because the operator is editing it; the account password has no
+ * business here and is not reachable from it.
+ */
 function EditProfileDialog({
+  profile,
   accountId,
-  profileId,
-  profileNumber,
-  currentName,
-  currentPin,
+  canAllocate,
   open,
   onOpenChange,
 }: {
+  profile: ProfileRow;
   accountId: string;
-  profileId: string;
-  profileNumber: number;
-  currentName: string | null;
-  currentPin: string | null;
+  canAllocate: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const update = useUpdateProfile(accountId, profileId);
+  const update = useUpdateProfile(accountId, profile.id);
 
   const {
     register,
@@ -187,21 +227,53 @@ function EditProfileDialog({
   } = useForm<ProfileEditFormValues>({
     resolver: zodResolver(profileEditFormSchema),
     mode: "onTouched",
-    defaultValues: { profileName: currentName ?? "", pin: currentPin ?? "" },
+    defaultValues: {
+      profileName: profile.profileName ?? "",
+      pin: profile.pin ?? "",
+      notes: profile.notes ?? "",
+      customerPhone: "",
+      saleDate: profile.saleDate ?? "",
+      expirationDate: profile.expirationDate ?? "",
+      durationDays: profile.durationDays ? String(profile.durationDays) : "",
+    },
   });
 
   const serverFieldErrors =
     update.error instanceof ActionError ? (update.error.fieldErrors ?? {}) : {};
 
+  const fieldError = (name: keyof ProfileEditFormValues): string | undefined =>
+    errors[name]?.message ?? serverFieldErrors[name];
+
+  /*
+   * A server error naming a field this dialog does not render would otherwise
+   * vanish, which is the exact failure that hid the account-creation bug for
+   * ten milestones.
+   */
+  const RENDERED = [
+    "profileName",
+    "pin",
+    "notes",
+    "customerPhone",
+    "saleDate",
+    "expirationDate",
+    "durationDays",
+  ];
+
+  const unmapped = Object.entries(serverFieldErrors).filter(([field]) => !RENDERED.includes(field));
+
   const submit = handleSubmit((values) => {
     const payload: Record<string, unknown> = {};
 
-    if (values.profileName) {
-      payload["profileName"] = values.profileName;
-    }
+    /* Only what the operator actually filled in. Blank means "unchanged". */
+    if (values.profileName) payload["profileName"] = values.profileName;
+    if (values.pin) payload["pin"] = values.pin;
+    if (values.notes) payload["notes"] = values.notes;
 
-    if (values.pin) {
-      payload["pin"] = values.pin;
+    if (canAllocate) {
+      if (values.customerPhone) payload["customerPhone"] = values.customerPhone;
+      if (values.saleDate) payload["saleDate"] = values.saleDate;
+      if (values.expirationDate) payload["expirationDate"] = values.expirationDate;
+      if (values.durationDays) payload["durationDays"] = Number(values.durationDays);
     }
 
     update.mutate(payload, { onSuccess: () => onOpenChange(false) });
@@ -216,34 +288,123 @@ function EditProfileDialog({
         }
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Edit profile {profileNumber}</DialogTitle>
+          <DialogTitle>Edit profile {profile.profileNumber}</DialogTitle>
           <DialogDescription>
-            Only the name and PIN can change. The profile number is fixed for life.
+            The profile number is fixed for life. Allocation changes follow the same rules as Quick
+            Prepare and cannot outlive the account.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit} noValidate className="flex flex-col gap-4">
-          <FormField
-            label="Profile name"
-            placeholder={`Profile ${profileNumber}`}
-            disabled={update.isPending}
-            error={errors.profileName?.message ?? serverFieldErrors["profileName"]}
-            {...register("profileName")}
-          />
+        <form onSubmit={submit} noValidate className="flex flex-col gap-5">
+          {unmapped.length > 0 ? (
+            <div
+              role="alert"
+              className="flex flex-col gap-1 rounded-md border border-danger/30 bg-danger-subtle p-4"
+            >
+              <p className="text-card-title text-foreground">The server rejected this change</p>
+              {unmapped.map(([field, message]) => (
+                <p key={field} className="text-caption text-foreground-muted">
+                  <span className="font-mono">{field}</span>: {message}
+                </p>
+              ))}
+            </div>
+          ) : null}
 
-          <FormField
-            label="PIN"
-            inputMode="numeric"
-            maxLength={4}
-            placeholder="4 digits"
-            disabled={update.isPending}
-            error={errors.pin?.message ?? serverFieldErrors["pin"]}
-            {...register("pin")}
-          />
+          <fieldset className="flex flex-col gap-4">
+            <legend className="text-caption font-medium text-foreground-subtle">Identity</legend>
 
-          <div className="mt-2 flex items-center justify-end gap-3">
+            <FormField
+              label="Profile name"
+              placeholder={`Profile ${profile.profileNumber}`}
+              disabled={update.isPending}
+              error={fieldError("profileName")}
+              {...register("profileName")}
+            />
+
+            <FormField
+              label="PIN"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="4 digits"
+              disabled={update.isPending}
+              error={fieldError("pin")}
+              {...register("pin")}
+            />
+          </fieldset>
+
+          {canAllocate ? (
+            <fieldset className="flex flex-col gap-4">
+              <legend className="text-caption font-medium text-foreground-subtle">
+                Customer &amp; allocation
+              </legend>
+
+              <FormField
+                label="Customer phone"
+                inputMode="tel"
+                placeholder="0663 94 71 16"
+                hint="Any Algerian format. An existing customer is matched, never duplicated. Leave blank to keep the current one."
+                disabled={update.isPending}
+                error={fieldError("customerPhone")}
+                {...register("customerPhone")}
+              />
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  label="Sale date"
+                  type="date"
+                  disabled={update.isPending}
+                  error={fieldError("saleDate")}
+                  {...register("saleDate")}
+                />
+
+                <FormField
+                  label="Expiration date"
+                  type="date"
+                  disabled={update.isPending}
+                  error={fieldError("expirationDate")}
+                  {...register("expirationDate")}
+                />
+              </div>
+
+              <FormField
+                label="Duration (days)"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={730}
+                disabled={update.isPending}
+                error={fieldError("durationDays")}
+                {...register("durationDays")}
+              />
+            </fieldset>
+          ) : (
+            <p className="flex items-start gap-2 rounded-md bg-neutral-subtle p-3 text-caption text-foreground-subtle">
+              <Ban className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              This profile is above the account&apos;s sellable count, so it cannot hold an
+              allocation. Its name, PIN and notes can still be edited.
+            </p>
+          )}
+
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-caption font-medium text-foreground-subtle">Notes</legend>
+
+            <Textarea
+              rows={3}
+              placeholder="Anything worth remembering about this profile"
+              disabled={update.isPending}
+              className="bg-background-secondary"
+              {...register("notes")}
+            />
+            {fieldError("notes") ? (
+              <p role="alert" className="text-caption text-danger">
+                {fieldError("notes")}
+              </p>
+            ) : null}
+          </fieldset>
+
+          <div className="flex items-center justify-end gap-3">
             <Button
               type="button"
               variant="ghost"

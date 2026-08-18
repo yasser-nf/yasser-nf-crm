@@ -5,6 +5,7 @@ import { PAGINATION } from "@/config/constants";
 import {
   AccountsFilters,
   AccountsTable,
+  BulkAccountsDialog,
   CreateAccountDialog,
   accountsService,
   type AccountSortField,
@@ -94,7 +95,10 @@ export default async function AccountsPage({
           </p>
         </div>
 
-        <CreateAccountDialog />
+        <div className="flex flex-wrap items-center gap-2">
+          <BulkAccountsDialog />
+          <CreateAccountDialog />
+        </div>
       </header>
 
       <Suspense fallback={<FiltersSkeleton />}>

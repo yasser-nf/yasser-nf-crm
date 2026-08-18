@@ -1,9 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  date,
   index,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -57,6 +59,43 @@ export const accounts = pgTable(
      */
     healthScore: integer("health_score").notNull().default(100),
 
+    /**
+     * How many of the five profile rows may be sold. 1 to 5.
+     *
+     * The account still HAS exactly five profiles — 01_MASTER_RULES.md forbids a
+     * dynamic profile count and nothing here changes that. This says how many of
+     * them are stock. Profiles numbered above it carry status `not_for_sale` and
+     * are excluded from every allocation path.
+     *
+     * Defaulted to 5, so every account written before M13 keeps exactly the
+     * behaviour it had and no backfill was needed.
+     *
+     * Changing it is an audited operation that also rewrites the affected
+     * profile rows, in one transaction — see accountsService.setProfileSlots.
+     * Nothing else in the codebase may write this column.
+     */
+    profileSlots: smallint("profile_slots").notNull().default(5),
+
+    /**
+     * The account's OWN coverage window, which is not the customer's.
+     *
+     * 03_DATABASE.md keeps allocation validity on profiles (sale_date,
+     * expiration_date, duration_days). That answers "how long has this customer
+     * paid for". These two answer "how long can this account serve anyone at
+     * all", and the two are independent: an account with 30 days left cannot
+     * cover a 90-day sale no matter what the customer paid.
+     *
+     * NULL means open-ended, NOT expired. The difference is load-bearing —
+     * reading NULL as expired would have made every pre-M13 account instantly
+     * unallocatable the moment this column appeared.
+     *
+     * `date` rather than `timestamp`, matching profiles.expiration_date: a
+     * coverage boundary runs in whole days, and a timezone on one produces
+     * off-by-one expiries at midnight.
+     */
+    validFrom: date("valid_from"),
+    validUntil: date("valid_until"),
+
     country: text("country"),
     notes: text("notes"),
 
@@ -97,7 +136,24 @@ export const accounts = pgTable(
       .on(table.status, table.healthScore.desc())
       .where(sql`${table.deletedAt} is null`),
 
+    /*
+     * Allocation reads this on every Quick Prepare and Quick Replace. Partial,
+     * so it covers only the live rows the allocator can actually choose.
+     */
+    index("accounts_validity_idx")
+      .on(table.validUntil)
+      .where(sql`${table.deletedAt} is null`),
+
     check("accounts_health_score_range", sql`${table.healthScore} between 0 and 100`),
+
+    /* An account can sell no more than the five rows it has, and no fewer than one. */
+    check("accounts_profile_slots_range", sql`${table.profileSlots} between 1 and 5`),
+
+    /* Coverage cannot end before it starts. Mirrors profiles_expiry_after_sale. */
+    check(
+      "accounts_validity_order",
+      sql`${table.validUntil} is null or ${table.validFrom} is null or ${table.validUntil} >= ${table.validFrom}`,
+    ),
 
     /*
      * Cheap guard against an obviously invalid address. Full validation is Zod's
