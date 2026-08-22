@@ -75,8 +75,14 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
 /**
  * Items shown in the mobile bottom navigation.
  *
- * 04_UI_GUIDELINES.md requires bottom navigation on mobile. Ten items do not
- * fit; the five highest-frequency destinations do.
+ * 04_UI_GUIDELINES.md requires bottom navigation on mobile. Eleven items do not
+ * fit; the six highest-frequency destinations do.
+ *
+ * Quick Replace belongs here despite the crowding. On mobile the sidebar is
+ * hidden entirely, so an operator standing in front of a customer had no way to
+ * reach /quick-replace at all — the route worked, but only if typed by hand.
+ * Six is the ceiling: at 375px each item still gets 62px, comfortably past the
+ * 44px minimum touch target.
  */
 export const MOBILE_NAVIGATION_ITEMS: readonly NavigationItem[] = NAVIGATION_ITEMS.filter((item) =>
   (
@@ -84,6 +90,7 @@ export const MOBILE_NAVIGATION_ITEMS: readonly NavigationItem[] = NAVIGATION_ITE
       ROUTES.DASHBOARD,
       ROUTES.ACCOUNTS,
       ROUTES.QUICK_PREPARE,
+      ROUTES.QUICK_REPLACE,
       ROUTES.CUSTOMERS,
       ROUTES.PROBLEMS,
     ] as readonly string[]
