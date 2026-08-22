@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { databaseAdapter } from "@/lib/database";
-import { rawSellableSlot } from "@/lib/drizzle/predicates";
+import { rawAccountCanAllocate, rawAccountIsLive, rawSellableSlot } from "@/lib/drizzle/predicates";
 import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 
@@ -177,17 +177,30 @@ export const dashboardRepository: DashboardRepository = {
        * a scan of a different table; customers and problems likewise. They are
        * kept apart only where a join would multiply rows.
        */
+      /*
+       * Scoped to accounts that exist. `from accounts` with no predicate counted
+       * every soft-deleted row too, so the dashboard reported seven accounts
+       * where the Accounts page listed three.
+       *
+       * `archived` was the worse half of the same bug: it read
+       * `status = 'archived' or deleted_at is not null`, which folded deleted
+       * accounts into the archived bucket. Archiving and deleting are different
+       * acts, and only the first leaves an account on the Accounts page.
+       */
       const accountRows = await executor.execute(sql`
         select
           count(*)::int as total,
-          count(*) filter (where status = 'healthy' and deleted_at is null)::int as healthy,
-          count(*) filter (where status = 'archived' or deleted_at is not null)::int as archived,
+          count(*) filter (where status = 'healthy')::int as healthy,
+          count(*) filter (where status = 'archived')::int as archived,
           (
             select count(distinct i.account_id)::int
             from issues i
+            join accounts ia on ia.id = i.account_id
             where i.status in ('open', 'in_progress', 'waiting')
+              and ${rawAccountIsLive("ia")}
           ) as with_problems
         from accounts
+        where ${rawAccountIsLive("accounts")}
       `);
 
       /*
@@ -202,8 +215,19 @@ export const dashboardRepository: DashboardRepository = {
       const profileRows = await executor.execute(sql`
         select
           count(*)::int as total,
+          /*
+           * Stock the allocation engine would actually hand out.
+           *
+           * The account half — healthy, live, still covered, no open problem.
+           * Without it this counted profiles on an account Quick Prepare refuses
+           * to touch: the reported defect showed four available profiles on an
+           * account carrying an open payment problem, none of which could ever
+           * be sold.
+           */
           count(*) filter (
-            where p.status = 'available' and ${rawSellableSlot("p", "a")}
+            where p.status = 'available'
+              and ${rawSellableSlot("p", "a")}
+              and ${rawAccountCanAllocate("a")}
           )::int as available,
           count(*) filter (where p.status = 'reserved')::int as reserved,
           count(*) filter (where p.status = 'sold')::int as sold,
@@ -227,6 +251,7 @@ export const dashboardRepository: DashboardRepository = {
           count(*) filter (where p.expiration_date < current_date)::int as already_expired
         from profiles p
         join accounts a on a.id = p.account_id
+        where ${rawAccountIsLive("a")}
       `);
 
       const customerRows = await executor.execute(sql`

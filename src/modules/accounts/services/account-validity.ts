@@ -94,6 +94,31 @@ export function isAccountExpired(account: AccountValidity, today: Date): boolean
 }
 
 /**
+ * Whether the account may sell anything at all, in TypeScript.
+ *
+ * The read-side twin of `accountCanAllocateSql`. The SQL form decides which
+ * rows a query returns; this one decides what a slot already in hand is
+ * labelled, and the two must agree or the list will paint a slot green that the
+ * count in the same row excludes.
+ *
+ * `hasActiveProblem` is passed in rather than looked up: this module has no
+ * business querying `issues`, and the callers already hold the answer from the
+ * Problems module's public API.
+ */
+export function accountCanAllocate(
+  account: AccountValidity & { readonly status: string; readonly deletedAt: Date | null },
+  hasActiveProblem: boolean,
+  today: Date,
+): boolean {
+  return (
+    account.status === "healthy" &&
+    account.deletedAt === null &&
+    !hasActiveProblem &&
+    !isAccountExpired(account, today)
+  );
+}
+
+/**
  * The rule from M13 §1: requested_duration_days <= account_remaining_days.
  *
  * An open-ended account covers any duration. A duration of zero or less is not
@@ -174,7 +199,7 @@ export function isProfileFree(profile: ProfileRow, today: Date): boolean {
  *   expired       was allocated; the customer's window has closed
  *   not_for_sale  above accounts.profile_slots — never stock
  */
-export type ProfileCellState = "sold" | "available" | "expired" | "not_for_sale";
+export type ProfileCellState = "sold" | "available" | "expired" | "not_for_sale" | "blocked";
 
 /**
  * The single derivation behind every profile indicator in the application.
@@ -198,6 +223,7 @@ export function profileCellState(
   profile: ProfileRow,
   account: AccountSlots,
   today: Date,
+  accountCanAllocate = true,
 ): ProfileCellState {
   if (!isSellableSlot(profile, account)) {
     return "not_for_sale";
@@ -213,6 +239,19 @@ export function profileCellState(
     profile.status === "expiring_soon"
   ) {
     return "sold";
+  }
+
+  /*
+   * Free, but the account cannot sell it — an open problem, a non-healthy
+   * status, or expired coverage.
+   *
+   * Checked last, and only against a slot that would otherwise read "available".
+   * A sold profile stays sold: the customer still holds it, and repainting their
+   * allocation because the account has a fault would misreport reality. This
+   * changes what the slot is offered as, never what it is.
+   */
+  if (!accountCanAllocate) {
+    return "blocked";
   }
 
   return "available";

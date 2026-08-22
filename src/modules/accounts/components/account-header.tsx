@@ -63,8 +63,17 @@ function formatDateTime(value: Date | string): string {
 export function AccountHeader({
   account,
   remainingValidityDays,
+  hasActiveProblem = false,
 }: {
   account: AccountView;
+  /**
+   * True when a problem in a blocking status is open against this account.
+   *
+   * The problems list sits further down this page, but the badge is what a
+   * worker reads first — and it cannot say "Healthy" while that list is
+   * non-empty. Same rule and same override as the accounts list. M13 §7.
+   */
+  hasActiveProblem?: boolean;
   /**
    * Computed by the service through `accountRemainingDays`, never here.
    *
@@ -90,7 +99,7 @@ export function AccountHeader({
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-page-title break-all text-foreground">{account.email}</h1>
-            <AccountStatusBadge status={account.status} />
+            <AccountStatusBadge status={account.status} hasActiveProblem={hasActiveProblem} />
           </div>
 
           <p className="text-caption text-foreground-subtle">

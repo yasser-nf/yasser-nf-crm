@@ -1,12 +1,12 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseExecutor } from "@/lib/database";
 import {
-  accountStillCoveredSql,
+  accountCanAllocateSql,
   isSellableSlotSql,
   profileIsFreeSql,
 } from "@/lib/drizzle/predicates";
-import { accounts, issues, profiles, type AccountRow, type ProfileRow } from "@/lib/drizzle/schema";
+import { accounts, profiles, type AccountRow, type ProfileRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 import { ok } from "@/utils/result";
 
@@ -40,57 +40,37 @@ export interface AllocationCandidate {
 }
 
 /**
- * The eligibility rule, in one place.
+ * The eligibility rule, in one place — now `lib/drizzle/predicates`.
  *
  * 01_MASTER_RULES.md: only Healthy accounts, only Available profiles, ignore
- * archived, deleted and anything with a problem.
- *
- * `status = 'healthy'` covers every exclusion at once: archived, deleted,
- * payment_problem, incorrect_password, invalid_email and something_went_wrong
- * are all separate values of the same enum. Listing them individually would go
- * stale the moment a status is added.
- */
-/**
- * No open problem is blocking the account.
- *
- * M08. Expressed in SQL rather than filtered afterwards, deliberately: the
- * locking read below takes row locks with SKIP LOCKED, and filtering after the
- * fact would lock profiles this engine then discards — holding stock nobody can
- * allocate until the transaction ends. The count query would be wrong too.
- *
- * This reads the `issues` table through the shared schema, which ADR-005
- * Decision 5 permits a repository to do. It is not a module dependency —
- * importing the Problems module's constant here would be, since ADR-003 forbids
- * a repository importing another module.
- *
- * The status list is therefore written out rather than imported, and a unit
- * test asserts it matches BLOCKING_STATUSES exactly. The duplication is real;
- * the test is what stops it drifting, the same technique used for APP_VERSION.
- */
-const noBlockingProblem = sql`not exists (
-  select 1 from ${issues}
-  where ${issues.accountId} = ${accounts.id}
-    and ${issues.status} in ('open', 'in_progress', 'waiting')
-)`;
-
-/**
- * The eligibility rule, in one place.
+ * archived, deleted and anything with a problem. `status = 'healthy'` covers
+ * most of those at once, because archived, deleted, payment_problem,
+ * incorrect_password, invalid_email and something_went_wrong are all separate
+ * values of the same enum — listing them individually would go stale the moment
+ * a status is added. The open-problem check is the part the enum cannot express.
  *
  * Both the preview and the locking read use this, so Quick Prepare cannot offer
  * a profile the confirmation step would refuse.
  *
- * `accountStillCoveredSql` is the hard cut only. It removes accounts that can
- * serve NOBODY. Whether an account has enough time left for a PARTICULAR
- * request is a different question, decided by the engine against the requested
- * duration, so that a rejection can say "18 days remaining, 90 requested"
- * instead of silently returning nothing.
+ * It used to be composed here, and this was the only place in the codebase that
+ * knew an open problem should withhold an account's stock. The accounts list and
+ * the dashboard counted the same profiles as available, so the two disagreed:
+ * the dashboard advertised four profiles on an account this engine would never
+ * select. Moving the rule to the shared predicate module is what makes that
+ * disagreement impossible rather than merely fixed once.
+ *
+ * The rule is expressed in SQL rather than filtered afterwards, deliberately:
+ * the locking read below takes row locks with SKIP LOCKED, and filtering after
+ * the fact would lock profiles this engine then discards — holding stock nobody
+ * can allocate until the transaction ends. The count query would be wrong too.
+ *
+ * `accountStillCoveredSql` inside it is the hard cut only. It removes accounts
+ * that can serve NOBODY. Whether an account has enough time left for a
+ * PARTICULAR request is a different question, decided by the engine against the
+ * requested duration, so that a rejection can say "18 days remaining, 90
+ * requested" instead of silently returning nothing.
  */
-const eligibleAccount = and(
-  eq(accounts.status, "healthy"),
-  isNull(accounts.deletedAt),
-  noBlockingProblem,
-  accountStillCoveredSql,
-);
+const eligibleAccount = accountCanAllocateSql;
 
 /**
  * A profile row that can be sold right now.

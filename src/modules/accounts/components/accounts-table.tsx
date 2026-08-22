@@ -212,7 +212,10 @@ export function AccountsTable({
                   </Link>
                 </TableCell>
                 <TableCell>
-                  <AccountStatusBadge status={row.account.status} />
+                  <AccountStatusBadge
+                    status={row.account.status}
+                    hasActiveProblem={row.hasActiveProblem}
+                  />
                 </TableCell>
                 <TableCell className={cn("font-medium", healthTone(row.account.healthScore))}>
                   {row.account.healthScore}
@@ -271,7 +274,10 @@ export function AccountsTable({
               >
                 {row.account.email}
               </Link>
-              <AccountStatusBadge status={row.account.status} />
+              <AccountStatusBadge
+                status={row.account.status}
+                hasActiveProblem={row.hasActiveProblem}
+              />
             </div>
 
             <ProfileIndicators indicators={row.indicators} />

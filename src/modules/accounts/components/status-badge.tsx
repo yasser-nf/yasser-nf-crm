@@ -116,14 +116,61 @@ function Badge({ style, className }: { style: BadgeStyle; className?: string }) 
   );
 }
 
+/**
+ * The "Problem" badge.
+ *
+ * Deliberately NOT an `account_status` value. ADR-010 Decision 4 keeps problems
+ * out of `accounts.status`: the column is the persisted operational status and
+ * reporting a problem never writes to it. So an account carrying an open problem
+ * still reads `healthy` in its own row, and the two facts are only ever combined
+ * at read time — the same conjunction `evaluateAllocation` makes.
+ *
+ * Red rather than orange: an active problem blocks allocation outright, exactly
+ * as an unhealthy status does, and the badge should not suggest otherwise.
+ */
+export const ACTIVE_PROBLEM_STYLE: BadgeStyle = {
+  label: "Problem",
+  className: "bg-danger-subtle text-danger",
+  dot: "bg-danger",
+};
+
+/**
+ * Which badge an account shows.
+ *
+ * Exported so the rule can be asserted directly. Keeping it inside the
+ * component would leave the only test of "does an open problem hide Healthy" a
+ * render assertion, and the decision is the part that regresses.
+ */
+export function accountBadgeStyle(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+): BadgeStyle {
+  return hasActiveProblem && status === "healthy"
+    ? ACTIVE_PROBLEM_STYLE
+    : ACCOUNT_STATUS_STYLES[status];
+}
+
 export function AccountStatusBadge({
   status,
+  hasActiveProblem = false,
   className,
 }: {
   status: AccountRow["status"];
+  /**
+   * True when the account has at least one problem in a blocking status.
+   *
+   * Passed in rather than read from `status`, because a problem lives in the
+   * `issues` table and has no column here. It overrides a healthy badge: an
+   * account with an open problem reading "Healthy" is the one thing this badge
+   * must never say.
+   *
+   * A status that is already unhealthy wins, mirroring `evaluateAllocation` —
+   * the more specific reason is the one a worker can act on directly.
+   */
+  hasActiveProblem?: boolean;
   className?: string;
 }) {
-  return <Badge style={ACCOUNT_STATUS_STYLES[status]} className={className} />;
+  return <Badge style={accountBadgeStyle(status, hasActiveProblem)} className={className} />;
 }
 
 export function ProfileStatusBadge({

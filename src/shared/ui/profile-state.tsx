@@ -27,6 +27,11 @@ import { cn } from "@/utils/cn";
  *   not_for_sale  dashed   not stock at all. Dashed outline and reduced
  *                          opacity rather than a fill, so it reads as absent
  *                          rather than as a fourth kind of status.
+ *   blocked       orange   free, but the account cannot sell it right now — an
+ *                          open problem, an unhealthy status, or expired
+ *                          coverage. Orange rather than red: nothing is broken
+ *                          about the slot itself, and it becomes stock again the
+ *                          moment the account does.
  */
 
 /**
@@ -38,13 +43,14 @@ import { cn } from "@/utils/cn";
  * typechecking — the drift is caught at compile time rather than by a missing
  * colour in production.
  */
-export type ProfileSlotState = "sold" | "available" | "expired" | "not_for_sale";
+export type ProfileSlotState = "sold" | "available" | "expired" | "not_for_sale" | "blocked";
 
 export const PROFILE_STATE_STYLES: Record<ProfileSlotState, string> = {
   sold: "border-success/40 bg-success-subtle text-success",
   available: "border-border bg-surface-raised text-foreground-muted",
   expired: "border-danger/40 bg-danger-subtle text-danger",
   not_for_sale: "border-dashed border-border bg-transparent text-foreground-subtle opacity-50",
+  blocked: "border-warning/40 bg-warning-subtle text-warning",
 };
 
 export const PROFILE_STATE_LABELS: Record<ProfileSlotState, string> = {
@@ -52,9 +58,16 @@ export const PROFILE_STATE_LABELS: Record<ProfileSlotState, string> = {
   available: "available",
   expired: "expired allocation",
   not_for_sale: "not for sale",
+  blocked: "blocked by account",
 };
 
-const LEGEND_ORDER: readonly ProfileSlotState[] = ["sold", "available", "expired", "not_for_sale"];
+const LEGEND_ORDER: readonly ProfileSlotState[] = [
+  "sold",
+  "available",
+  "blocked",
+  "expired",
+  "not_for_sale",
+];
 
 /**
  * The legend, so four colours do not have to be guessed.

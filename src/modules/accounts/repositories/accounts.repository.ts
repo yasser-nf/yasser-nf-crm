@@ -17,7 +17,12 @@ import {
   type AccountRow,
   type ProfileRow,
 } from "@/lib/drizzle/schema";
-import { isSellableSlotSql, profileIsFreeSql } from "@/lib/drizzle/predicates";
+import {
+  accountCanAllocateSql,
+  accountIsLiveSql,
+  isSellableSlotSql,
+  profileIsFreeSql,
+} from "@/lib/drizzle/predicates";
 import { NotFoundError, ValidationError } from "@/lib/errors";
 import type { Result } from "@/types/result";
 import { fail } from "@/utils/result";
@@ -45,7 +50,15 @@ import type { AccountInsert, AccountUpdate } from "../validation/account.schema"
 
 const ENTITY = "Account";
 
-const liveOnly = isNull(accounts.deletedAt);
+/**
+ * The account exists.
+ *
+ * Kept as a local name because it reads better at the twelve call sites below,
+ * but the rule itself now lives in lib/drizzle/predicates — the dashboard and
+ * reports aggregates express the same test in raw SQL, and this is the page they
+ * are agreeing with. One definition, two syntaxes.
+ */
+const liveOnly = accountIsLiveSql;
 
 /** Columns the accounts list may be ordered by. */
 export type AccountSortField = "email" | "status" | "healthScore" | "country" | "createdAt";
@@ -348,12 +361,19 @@ export const accountsRepository: AccountsRepository = {
         .select({
           account: accounts,
           /*
-           * Sellable AND free. Both halves are derived: the slot rule from
-           * profile_number against profile_slots, and freedom from the
-           * expiration date rather than the never-written `expired` status.
+           * Sellable AND free AND the account may sell.
+           *
+           * The first two halves are derived: the slot rule from profile_number
+           * against profile_slots, and freedom from the expiration date rather
+           * than the never-written `expired` status.
+           *
+           * The third is account-level and was missing. A row could report four
+           * available profiles while the account carried an open problem, so the
+           * list advertised stock Quick Prepare would never allocate. Same
+           * predicate the engine uses, so the two cannot disagree.
            */
           availableProfiles: sql<number>`count(*) filter (
-            where ${isSellableSlotSql} and ${profileIsFreeSql}
+            where ${isSellableSlotSql} and ${profileIsFreeSql} and ${accountCanAllocateSql}
           )::int`,
           soldProfiles: sql<number>`count(*) filter (
             where ${profiles.status} = 'sold' and not ${profileIsFreeSql}

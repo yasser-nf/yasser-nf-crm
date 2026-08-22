@@ -135,7 +135,11 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         All accounts
       </Link>
 
-      <AccountHeader account={account} remainingValidityDays={remainingValidityDays} />
+      <AccountHeader
+        account={account}
+        remainingValidityDays={remainingValidityDays}
+        hasActiveProblem={activeProblems.length > 0}
+      />
 
       {!accountAllowsAllocation ? (
         <div

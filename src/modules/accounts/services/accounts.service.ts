@@ -24,6 +24,7 @@ import {
 } from "../validation/account.schema";
 import { PROFILES_PER_ACCOUNT } from "../validation/profile.schema";
 import {
+  accountCanAllocate,
   accountRemainingDays,
   canCoverDuration,
   isAccountExpired,
@@ -326,6 +327,14 @@ export interface AccountListRow extends Omit<AccountWithCounts, "account" | "pro
   readonly indicators: readonly ProfileIndicator[];
   /** Days left on the account's own coverage. Null means open-ended. */
   readonly remainingValidityDays: number | null;
+  /**
+   * At least one problem in a blocking status is open against this account.
+   *
+   * Carried on the row because `accounts.status` cannot express it — ADR-010
+   * Decision 4 keeps problems out of that column — and the list has to show the
+   * same state the detail page and Quick Prepare show. M13 §7.
+   */
+  readonly hasActiveProblem: boolean;
 }
 
 /**
@@ -352,20 +361,41 @@ async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountL
   /* One clock for the whole page, so two rows cannot straddle midnight. */
   const today = new Date();
 
+  /*
+   * One query for the whole page, not one per row.
+   *
+   * The list used to ask nothing about problems, so every account rendered its
+   * persisted `accounts.status` and an account with an open payment problem
+   * showed a green "Healthy" badge. `getAccountDetail` had always asked — this
+   * is the list catching up with it, through the same public API, so there is
+   * still exactly one definition of "active".
+   *
+   * A failure here must not blank the accounts list: problems are supplementary
+   * to it. An empty set degrades to today's behaviour rather than an error page.
+   */
+  const flagged = await problemsService.accountsWithActiveProblems(
+    page.value.items.map((row) => row.account.id),
+  );
+  const withProblems = flagged.ok ? flagged.value : new Set<string>();
+
   return ok({
     ...page.value,
     items: page.value.items.map((row) => {
       /* Both dropped on purpose — see AccountView and AccountListRow. */
       const { profiles: rawProfiles, ...rest } = row;
 
+      const rowHasProblem = withProblems.has(row.account.id);
+      const canAllocate = accountCanAllocate(row.account, rowHasProblem, today);
+
       return {
         ...rest,
         account: toAccountView(row.account),
+        hasActiveProblem: rowHasProblem,
         remainingValidityDays: accountRemainingDays(row.account, today),
         indicators: rawProfiles.map((profile) => ({
           profileId: profile.id,
           profileNumber: profile.profileNumber,
-          state: profileCellState(profile, row.account, today),
+          state: profileCellState(profile, row.account, today, canAllocate),
           expirationDate: profile.expirationDate,
         })),
       };
@@ -414,7 +444,12 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
     indicators: profilesResult.value.map((profile) => ({
       profileId: profile.id,
       profileNumber: profile.profileNumber,
-      state: profileCellState(profile, account, today),
+      state: profileCellState(
+        profile,
+        account,
+        today,
+        accountCanAllocate(account, hasActiveProblem, today),
+      ),
       expirationDate: profile.expirationDate,
     })),
     profiles: profilesResult.value.map((profile) =>

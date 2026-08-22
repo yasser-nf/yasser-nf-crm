@@ -40,6 +40,7 @@ const EVERY_DOMAIN_STATE: Record<ProfileCellState, true> = {
   available: true,
   expired: true,
   not_for_sale: true,
+  blocked: true,
 };
 
 /**
@@ -51,6 +52,7 @@ const EVERY_DESIGN_STATE: Record<ProfileSlotState, true> = {
   available: true,
   expired: true,
   not_for_sale: true,
+  blocked: true,
 };
 
 describe("the shared profile-state vocabulary", () => {

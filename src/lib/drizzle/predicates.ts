@@ -1,6 +1,6 @@
-import { sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 
-import { accounts, profiles } from "./schema";
+import { accounts, issues, profiles } from "./schema";
 
 /**
  * Shared SQL predicates for the M13 inventory rules.
@@ -28,6 +28,37 @@ import { accounts, profiles } from "./schema";
  * builder. `rawSellableSlot` is for the handful of raw-SQL aggregate queries in
  * dashboard and reports, which use table aliases the builder never sees.
  */
+
+/**
+ * The account exists.
+ *
+ * Soft delete is the only thing that removes an account from the catalogue, and
+ * `accounts.repository.ts` has always expressed that as `isNull(deletedAt)` —
+ * every list, lookup and mutation there is scoped by it. This is that same rule,
+ * lifted here so the aggregates can state it identically instead of restating
+ * it. The Accounts page is the source of truth for what exists; this constant is
+ * how the rest of the codebase asks it.
+ *
+ * `status = 'deleted'` is deliberately NOT part of the test. Soft delete writes
+ * both the timestamp and the status, so the two agree today — but `deleted_at`
+ * is the column the partial unique index and every repository predicate are
+ * built on, and adding a second condition would invite them to disagree.
+ *
+ * Note what this does not exclude: an `archived` account with a null
+ * `deleted_at` still exists and is still listed on the Accounts page. Archiving
+ * and deleting are different acts.
+ */
+export const accountIsLiveSql: SQL = sql`${accounts.deletedAt} is null`;
+
+/**
+ * The raw-SQL form of `accountIsLiveSql`, where the caller controls the alias.
+ *
+ * Same contract as `rawSellableSlot`: aliases are literals written by this
+ * codebase, never user input.
+ */
+export function rawAccountIsLive(accountAlias: string): SQL {
+  return sql.raw(`${accountAlias}.deleted_at is null`);
+}
 
 /**
  * This profile row is one of the account's sellable slots.
@@ -83,4 +114,61 @@ export function rawAccountStillCovered(accountAlias: string): SQL {
   return sql.raw(
     `(${accountAlias}.valid_until is null or ${accountAlias}.valid_until >= current_date)`,
   );
+}
+
+/**
+ * No problem in a blocking status is open against the account.
+ *
+ * The statuses are written out rather than imported from the Problems module:
+ * ADR-003 forbids a repository depending on another module, and this predicate
+ * is reached from three of them. Reading the `issues` table through the shared
+ * schema is what ADR-005 Decision 5 permits instead. `tests/unit/allocation-
+ * eligibility.test.ts` asserts this list still equals `BLOCKING_STATUSES`, which
+ * is what stops the two drifting apart.
+ *
+ * This moved here from `quick-prepare/repositories/allocation.repository.ts`,
+ * which had the only copy and said so in its own comment. It was correct there
+ * and missing everywhere else — which is precisely how the dashboard came to
+ * advertise stock the allocation engine would never hand out.
+ */
+export const accountHasNoBlockingProblemSql: SQL = sql`not exists (
+  select 1 from ${issues}
+  where ${issues.accountId} = ${accounts.id}
+    and ${issues.status} in ('open', 'in_progress', 'waiting')
+)`;
+
+/**
+ * The account may sell.
+ *
+ * Four conditions, and every one of them is account-level: nothing here looks at
+ * a profile. A profile is stock only when this holds AND the profile's own rules
+ * hold — see `allocatableProfileSql`.
+ *
+ * The Quick Prepare engine has always applied exactly this. The accounts list
+ * and the dashboard applied only the profile half, so an account with an open
+ * problem advertised four available profiles that Quick Prepare would refuse to
+ * allocate. Reporting and allocation now read the same rule.
+ */
+export const accountCanAllocateSql: SQL = and(
+  eq(accounts.status, "healthy"),
+  accountIsLiveSql,
+  accountHasNoBlockingProblemSql,
+  accountStillCoveredSql,
+) as SQL;
+
+/**
+ * The raw-SQL form of `accountCanAllocateSql`, where the caller controls the
+ * alias. Same contract as the other `raw*` helpers.
+ */
+export function rawAccountCanAllocate(accountAlias: string): SQL {
+  return sql.raw(`(
+    ${accountAlias}.status = 'healthy'
+    and ${accountAlias}.deleted_at is null
+    and (${accountAlias}.valid_until is null or ${accountAlias}.valid_until >= current_date)
+    and not exists (
+      select 1 from issues bi
+      where bi.account_id = ${accountAlias}.id
+        and bi.status in ('open', 'in_progress', 'waiting')
+    )
+  )`);
 }
