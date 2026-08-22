@@ -78,9 +78,22 @@ export const customers = pgTable(
 
     /*
      * Guards against an empty or unnormalised key reaching the identity column.
-     * Digits only — the normalised form of +213 663 94 71 16 is 663947116.
+     *
+     * Two shapes are legal, because a customer is reached either by number or
+     * by messaging handle:
+     *
+     *   663947116     Algerian national digits, unchanged since M02
+     *   97471601974   any other country, full international digits
+     *   @rahimou      a username, always lower-cased by the Identifier Engine
+     *
+     * The `@` is what keeps the two namespaces from ever colliding, and the
+     * lower-case-only pattern is what stops @RAHIMOU and @rahimou becoming two
+     * customers.
      */
-    check("customers_phone_normalized_digits", sql`${table.phoneNormalized} ~ '^[0-9]{6,20}$'`),
+    check(
+      "customers_phone_normalized_identity",
+      sql`${table.phoneNormalized} ~ '^([0-9]{6,20}|@[a-z0-9_.]{1,30})$'`,
+    ),
   ],
 );
 

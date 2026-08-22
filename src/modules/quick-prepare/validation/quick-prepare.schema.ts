@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { PROFILES_PER_ACCOUNT } from "@/modules/accounts";
-import { isValidAlgerianPhone } from "@/lib/phone";
+import { isValidCustomerIdentifier } from "@/lib/phone";
 
 /**
  * Quick Prepare input validation.
@@ -42,8 +42,8 @@ export const quickPrepareSchema = z.object({
   phone: z
     .string()
     .trim()
-    .min(1, "Customer phone number is required")
-    .refine(isValidAlgerianPhone, "Use 0663947116, 663947116, +213663947116 or 00213663947116"),
+    .min(1, "Customer phone number or username is required")
+    .refine(isValidCustomerIdentifier, "Enter a valid phone number or username."),
 
   notes: z.string().trim().max(2000).optional(),
 

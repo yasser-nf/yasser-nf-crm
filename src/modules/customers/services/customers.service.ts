@@ -15,7 +15,7 @@ import {
   type ProfileRow,
 } from "@/lib/drizzle/schema";
 import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
-import { formatPhoneForDisplay, normalizePhone } from "@/lib/phone";
+import { formatPhoneForDisplay, normalizeIdentifier } from "@/lib/phone";
 import { auditService, type AuditContext } from "@/modules/audit";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
@@ -69,7 +69,7 @@ async function findOrCreateByPhone(
   phoneInput: string,
   notes?: string | undefined,
 ): Promise<Result<FindOrCreateResult>> {
-  const phone = normalizePhone(phoneInput);
+  const phone = normalizeIdentifier(phoneInput);
 
   if (!phone.ok) {
     return phone;
@@ -205,7 +205,7 @@ async function getDetail(id: string, now = new Date()): Promise<Result<CustomerD
     accountHealthScore: account.healthScore,
   }));
 
-  const phone = normalizePhone(customer.value.phoneOriginal);
+  const phone = normalizeIdentifier(customer.value.phoneOriginal);
 
   return ok({
     customer: customer.value,
