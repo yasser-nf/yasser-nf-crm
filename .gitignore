@@ -47,3 +47,6 @@ next-env.d.ts
 /playwright-report
 /blob-report
 /coverage
+
+.vercel
+.env*

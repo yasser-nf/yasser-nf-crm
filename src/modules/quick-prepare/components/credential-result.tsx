@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { DURATION, EASING } from "@/config/theme";
 import { copyToClipboard, formatPreparedProfile } from "@/lib/clipboard";
 import { formatPhoneForDisplay } from "@/lib/phone";
+import { buildWhatsAppLink, buildWhatsAppMessage } from "@/lib/whatsapp";
 import { Button } from "@/shared/ui/button";
 import type { PreparationResult } from "../services/quick-prepare.service";
 
@@ -44,6 +45,29 @@ export function CredentialResult({
   onStartOver: () => void;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
+
+  /*
+   * Derived from the confirmed result on every render, never held in state.
+   * State would be one more place for a previous preparation to survive into
+   * the next one; this cannot outlive the `result` it was computed from.
+   */
+  const messageInput = {
+    identifier: result.customerPhone,
+    accounts: result.accounts.map((account) => ({
+      email: account.email,
+      password: account.password,
+      profiles: account.profiles.map((profile) => ({
+        profileNumber: profile.profileNumber,
+        pin: profile.pin,
+      })),
+    })),
+    durationDays: result.durationDays,
+    expirationDate: result.expirationDate,
+  };
+
+  const whatsapp = buildWhatsAppLink(messageInput);
+  /* The same text the link would have carried, for the cases that have no link. */
+  const fallbackMessage = buildWhatsAppMessage(messageInput);
 
   async function write(text: string, key: string, label: string) {
     const success = await copyToClipboard(text);
@@ -160,19 +184,89 @@ export function CredentialResult({
         )),
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" asChild className="gap-2">
-          <a href={result.whatsappUrl} target="_blank" rel="noopener noreferrer">
-            <MessageCircle className="size-4" aria-hidden="true" />
-            Open WhatsApp
-          </a>
-        </Button>
+      {/*
+        Composed here, from `result`, and nowhere earlier.
 
-        <Button variant="ghost" onClick={onStartOver} className="gap-2">
-          <RotateCcw className="size-4" aria-hidden="true" />
-          {restartLabel}
-        </Button>
-      </div>
+        `result` is what the confirmed transaction returned, so the link can only
+        describe the account the customer actually received. Quick Replace gets
+        the new one for free: the replaced account is not in the result it
+        renders, so there is nothing stale to pick up by mistake.
+
+        The URL carries the password, which is why it is built in this handler
+        rather than on the server — see lib/whatsapp.
+      */}
+      {whatsapp.available ? (
+        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Button variant="outline" asChild className="h-11 gap-2">
+              <a href={whatsapp.url} target="_blank" rel="noopener noreferrer">
+                <MessageCircle className="size-4" aria-hidden="true" />
+                Open WhatsApp
+              </a>
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => write(whatsapp.message, "message", "Copied the message")}
+              className="h-11 gap-2"
+            >
+              {copied === "message" ? (
+                <Check className="size-4" aria-hidden="true" />
+              ) : (
+                <Copy className="size-4" aria-hidden="true" />
+              )}
+              Copy message
+            </Button>
+          </div>
+
+          <Button variant="ghost" onClick={onStartOver} className="h-11 gap-2">
+            <RotateCcw className="size-4" aria-hidden="true" />
+            {restartLabel}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {/*
+            No button at all rather than one that cannot work. A username is a
+            legitimate identifier here, so this explains rather than complains —
+            and the credentials above stay copyable, which is the whole point.
+          */}
+          <div className="flex items-start gap-3 rounded-md border border-border bg-surface p-4">
+            <MessageCircle
+              className="mt-0.5 size-4 shrink-0 text-foreground-subtle"
+              aria-hidden="true"
+            />
+            <div className="flex flex-col gap-1">
+              <p className="text-card-title text-foreground">WhatsApp unavailable</p>
+              <p className="text-caption text-foreground-muted">
+                {whatsapp.reason === "username"
+                  ? "This customer is saved under a username, which WhatsApp cannot be opened for. Copy the message and send it however you reach them."
+                  : "This customer's phone number cannot be used for WhatsApp. Copy the message and send it another way."}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+            <Button
+              variant="outline"
+              onClick={() => write(fallbackMessage, "message", "Copied the message")}
+              className="h-11 gap-2"
+            >
+              {copied === "message" ? (
+                <Check className="size-4" aria-hidden="true" />
+              ) : (
+                <Copy className="size-4" aria-hidden="true" />
+              )}
+              Copy message
+            </Button>
+
+            <Button variant="ghost" onClick={onStartOver} className="h-11 gap-2">
+              <RotateCcw className="size-4" aria-hidden="true" />
+              {restartLabel}
+            </Button>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

@@ -3,13 +3,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
 import { ArrowLeft, Check, LoaderCircle, TriangleAlert, Zap } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { DURATION, EASING } from "@/config/theme";
 import { ActionError } from "@/lib/errors";
-import { formatPhoneForDisplay, isValidAlgerianPhone, normalizePhone } from "@/lib/phone";
+import { formatPhoneForDisplay, isValidCustomerIdentifier, normalizeIdentifier } from "@/lib/phone";
 import { FormField } from "@/shared/forms/form-field";
 import { CredentialResult } from "./credential-result";
 import { Button } from "@/shared/ui/button";
@@ -37,8 +37,8 @@ const formSchema = z.object({
   phone: z
     .string()
     .trim()
-    .min(1, "Customer phone is required")
-    .refine(isValidAlgerianPhone, "Try 0663947116 or +213663947116"),
+    .min(1, "Customer phone or username is required")
+    .refine(isValidCustomerIdentifier, "Enter a valid phone number or username."),
   notes: z.string().trim().max(2000).optional(),
 });
 
@@ -57,6 +57,9 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
 
   const preview = usePreviewAllocation();
   const confirm = useConfirmPreparation();
+
+  /** Latched for the duration of one confirmation. See `submitConfirmation`. */
+  const inFlight = useRef(false);
 
   const {
     register,
@@ -107,6 +110,22 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
   });
 
   function submitConfirmation() {
+    /*
+     * Two taps on Confirm must not become two allocations.
+     *
+     * `confirm.isPending` already disables the button, but it only takes effect
+     * after React re-renders — a fast double tap can land both clicks inside the
+     * same frame, before the prop changes. This ref flips synchronously, inside
+     * the handler, so the second call returns before reaching the action.
+     *
+     * The server is not relying on it: the locking read takes row locks with
+     * SKIP LOCKED, so a genuine concurrent confirm gets different stock or none.
+     * This is the cheap guard in front of that, not a replacement for it — and
+     * it is a latch rather than a delay, so nothing is ever merely slowed down.
+     */
+    if (inFlight.current) return;
+    inFlight.current = true;
+
     const values = getValues();
 
     confirm.mutate(
@@ -124,6 +143,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
       },
       {
         onSuccess: (data) => {
+          inFlight.current = false;
           setResult(data);
           setStage("done");
         },
@@ -132,12 +152,17 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
          * the review step so the error is visible next to what caused it —
          * bouncing back to the form would hide it.
          */
-        onError: () => setStage("review"),
+        onError: () => {
+          /* Released, so a worker can retry after a refusal they have fixed. */
+          inFlight.current = false;
+          setStage("review");
+        },
       },
     );
   }
 
   function startOver() {
+    inFlight.current = false;
     reset();
     setResult(null);
     preview.reset();
@@ -209,10 +234,10 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
           </div>
 
           <FormField
-            label="Customer phone"
-            inputMode="tel"
+            label="Customer phone or username"
+            inputMode="text"
             placeholder="0663 94 71 16"
-            hint="Any Algerian format. It is normalised automatically."
+            hint="Enter a phone number with country code, or a username (e.g. @username)."
             disabled={preview.isPending}
             error={fieldError("phone")}
             required
@@ -253,6 +278,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         <ReviewStep
           preview={preview.data}
           phone={getValues("phone")}
+          notes={getValues("notes") ?? ""}
           isConfirming={confirm.isPending}
           passwordChanged={passwordChanged}
           onPasswordChangedChange={setPasswordChanged}
@@ -303,6 +329,7 @@ function StockBanner({ available }: { available: number }) {
 function ReviewStep({
   preview,
   phone,
+  notes,
   isConfirming,
   passwordChanged,
   onPasswordChangedChange,
@@ -312,6 +339,7 @@ function ReviewStep({
 }: {
   preview: PreparationPreview;
   phone: string;
+  notes: string;
   isConfirming: boolean;
   passwordChanged: boolean;
   onPasswordChangedChange: (next: boolean) => void;
@@ -319,7 +347,7 @@ function ReviewStep({
   onBack: () => void;
   onConfirm: () => void;
 }) {
-  const normalized = normalizePhone(phone);
+  const normalized = normalizeIdentifier(phone);
 
   const serverError = confirmError instanceof ActionError ? confirmError : null;
   const confirmationError = serverError?.fieldErrors?.["passwordChangeConfirmed"];
@@ -340,12 +368,24 @@ function ReviewStep({
           {preview.accounts.length} account{preview.accounts.length === 1 ? "" : "s"}
         </h2>
 
-        <dl className="flex flex-wrap gap-x-8 gap-y-2 text-caption">
+        {/*
+          Every value the confirmation will actually send.
+
+          `requested` and `durationDays` are read back from the PREVIEW, not from
+          the form: the preview is what the server computed, so if an edit did
+          not reach it these numbers would disagree with the plan below them
+          rather than quietly agreeing with a stale form.
+        */}
+        <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-caption sm:flex sm:flex-wrap">
           <div className="flex flex-col">
             <dt className="text-foreground-subtle">Customer</dt>
-            <dd className="text-foreground">
+            <dd className="min-w-0 truncate text-foreground">
               {normalized.ok ? formatPhoneForDisplay(normalized.value.normalized) : phone}
             </dd>
+          </div>
+          <div className="flex flex-col">
+            <dt className="text-foreground-subtle">Profiles</dt>
+            <dd className="text-foreground">{preview.requested}</dd>
           </div>
           <div className="flex flex-col">
             <dt className="text-foreground-subtle">Duration</dt>
@@ -355,6 +395,12 @@ function ReviewStep({
             <dt className="text-foreground-subtle">Expires</dt>
             <dd className="text-foreground">{preview.expirationDate}</dd>
           </div>
+          {notes ? (
+            <div className="col-span-2 flex flex-col">
+              <dt className="text-foreground-subtle">Notes</dt>
+              <dd className="whitespace-pre-wrap text-foreground">{notes}</dd>
+            </div>
+          ) : null}
         </dl>
 
         <ul className="flex flex-col gap-2">
@@ -456,16 +502,35 @@ function ReviewStep({
         </p>
       ) : null}
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-        <Button variant="ghost" onClick={onBack} disabled={isConfirming} className="gap-2">
+      {/*
+        The way out comes first on a phone.
+
+        This row used to be `flex-col-reverse`, which put "Back" last — a 36px
+        ghost button at the very bottom of a page taller than the viewport. At
+        the position the review actually lands on, its centre point hit the
+        sticky bottom navigation rather than the button, so a tap on it opened
+        Dashboard. It was reachable only by scrolling to the very end first,
+        which is why editing a mistyped duration felt impossible.
+
+        Now: plain `flex-col`, so Back reads above Confirm and Confirm sits
+        nearest the thumb; both full width and 44px, the same touch target the
+        rest of the app meets. Desktop keeps the familiar right-aligned row.
+      */}
+      <div className="flex flex-col gap-3 pb-2 sm:flex-row sm:justify-end sm:pb-0">
+        <Button
+          variant="outline"
+          onClick={onBack}
+          disabled={isConfirming}
+          className="h-11 w-full gap-2 sm:w-auto"
+        >
           <ArrowLeft className="size-4" aria-hidden="true" />
-          Back
+          Back / Edit request
         </Button>
         <Button
           size="lg"
           onClick={onConfirm}
           disabled={isConfirming || blocked}
-          className="h-11 min-w-44 gap-2"
+          className="h-11 w-full gap-2 sm:w-auto sm:min-w-44"
         >
           {isConfirming ? (
             <>
@@ -475,7 +540,7 @@ function ReviewStep({
           ) : (
             <>
               <Check className="size-4" aria-hidden="true" />
-              Confirm allocation
+              Confirm &amp; Prepare
             </>
           )}
         </Button>
