@@ -8,7 +8,7 @@ import { remainingDays } from "@/lib/dates";
 import { customers, profileEvents, profiles } from "@/lib/drizzle/schema";
 import { ValidationError } from "@/lib/errors";
 import { formatPreparation, type AccountCredential } from "@/lib/clipboard";
-import { normalizePhone } from "@/lib/phone";
+import { normalizeIdentifier } from "@/lib/phone";
 import { auditService, type AuditContext } from "@/modules/audit";
 import { customersService } from "@/modules/customers";
 import type { Result } from "@/types/result";
@@ -258,7 +258,7 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
 
   const request: QuickPrepareInput = parsed.data;
 
-  const phone = normalizePhone(request.phone);
+  const phone = normalizeIdentifier(request.phone);
 
   if (!phone.ok) {
     return phone;
