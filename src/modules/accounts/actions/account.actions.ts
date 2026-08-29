@@ -215,6 +215,22 @@ export async function updateProfileAction(accountId: string, profileId: string, 
   );
 }
 
+/**
+ * Returns a sold profile to stock.
+ *
+ * Revalidates the account page so the card, the indicator strip and the sellable
+ * tally all re-render from the database rather than from whatever the browser
+ * was last told. The dashboard and Quick Prepare need no invalidation: both
+ * count from the live tables on every request, so the profile is back in stock
+ * the moment the transaction commits.
+ */
+export async function unassignSaleAction(accountId: string, profileId: string) {
+  return run(
+    async (context) => profilesService.unassignSale(profileId, context),
+    [`${ROUTES.ACCOUNTS}/${accountId}`, ROUTES.ACCOUNTS, ROUTES.DASHBOARD],
+  );
+}
+
 /** Paginated, filtered, sorted accounts list. Read-only, still session-gated. */
 export async function listAccountsAction(filter: AccountFilter) {
   return run(async () => accountsService.listAccounts(filter));

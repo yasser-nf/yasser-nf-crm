@@ -37,6 +37,20 @@ export const PERMISSIONS = {
   /* Allocation */
   PREPARE_SUBSCRIPTIONS: "prepare_subscriptions",
   REPLACE_ACCOUNTS: "replace_accounts",
+  /*
+   * Removing a sale, leaving the customer with nothing.
+   *
+   * Deliberately separate from REPLACE_ACCOUNTS, which Workers hold. Quick
+   * Replace also ends an allocation, but it ends it by moving the customer onto
+   * a working account — they keep the days they paid for. This ends it outright,
+   * and it is the only action in the CRM that takes a live subscription away
+   * without giving anything back.
+   *
+   * Absent from WORKER_PERMISSIONS, so it is Super Admin only. The allow-list
+   * below means that is the default for anything new rather than something that
+   * had to be remembered.
+   */
+  UNASSIGN_SALES: "unassign_sales",
 
   /* Customers */
   VIEW_CUSTOMERS: "view_customers",

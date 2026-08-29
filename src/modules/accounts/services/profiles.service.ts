@@ -2,9 +2,10 @@ import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
 
+import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import { databaseAdapter } from "@/lib/database";
 import { accounts, profiles, type ProfileEventRow, type ProfileRow } from "@/lib/drizzle/schema";
-import { ValidationError } from "@/lib/errors";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
 import { customersService } from "@/modules/customers";
 import type { Result } from "@/types/result";
@@ -375,4 +376,82 @@ async function listForAccount(accountId: string): Promise<Result<readonly Profil
   return profilesRepository.listByAccount(accountId);
 }
 
-export const profilesService = { updateProfile, listForAccount } as const;
+/**
+ * Returns a sold profile to stock.
+ *
+ * The customer keeps their record and their history; the slot keeps its number
+ * and its account. What is removed is the allocation joining them — the
+ * customer, worker, sale date, expiration and duration on the profile row.
+ *
+ * Nothing here decides what "sold" means or how a profile is freed. The
+ * repository owns both, under one transaction with the row locked, so this
+ * function is authorization, translation and the audit trail.
+ *
+ * Deliberately NOT reusing Quick Replace's release, which frees a profile only
+ * as the first half of moving a customer somewhere else and is meaningless
+ * without the second.
+ */
+async function unassignSale(profileId: string, context: AuditContext): Promise<Result<ProfileRow>> {
+  const actor = context.actor;
+
+  if (!actor) {
+    return fail(new ForbiddenError("No signed-in user for an unassign operation"));
+  }
+
+  /*
+   * Super Admin only — see PERMISSIONS.UNASSIGN_SALES. Checked here rather than
+   * in the action, because the service is the boundary every caller crosses and
+   * a second entry point must not be able to skip it.
+   */
+  if (!roleHasPermission(actor.role, PERMISSIONS.UNASSIGN_SALES)) {
+    return fail(
+      new ForbiddenError(`Role ${actor.role} may not unassign a sale`, {
+        userMessage: "You do not have permission to remove a sale from a profile.",
+      }),
+    );
+  }
+
+  const released = await profilesRepository.releaseSale(profileId, actor.id);
+
+  if (!released.ok) {
+    return released;
+  }
+
+  if (released.value.outcome === "not_found") {
+    return fail(
+      new NotFoundError("Profile not found for unassign", {
+        userMessage: "That profile no longer exists.",
+      }),
+    );
+  }
+
+  /*
+   * The concurrency answer. Somebody freed it first, or it was never sold —
+   * either way the state moved under the operator and saying so is more useful
+   * than a generic failure.
+   */
+  if (released.value.outcome === "not_sold") {
+    return fail(
+      new ConflictError("Profile is not currently sold", {
+        userMessage:
+          "This profile is no longer sold — it may have already been updated by someone else.",
+      }),
+    );
+  }
+
+  const { before, after } = released.value;
+
+  /*
+   * `before` carries the allocation that was removed, which is the only record
+   * of it once the row is cleared. recordOrWarn, like every other mutation
+   * here: a failed audit write must not roll back a completed release.
+   */
+  await auditService.recordOrWarn(
+    { entity: "profile", entityId: profileId, action: "update", before, after },
+    context,
+  );
+
+  return ok(after);
+}
+
+export const profilesService = { updateProfile, listForAccount, unassignSale } as const;

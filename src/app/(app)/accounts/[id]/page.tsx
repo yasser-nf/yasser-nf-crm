@@ -4,6 +4,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ROUTES } from "@/config/constants";
+import { PERMISSIONS, roleHasPermission } from "@/config/roles";
+import { getCurrentUser } from "@/lib/auth/session";
 import { NotFoundError } from "@/lib/errors";
 import {
   AccountHeader,
@@ -123,6 +125,15 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
     remainingValidityDays,
   } = detail.value;
 
+  /*
+   * Decided here so the control is absent, not merely disabled, for anyone who
+   * may not use it. `profilesService.unassignSale` checks the same permission —
+   * this governs what is offered, never what is allowed.
+   */
+  const actor = await getCurrentUser();
+  const canUnassignSale =
+    actor !== null && roleHasPermission(actor.role, PERMISSIONS.UNASSIGN_SALES);
+
   const timeline = await accountsService.getAccountTimeline(id, { limit: 25 });
 
   return (
@@ -232,6 +243,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
               key={allocation.profile.id}
               allocation={allocation}
               accountId={account.id}
+              canUnassignSale={canUnassignSale}
               /*
                * Customer names arrive with the Customers module. Showing the raw
                * id would be worse than showing nothing.

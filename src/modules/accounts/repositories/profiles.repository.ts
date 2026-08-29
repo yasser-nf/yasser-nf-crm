@@ -18,6 +18,7 @@ import {
 } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 import { ok } from "@/utils/result";
+
 import type { ProfileEventInsert, ProfileUpdate } from "../validation/profile.schema";
 
 /**
@@ -34,6 +35,14 @@ import type { ProfileEventInsert, ProfileUpdate } from "../validation/profile.sc
  */
 
 const ENTITY = "Profile";
+/**
+ * Statuses that mean a customer is holding this slot.
+ *
+ * `expired` is not here. Its allocation has run out but the row still carries
+ * the customer for history, and the schema leaves that case unconstrained on
+ * purpose — clearing it is a business rule no document states.
+ */
+const HELD_STATUSES: readonly ProfileRow["status"][] = ["sold", "reserved", "expiring_soon"];
 
 export interface ProfileFilter extends PaginationInput {
   readonly accountId?: string | undefined;
@@ -73,7 +82,32 @@ export interface ProfilesRepository {
     pagination?: PaginationInput,
   ): Promise<Result<Page<ProfileEventRow>>>;
   countByAccount(accountId: string): Promise<Result<number>>;
+  /**
+   * Returns a held profile to stock, atomically.
+   *
+   * Clears the allocation rather than only the status. `profiles_held_requires_
+   * customer` refuses an `available` row that still points at a customer, so a
+   * status-only write would be rejected by the database — which is the correct
+   * outcome, and the reason the whole allocation must go together.
+   *
+   * The profile row, its number and its account are untouched. The customer row
+   * is untouched. The event is written in the same transaction, so history
+   * cannot exist without the change or the change without its history.
+   */
+  releaseSale(id: string, actorId: string | null): Promise<Result<ReleaseSaleOutcome>>;
 }
+
+/**
+ * What happened when a release was attempted.
+ *
+ * Three outcomes rather than a boolean, because the caller needs to tell a
+ * vanished profile from one somebody else already freed — those are different
+ * sentences for the operator.
+ */
+export type ReleaseSaleOutcome =
+  | { readonly outcome: "released"; readonly before: ProfileRow; readonly after: ProfileRow }
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "not_sold"; readonly current: ProfileRow };
 
 function buildFilter(filter: ProfileFilter) {
   const conditions = [];
@@ -265,5 +299,90 @@ export const profilesRepository: ProfilesRepository = {
     }
 
     return ok(readCount(result.value));
+  },
+
+  async releaseSale(id, actorId) {
+    return databaseAdapter.transaction("profiles.releaseSale", async (executor) => {
+      /*
+       * `for update` is what makes two admins safe.
+       *
+       * Both reach this line; the first takes the row lock and the second waits
+       * on it. When the second proceeds it re-reads the row it just waited for
+       * and sees `available`, so it returns `not_sold` rather than clearing an
+       * allocation that has since been made again. Reading before locking would
+       * let both pass the status check and the second would silently undo work
+       * done between them.
+       */
+      const locked = await executor
+        .select()
+        .from(profiles)
+        .where(eq(profiles.id, id))
+        .for("update")
+        .limit(1);
+
+      const before = locked[0];
+
+      if (!before) {
+        return { outcome: "not_found" as const };
+      }
+
+      if (!HELD_STATUSES.includes(before.status)) {
+        return { outcome: "not_sold" as const, current: before };
+      }
+
+      /*
+       * The whole allocation, not the status alone. An `available` row that
+       * still names a customer is refused by `profiles_held_requires_customer`,
+       * and would double-sell if it were not.
+       *
+       * `profileNumber`, `accountId`, `profileName` and `pin` are deliberately
+       * absent: the slot keeps its identity and its place on the account.
+       */
+      const updated = await executor
+        .update(profiles)
+        .set({
+          status: "available",
+          customerId: null,
+          workerId: null,
+          saleDate: null,
+          expirationDate: null,
+          durationDays: null,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(profiles.id, id))
+        .returning();
+
+      const after = updated[0];
+
+      if (!after) {
+        return { outcome: "not_found" as const };
+      }
+
+      /*
+       * History, in the same transaction. `customer_changed` is the existing
+       * label for an allocation moving off a profile — the enum has no
+       * "unassigned", and 01_MASTER_RULES.md forbids inventing vocabulary. The
+       * metadata says which sale ended and for whom, so the timeline can render
+       * it without consulting a row that no longer holds any of it.
+       */
+      await executor.insert(profileEvents).values({
+        accountId: before.accountId,
+        profileId: before.id,
+        eventType: "customer_changed",
+        userId: actorId,
+        customerId: before.customerId,
+        metadata: {
+          outcome: "sale_unassigned",
+          profileNumber: before.profileNumber,
+          previousStatus: before.status,
+          previousCustomerId: before.customerId,
+          previousSaleDate: before.saleDate,
+          previousExpirationDate: before.expirationDate,
+          previousDurationDays: before.durationDays,
+        },
+      });
+
+      return { outcome: "released" as const, before, after };
+    });
   },
 };

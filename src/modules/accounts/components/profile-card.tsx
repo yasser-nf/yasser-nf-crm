@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Ban, LoaderCircle, Pencil, User } from "lucide-react";
+import { Ban, LoaderCircle, Pencil, TriangleAlert, User, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -14,6 +14,16 @@ import type { ProfileAllocation } from "../services/accounts.service";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -21,7 +31,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { Textarea } from "@/shared/ui/textarea";
-import { useUpdateProfile } from "../hooks/use-account-mutations";
+import { useUnassignSale, useUpdateProfile } from "../hooks/use-account-mutations";
 import { ProfileStatusBadge } from "./status-badge";
 
 /**
@@ -67,19 +77,36 @@ function formatDate(value: string | null): string {
   return value ? new Date(value).toLocaleDateString(undefined, { dateStyle: "medium" }) : "—";
 }
 
+/** Statuses that mean a customer is holding this slot. Mirrors the repository. */
+const HELD_STATUSES: readonly ProfileRow["status"][] = ["sold", "reserved", "expiring_soon"];
+
 export function ProfileCard({
   allocation,
   accountId,
   customerLabel,
+  canUnassignSale = false,
   index,
 }: {
   allocation: ProfileAllocation;
   accountId: string;
   customerLabel: string | null;
+  /**
+   * Whether the signed-in user may remove a sale.
+   *
+   * Decided on the server and passed down, so the button is absent rather than
+   * disabled for everyone else. The service checks the same permission — this
+   * only stops the control being offered, it is not what enforces it.
+   */
+  canUnassignSale?: boolean;
   index: number;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [confirmingUnassign, setConfirmingUnassign] = useState(false);
   const { profile, isAllocatable, blockedReason } = allocation;
+  const unassign = useUnassignSale(accountId, profile.id);
+
+  /* Only a slot somebody is actually holding can have its sale removed. */
+  const isHeld = HELD_STATUSES.includes(profile.status);
 
   return (
     <motion.article
@@ -165,15 +192,65 @@ export function ProfileCard({
         </p>
       ) : null}
 
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => setIsEditing(true)}
-        className="mt-auto gap-2 self-start"
-      >
-        <Pencil className="size-3.5" aria-hidden="true" />
-        Edit profile
-      </Button>
+      <div className="mt-auto flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIsEditing(true)}
+          className="h-9 w-full gap-2 sm:w-auto"
+        >
+          <Pencil className="size-3.5" aria-hidden="true" />
+          Edit profile
+        </Button>
+
+        {/* Absent on an available slot: there is no sale to remove. */}
+        {isHeld && canUnassignSale ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmingUnassign(true)}
+            disabled={unassign.isPending}
+            className="h-9 w-full gap-2 text-danger sm:w-auto"
+          >
+            {unassign.isPending ? (
+              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Undo2 className="size-3.5" aria-hidden="true" />
+            )}
+            Unassign sale
+          </Button>
+        ) : null}
+      </div>
+
+      <AlertDialog open={confirmingUnassign} onOpenChange={setConfirmingUnassign}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="size-5 text-danger" aria-hidden="true" />
+              Are you sure you want to remove the sale from this profile?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Profile {profile.profileNumber} becomes available again straight away and can be sold
+              to someone else. The customer loses access to it, and any days they had left are not
+              carried anywhere — use Quick Replace instead if they should keep them.
+              <br />
+              <br />
+              The customer record and the account are kept, and this is recorded in the account
+              history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unassign.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => unassign.mutate()}
+              disabled={unassign.isPending}
+              className="bg-danger text-white hover:bg-danger/90"
+            >
+              {unassign.isPending ? "Removing…" : "Remove sale"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <EditProfileDialog
         profile={profile}

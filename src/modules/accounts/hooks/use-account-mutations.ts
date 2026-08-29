@@ -13,6 +13,7 @@ import {
   restoreAccountAction,
   revealAccountPasswordAction,
   updateAccountAction,
+  unassignSaleAction,
   updateProfileAction,
   type ActionResult,
 } from "../actions/account.actions";
@@ -151,6 +152,35 @@ export function useUpdateProfile(accountId: string, profileId: string) {
       if (!(error instanceof ActionError) || !error.fieldErrors) {
         toast.error("Could not update profile", { description: error.userMessage });
       }
+    },
+  });
+}
+
+/**
+ * Returns a sold profile to stock.
+ *
+ * `router.refresh()` rather than a cache invalidation: the account page is a
+ * Server Component, so the authoritative numbers — the card, the indicator
+ * strip, the sellable tally — are re-rendered on the server from the database
+ * the action already revalidated.
+ *
+ * The conflict case gets its own wording. "No longer sold" is not a failure the
+ * operator caused; it means somebody else got there first, and the page they are
+ * looking at is simply out of date.
+ */
+export function useUnassignSale(accountId: string, profileId: string) {
+  const router = useRouter();
+
+  return useMutation({
+    mutationFn: async () => unwrapAction(await unassignSaleAction(accountId, profileId)),
+    onSuccess: () => {
+      toast.success("Sale removed", { description: "The profile is available again." });
+      router.refresh();
+    },
+    onError: (error) => {
+      toast.error("Could not remove the sale", { description: error.userMessage });
+      /* Whatever happened, the server knows the truth about this profile. */
+      router.refresh();
     },
   });
 }
