@@ -13,6 +13,10 @@ import {
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Result, VoidResult } from "@/types/result";
 import { fail, ok } from "@/utils/result";
+import {
+  buildChangePasswordSchema,
+  type ChangePasswordInput,
+} from "../validation/change-password.schema";
 import { loginSchema, type LoginInput } from "../validation/login.schema";
 
 /**
@@ -159,4 +163,129 @@ async function signOut(): Promise<VoidResult> {
   }
 }
 
-export const authService = { signIn, signOut } as const;
+/**
+ * Changes the signed-in user's own password.
+ *
+ * Two steps, and the first is the one Supabase does not do for you.
+ * `updateUser({ password })` succeeds on any valid session without ever asking
+ * what the old password was — so on an unattended, unlocked machine anyone
+ * could set a new one. Re-authenticating first is what makes "current password"
+ * mean something, and it is the only way to verify it: there is no compare-only
+ * endpoint, and the hash is never exposed to a client.
+ *
+ * The re-authentication issues a fresh session for the same user, which is
+ * harmless and is what Supabase's own guidance describes.
+ *
+ * NOTHING HERE IS STORED OR LOGGED. The two passwords exist as arguments and in
+ * the request body. No console call, no logger, no field on any error, and the
+ * validation error paths carry field names only — never values.
+ */
+async function changePassword(
+  input: ChangePasswordInput,
+  context: { readonly email: string; readonly passwordMinLength: number },
+): Promise<VoidResult> {
+  /* Revalidated against the SAME policy the form used. */
+  const parsed = buildChangePasswordSchema(context.passwordMinLength).safeParse(input);
+
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+
+    for (const issue of parsed.error.issues) {
+      const field = issue.path[0];
+      if (typeof field === "string" && !(field in fieldErrors)) {
+        fieldErrors[field] = issue.message;
+      }
+    }
+
+    return fail(new ValidationError("Change password input failed validation", { fieldErrors }));
+  }
+
+  if (!isSupabaseConfigured()) {
+    return fail(
+      new ConfigurationError("Supabase is not configured", {
+        userMessage: NOT_CONFIGURED_MESSAGE,
+      }),
+    );
+  }
+
+  try {
+    const supabase = createSupabaseBrowserClient();
+
+    /*
+     * There must already be a session. Checked explicitly rather than left to
+     * `updateUser` to refuse, so an expired session says so plainly instead of
+     * failing as though the password were wrong.
+     */
+    const { data: session } = await supabase.auth.getSession();
+
+    if (!session.session) {
+      return fail(
+        new UnauthorizedError("No active session for a password change", {
+          userMessage: "Your session has expired. Sign in again to change your password.",
+        }),
+      );
+    }
+
+    /* Step 1: prove the current password. */
+    const { error: reauthError } = await supabase.auth.signInWithPassword({
+      email: context.email,
+      password: parsed.data.currentPassword,
+    });
+
+    if (reauthError) {
+      /*
+       * A rejected re-authentication here means one thing only — the current
+       * password is wrong. The email is the session's own, so the ambiguity
+       * `translateAuthError` protects against on the login form does not exist,
+       * and naming the field puts the message where the mistake is.
+       */
+      if (reauthError.status === AUTH_STATUS.INVALID_CREDENTIALS) {
+        /*
+         * A ValidationError rather than an UnauthorizedError, deliberately.
+         * The session is valid — the user is who they say they are; what failed
+         * is a value they typed into a field. That is a validation failure, and
+         * it is also the only error class carrying `fieldErrors`, which is what
+         * puts the message under the right input.
+         */
+        return fail(
+          new ValidationError("Current password rejected", {
+            cause: reauthError,
+            userMessage: "Your current password is not correct.",
+            fieldErrors: { currentPassword: "This is not your current password" },
+          }),
+        );
+      }
+
+      return fail(translateAuthError(reauthError));
+    }
+
+    /* Step 2: only now set the new one. */
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: parsed.data.newPassword,
+    });
+
+    if (updateError) {
+      /*
+       * Supabase enforces its own project-level policy on top of ours, and its
+       * wording is the only place that knows what it refused.
+       */
+      if (updateError.status === AUTH_STATUS.INVALID_CREDENTIALS) {
+        return fail(
+          new ValidationError("Supabase refused the new password", {
+            cause: updateError,
+            userMessage: updateError.message,
+            fieldErrors: { newPassword: updateError.message },
+          }),
+        );
+      }
+
+      return fail(translateAuthError(updateError));
+    }
+
+    return ok();
+  } catch (caught) {
+    return fail(toAppError(caught));
+  }
+}
+
+export const authService = { signIn, signOut, changePassword } as const;

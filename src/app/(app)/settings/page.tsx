@@ -2,8 +2,10 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { USER_ROLES } from "@/config/roles";
+import { ChangePasswordForm } from "@/modules/auth";
 import { getCurrentUser } from "@/lib/auth/session";
 import {
+  configurationService,
   SettingsCategoryGrid,
   SettingsHistory,
   SettingsSearch,
@@ -52,11 +54,43 @@ export default async function SettingsPage({
         <Categories />
       </Suspense>
 
+      {/*
+        Your own credentials, not the organisation's configuration.
+
+        Deliberately here rather than under Security: that category is Super
+        Admin only and holds org-wide policy, while changing your own password
+        is something every signed-in user must be able to do. The form still
+        OBEYS the Security policy — it reads passwordMinLength from it.
+      */}
+      <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+        <AccountSecurity />
+      </Suspense>
+
       <Suspense fallback={<Skeleton className="h-32 w-full" />}>
         <History />
       </Suspense>
     </div>
   );
+}
+
+/**
+ * The signed-in user's own password.
+ *
+ * `passwordMinLength` is resolved on the server, from the same configuration the
+ * Security page edits, and handed to the client form — which passes it back to
+ * the service for revalidation. One policy, one number, three places that agree.
+ */
+async function AccountSecurity() {
+  const actor = await getCurrentUser();
+
+  /* No session, nothing to change. The layout already says so. */
+  if (!actor) {
+    return null;
+  }
+
+  const security = await configurationService.security();
+
+  return <ChangePasswordForm email={actor.email} passwordMinLength={security.passwordMinLength} />;
 }
 
 async function SearchResults({ query }: { query: string }) {

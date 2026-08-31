@@ -8,8 +8,14 @@
  * The service is exported for cross-module use; the repository layer (when this
  * module gains one) never will be.
  */
+export { ChangePasswordForm } from "./components/change-password-form";
 export { LoginForm } from "./components/login-form";
+export { useChangePassword } from "./hooks/use-change-password";
 export { useLogin } from "./hooks/use-login";
 export { useLogout } from "./hooks/use-logout";
 export { authService } from "./services/auth.service";
+export {
+  buildChangePasswordSchema,
+  type ChangePasswordInput,
+} from "./validation/change-password.schema";
 export { loginSchema, type LoginInput } from "./validation/login.schema";
