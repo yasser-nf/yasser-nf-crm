@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { LoaderCircle, RefreshCcw, Search, TriangleAlert } from "lucide-react";
+import { RefreshCcw, Search, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -593,18 +593,14 @@ export function QuickReplaceScreen() {
         />
 
         <div className="flex justify-end">
-          <Button type="submit" disabled={lookup.isPending} className="min-w-36 gap-2">
-            {lookup.isPending ? (
-              <>
-                <LoaderCircle className="animate-spin" aria-hidden="true" />
-                Looking up
-              </>
-            ) : (
-              <>
-                <Search className="size-4" aria-hidden="true" />
-                Look up
-              </>
-            )}
+          <Button
+            type="submit"
+            loading={lookup.isPending}
+            loadingLabel="Looking up"
+            className="min-w-36 gap-2"
+          >
+            <Search className="size-4" aria-hidden="true" />
+            Look up
           </Button>
         </div>
       </form>
@@ -687,22 +683,16 @@ export function QuickReplaceScreen() {
                     <div className="flex items-center justify-end">
                       <Button
                         onClick={() => submitConfirmation(selectedCandidate, replacementAccountId)}
+                        loading={confirm.isPending}
+                        loadingLabel="Replacing"
+                        /* The password gate is a precondition, not a pending request. */
                         disabled={
                           confirm.isPending || (preview.requiresPasswordChange && !passwordChanged)
                         }
                         className="min-w-48 gap-2"
                       >
-                        {confirm.isPending ? (
-                          <>
-                            <LoaderCircle className="animate-spin" aria-hidden="true" />
-                            Replacing
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCcw className="size-4" aria-hidden="true" />
-                            Confirm replacement
-                          </>
-                        )}
+                        <RefreshCcw className="size-4" aria-hidden="true" />
+                        Confirm replacement
                       </Button>
                     </div>
                   </section>

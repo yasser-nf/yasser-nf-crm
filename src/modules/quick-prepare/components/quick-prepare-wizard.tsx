@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, LoaderCircle, TriangleAlert, Zap } from "lucide-react";
+import { ArrowLeft, Check, TriangleAlert, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -258,18 +258,15 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
             />
           </div>
 
-          <Button type="submit" size="lg" disabled={preview.isPending} className="h-11 gap-2">
-            {preview.isPending ? (
-              <>
-                <LoaderCircle className="animate-spin" aria-hidden="true" />
-                Finding stock
-              </>
-            ) : (
-              <>
-                <Zap className="size-4" aria-hidden="true" />
-                Find best accounts
-              </>
-            )}
+          <Button
+            type="submit"
+            size="lg"
+            loading={preview.isPending}
+            loadingLabel="Finding stock"
+            className="h-11 gap-2"
+          >
+            <Zap className="size-4" aria-hidden="true" />
+            Find best accounts
           </Button>
         </motion.form>
       ) : null}
@@ -529,20 +526,14 @@ function ReviewStep({
         <Button
           size="lg"
           onClick={onConfirm}
+          loading={isConfirming}
+          loadingLabel="Allocating"
+          /* `blocked` is the password gate, not a pending request. */
           disabled={isConfirming || blocked}
           className="h-11 w-full gap-2 sm:w-auto sm:min-w-44"
         >
-          {isConfirming ? (
-            <>
-              <LoaderCircle className="animate-spin" aria-hidden="true" />
-              Allocating
-            </>
-          ) : (
-            <>
-              <Check className="size-4" aria-hidden="true" />
-              Confirm &amp; Prepare
-            </>
-          )}
+          <Check className="size-4" aria-hidden="true" />
+          Confirm &amp; Prepare
         </Button>
       </div>
     </motion.div>

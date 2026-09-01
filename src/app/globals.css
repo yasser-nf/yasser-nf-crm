@@ -274,3 +274,38 @@
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
 }
+
+/*
+ * The navigation progress sweep.
+ *
+ * An indeterminate bar: nothing knows how far a navigation has got, and a
+ * percentage would be invented. It travels left to right and repeats until the
+ * destination is ready.
+ */
+@keyframes navsweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+/*
+ * Reduced motion still needs to SEE it.
+ *
+ * The global reduced-motion rule above stops animations after one iteration,
+ * which would park the sweep off-screen and leave the indicator invisible for
+ * exactly the users least able to guess that something is happening. So the
+ * track itself becomes a visible bar instead, and only the movement is dropped.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [role="status"][aria-label="Loading page"] {
+    background-color: var(--color-primary);
+    opacity: 0.6;
+  }
+
+  [role="status"][aria-label="Loading page"] > span {
+    display: none;
+  }
+}

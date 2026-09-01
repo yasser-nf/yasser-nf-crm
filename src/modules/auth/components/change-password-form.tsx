@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Check, Eye, EyeOff, KeyRound, LoaderCircle, TriangleAlert } from "lucide-react";
+import { Check, Eye, EyeOff, KeyRound, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -174,20 +174,12 @@ export function ChangePasswordForm({
         <Button
           type="submit"
           /* Disabled while in flight: one submission, not two. */
-          disabled={change.isPending}
+          loading={change.isPending}
+          loadingLabel="Changing"
           className="h-11 w-full gap-2 sm:w-auto sm:self-start"
         >
-          {change.isPending ? (
-            <>
-              <LoaderCircle className="animate-spin" aria-hidden="true" />
-              Changing
-            </>
-          ) : (
-            <>
-              <KeyRound className="size-4" aria-hidden="true" />
-              Change password
-            </>
-          )}
+          <KeyRound className="size-4" aria-hidden="true" />
+          Change password
         </Button>
       </form>
     </section>

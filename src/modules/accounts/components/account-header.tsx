@@ -7,7 +7,6 @@ import {
   Copy,
   Eye,
   EyeOff,
-  LoaderCircle,
   Pencil,
   Trash2,
   TriangleAlert,
@@ -118,18 +117,26 @@ export function AccountHeader({
             <Button
               variant="outline"
               onClick={() => restore.mutate()}
-              disabled={restore.isPending}
+              loading={restore.isPending}
+              loadingLabel="Restoring"
               className="gap-2"
             >
-              {restore.isPending ? (
-                <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <ArchiveRestore className="size-4" aria-hidden="true" />
-              )}
+              <ArchiveRestore className="size-4" aria-hidden="true" />
               Restore
             </Button>
           ) : (
-            <Button variant="outline" onClick={() => setConfirmingArchive(true)} className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setConfirmingArchive(true)}
+              /*
+               * The confirmation dialog closes the moment it is confirmed, so a
+               * spinner on its action button would never be seen. The trigger
+               * outlives the dialog and is where the wait is actually visible.
+               */
+              loading={archive.isPending}
+              loadingLabel="Archiving"
+              className="gap-2"
+            >
               <Archive className="size-4" aria-hidden="true" />
               Archive
             </Button>
@@ -138,6 +145,8 @@ export function AccountHeader({
           <Button
             variant="ghost"
             onClick={() => setConfirmingDelete(true)}
+            loading={remove.isPending}
+            loadingLabel="Deleting"
             className="gap-2 text-danger hover:bg-danger-subtle hover:text-danger"
           >
             <Trash2 className="size-4" aria-hidden="true" />
@@ -333,14 +342,10 @@ function PasswordField({ accountId }: { accountId: string }) {
             variant="outline"
             size="icon"
             aria-label="Reveal password"
-            disabled={reveal.isPending}
+            loading={reveal.isPending}
             onClick={() => reveal.mutate(undefined, { onSuccess: setPassword })}
           >
-            {reveal.isPending ? (
-              <LoaderCircle className="animate-spin" aria-hidden="true" />
-            ) : (
-              <Eye aria-hidden="true" />
-            )}
+            <Eye aria-hidden="true" />
           </Button>
         ) : (
           <>

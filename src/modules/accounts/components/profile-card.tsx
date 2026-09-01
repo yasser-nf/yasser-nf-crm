@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Ban, LoaderCircle, Pencil, TriangleAlert, User, Undo2 } from "lucide-react";
+import { Ban, Pencil, TriangleAlert, User, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -209,14 +209,11 @@ export function ProfileCard({
             variant="outline"
             size="sm"
             onClick={() => setConfirmingUnassign(true)}
-            disabled={unassign.isPending}
+            loading={unassign.isPending}
+            loadingLabel="Removing"
             className="h-9 w-full gap-2 text-danger sm:w-auto"
           >
-            {unassign.isPending ? (
-              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <Undo2 className="size-3.5" aria-hidden="true" />
-            )}
+            <Undo2 className="size-3.5" aria-hidden="true" />
             Unassign sale
           </Button>
         ) : null}
@@ -490,15 +487,13 @@ function EditProfileDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={update.isPending} className="min-w-28">
-              {update.isPending ? (
-                <>
-                  <LoaderCircle className="animate-spin" aria-hidden="true" />
-                  Saving
-                </>
-              ) : (
-                "Save"
-              )}
+            <Button
+              type="submit"
+              loading={update.isPending}
+              loadingLabel="Saving"
+              className="min-w-28"
+            >
+              Save
             </Button>
           </div>
         </form>

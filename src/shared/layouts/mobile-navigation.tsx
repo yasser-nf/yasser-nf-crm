@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+
+import { NavigationProgress } from "@/shared/ui/navigation-progress";
 import { usePathname } from "next/navigation";
 
 import { MOBILE_NAVIGATION_ITEMS } from "@/config/navigation";
@@ -32,13 +34,15 @@ export function MobileNavigation() {
             href={item.href}
             aria-current={isActive ? "page" : undefined}
             className={cn(
-              "flex min-h-14 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors",
+              "relative flex min-h-14 flex-1 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors",
               "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none focus-visible:ring-inset",
               isActive ? "text-primary" : "text-foreground-subtle hover:text-foreground",
             )}
           >
             <Icon className="size-5" aria-hidden="true" />
             <span className="text-center text-[0.625rem] leading-tight">{item.label}</span>
+
+            <NavigationProgress />
           </Link>
         );
       })}

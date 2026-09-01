@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Eye, EyeOff, LoaderCircle, TriangleAlert } from "lucide-react";
+import { Eye, EyeOff, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -137,15 +137,14 @@ export function LoginForm() {
         </motion.div>
       ) : null}
 
-      <Button type="submit" size="lg" disabled={isSubmitting} className="h-11 w-full">
-        {isSubmitting ? (
-          <>
-            <LoaderCircle className="animate-spin" aria-hidden="true" />
-            Signing in
-          </>
-        ) : (
-          "Sign in"
-        )}
+      <Button
+        type="submit"
+        size="lg"
+        loading={isSubmitting}
+        loadingLabel="Signing in"
+        className="h-11 w-full"
+      >
+        Sign in
       </Button>
     </motion.form>
   );

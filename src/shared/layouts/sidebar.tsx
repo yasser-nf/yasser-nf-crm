@@ -3,6 +3,8 @@
 import { motion } from "framer-motion";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
+
+import { NavigationProgress } from "@/shared/ui/navigation-progress";
 import { usePathname } from "next/navigation";
 
 import { APP_NAME, ROUTES } from "@/config/constants";
@@ -58,6 +60,8 @@ function SidebarLink({ item, isCollapsed }: { item: NavigationItem; isCollapsed:
       <Icon className="size-4 shrink-0" aria-hidden="true" />
 
       {!isCollapsed ? <span className="truncate">{item.label}</span> : null}
+
+      <NavigationProgress />
     </Link>
   );
 }
