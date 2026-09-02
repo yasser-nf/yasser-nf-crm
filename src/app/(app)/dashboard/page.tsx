@@ -18,6 +18,7 @@ import {
   ReopenedWidget,
   RevenueWidget,
   StockWidget,
+  presentStock,
   UsersCountsWidget,
   WidgetError,
   dashboardService,
@@ -148,11 +149,20 @@ async function Overview() {
 
 async function StockSection() {
   const actor = await getCurrentUser();
-  const result = await dashboardService.stock(actor);
+  const presentation = presentStock(await dashboardService.stock(actor));
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <StockWidget stock={result.ok ? result.value : null} />
+      {presentation.kind === "error" ? (
+        <WidgetError message={presentation.message} />
+      ) : (
+        /*
+         * Null still means forbidden, and now only forbidden. A failed query
+         * used to arrive here as null too, which the widget rendered as "Not
+         * available to your role" — a permission message for an outage.
+         */
+        <StockWidget stock={presentation.kind === "ready" ? presentation.stock : null} />
+      )}
     </div>
   );
 }

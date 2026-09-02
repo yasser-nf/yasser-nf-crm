@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { serverEnv } from "@/config/env.server";
+import { poolOptions } from "./pool-config";
 import * as schema from "./schema";
 
 /**
@@ -24,13 +25,7 @@ const globalForDatabase = globalThis as unknown as {
 };
 
 function createSqlClient(): ReturnType<typeof postgres> {
-  return postgres(serverEnv.DATABASE_URL, {
-    // Supabase's pooler does not support prepared statements in transaction mode.
-    prepare: false,
-    max: 10,
-    idle_timeout: 20,
-    connect_timeout: 10,
-  });
+  return postgres(serverEnv.DATABASE_URL, poolOptions);
 }
 
 const sqlClient = globalForDatabase.__ynfCrmSqlClient ?? createSqlClient();

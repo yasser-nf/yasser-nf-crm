@@ -12,6 +12,7 @@
  */
 export { dashboardService, LOW_STOCK_THRESHOLD } from "./services/dashboard.service";
 export type { DashboardData, StockEntry, StockSummary } from "./services/dashboard.service";
+export { presentStock, type StockPresentation } from "./services/stock-presentation";
 
 export {
   assessHealth,

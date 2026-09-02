@@ -136,8 +136,24 @@ export class DatabaseError extends AppError {
   readonly code = "DATABASE_ERROR";
   readonly severity: ErrorSeverity = "critical";
   override readonly isOperational: boolean = false;
+  /*
+   * Deliberately says nothing about saving.
+   *
+   * Every read goes through the same adapter as every write, so this default
+   * lands on failed queries just as often as on failed mutations. Claiming a
+   * save was attempted told operators that a dashboard which only reads had
+   * lost their changes — alarming, and false. Callers that really are saving
+   * still pass a specific `userMessage`.
+   *
+   * Distinct from UnexpectedError's wording on purpose: an operator who
+   * reports what they saw should be pointing at the database rather than at
+   * the generic fallback.
+   *
+   * The wording is the only thing softened here. The error still surfaces, is
+   * still `critical`, and is still logged with its cause attached.
+   */
   protected readonly defaultUserMessage =
-    "Something went wrong while saving your changes. Please try again.";
+    "Something went wrong while accessing data. Please try again.";
 }
 
 /** A third-party service failed or was unreachable. */
