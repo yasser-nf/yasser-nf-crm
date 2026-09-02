@@ -100,3 +100,30 @@ export const CUSTOMER_STATUS_LABELS: Record<CustomerStatus, string> = {
   blocked: "Blocked",
   archived: "Archived",
 };
+
+/**
+ * Customer status from the list screen's tallies.
+ *
+ * The list knows how many profiles are active but not which, so it stands in a
+ * synthetic subscription per active profile: one is enough for
+ * `deriveCustomerStatus` to answer, and the answer is the same one the detail
+ * page reaches with the real rows.
+ *
+ * Shared rather than inlined because the CSV export shows the same Status
+ * column as the table, and an export that derived it separately would
+ * eventually disagree with the screen it claims to mirror.
+ */
+export function statusFromTallies(
+  customer: Pick<CustomerRow, "blockedAt" | "deletedAt">,
+  activeProfiles: number,
+  today: Date,
+): CustomerStatus {
+  return deriveCustomerStatus(
+    customer,
+    Array.from({ length: activeProfiles }, () => ({
+      status: "sold" as const,
+      expirationDate: null,
+    })),
+    today,
+  );
+}

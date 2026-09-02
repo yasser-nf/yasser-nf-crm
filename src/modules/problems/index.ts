@@ -12,6 +12,7 @@
 export { problemsService } from "./services/problems.service";
 export { problemAssignmentService } from "./services/problem-assignment.service";
 export { problemResolutionService } from "./services/problem-resolution.service";
+export { bulkProblemsService } from "./services/bulk-problems.service";
 export { problemTimelineService } from "./services/problem-timeline.service";
 
 export type { TimelineEntry, TimelineKind } from "./services/problem-timeline.service";

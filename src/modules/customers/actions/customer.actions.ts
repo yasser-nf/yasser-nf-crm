@@ -7,6 +7,7 @@ import { ROUTES } from "@/config/constants";
 import { getCurrentUser } from "@/lib/auth/session";
 import { UnauthorizedError, isAppError, type AppError } from "@/lib/errors";
 import type { AuditContext } from "@/modules/audit";
+import { customerExportService } from "../services/customer-export.service";
 import { customersService } from "../services/customers.service";
 
 /**
@@ -86,6 +87,18 @@ async function run<T>(
       ? toFailure(caught)
       : { ok: false, message: "Something went wrong. Please try again.", code: "UNEXPECTED_ERROR" };
   }
+}
+
+/**
+ * Builds the customers CSV.
+ *
+ * Authorization is the service’s, by the same permission the customers page
+ * requires. `params` is the page’s query string, re-parsed server-side.
+ */
+export async function exportCustomersAction(scope: unknown, params: unknown) {
+  return run(async (context) =>
+    customerExportService.exportCustomers(context.actor, scope, params),
+  );
 }
 
 export async function updateCustomerNotesAction(id: string, notes: string) {

@@ -7,7 +7,9 @@ import { ROUTES } from "@/config/constants";
 import { getCurrentUser } from "@/lib/auth/session";
 import { UnauthorizedError, isAppError, type AppError } from "@/lib/errors";
 import type { AuditContext } from "@/modules/audit";
+import { bulkProblemsService } from "@/modules/problems";
 import type { AccountFilter } from "../repositories/accounts.repository";
+import { accountExportService } from "../services/account-export.service";
 import { accountsService } from "../services/accounts.service";
 import { previewBulkAccounts } from "../services/bulk-accounts.service";
 import { profilesService } from "../services/profiles.service";
@@ -192,6 +194,71 @@ export async function restoreAccountAction(id: string) {
 
 export async function deleteAccountAction(id: string) {
   return run(async (context) => accountsService.softDeleteAccount(id, context), [ROUTES.ACCOUNTS]);
+}
+
+/**
+ * Soft-deletes the accounts selected in the list.
+ *
+ * `ids` is typed `unknown` on purpose. This is a POST endpoint, so the array
+ * arriving here is whatever the caller sent — the service validates it rather
+ * than trusting a type that only existed at compile time.
+ *
+ * Succeeds with a report even when some accounts were refused, so the UI can
+ * name them. Only authorization and a malformed list fail outright.
+ */
+export async function deleteAccountsAction(ids: unknown) {
+  return run(
+    async (context) => accountsService.softDeleteAccounts(ids, context),
+    [ROUTES.ACCOUNTS],
+  );
+}
+
+/**
+ * Declares one problem on each of the selected accounts.
+ *
+ * The work is done by the problems module. M08 is explicit that no other module
+ * may create or resolve problems directly, and this does not: it resolves the
+ * caller and hands the ids straight to `bulkProblemsService`, which calls the
+ * same `report` a single account screen calls.
+ *
+ * The action lives here rather than beside the other problem actions because
+ * the caller is the accounts list, and a client component may only import
+ * actions from its own module — a module barrel would drag server-only code
+ * into the browser bundle.
+ *
+ * Both arguments are `unknown`: this is a POST endpoint, so what arrives is
+ * whatever the caller sent, and the service validates it.
+ */
+export async function declareProblemsForAccountsAction(ids: unknown, input: unknown) {
+  return run(
+    async (context) => bulkProblemsService.declareForAccounts(ids, input, context),
+    [ROUTES.ACCOUNTS, ROUTES.PROBLEMS, ROUTES.CUSTOMERS],
+  );
+}
+
+/** Resolves every open problem on each of the selected accounts. */
+export async function resolveProblemsForAccountsAction(ids: unknown, input: unknown) {
+  return run(
+    async (context) => bulkProblemsService.resolveForAccounts(ids, input, context),
+    [ROUTES.ACCOUNTS, ROUTES.PROBLEMS, ROUTES.CUSTOMERS],
+  );
+}
+
+/**
+ * Builds the accounts CSV.
+ *
+ * A read, so nothing is revalidated and nothing is audited beyond the usual
+ * request logging. Authorization is the service’s, by the same permission the
+ * accounts page requires — this is a POST endpoint, and the Export button being
+ * hidden would protect nothing.
+ *
+ * `params` is the page’s query string, re-parsed server-side so the export
+ * cannot be pointed at a filter the screen would refuse.
+ */
+export async function exportAccountsAction(scope: unknown, params: unknown, ids: unknown) {
+  return run(async (context) =>
+    accountExportService.exportAccounts(context.actor, scope, params, ids),
+  );
 }
 
 /**

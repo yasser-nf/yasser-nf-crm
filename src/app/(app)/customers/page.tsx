@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { PAGINATION } from "@/config/constants";
 import {
   CustomersFilters,
   CustomersTable,
+  ExportCustomersMenu,
   customersService,
-  type CustomerSortField,
+  parseCustomerFilter,
 } from "@/modules/customers";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -20,46 +20,24 @@ export const metadata: Metadata = { title: "Customers" };
  * in Postgres rather than filtering a page the client only partly holds.
  */
 
-const SORT_FIELDS: readonly CustomerSortField[] = [
-  "createdAt",
-  "lastPurchaseAt",
-  "phoneNormalized",
-];
-
-/** Query strings are user input; every value is matched against a known set. */
-function parseSearchParams(params: Record<string, string | string[] | undefined>) {
-  const read = (key: string): string | undefined => {
-    const value = params[key];
-    return Array.isArray(value) ? value[0] : value;
-  };
-
-  const offsetRaw = Number.parseInt(read("offset") ?? "0", 10);
-
-  return {
-    search: read("search"),
-    onlyActive: read("active") === "1",
-    onlyBlocked: read("blocked") === "1",
-    sortBy: SORT_FIELDS.find((field) => field === read("sortBy")) ?? "createdAt",
-    sortDirection: read("sortDirection") === "asc" ? ("asc" as const) : ("desc" as const),
-    offset: Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0,
-    limit: PAGINATION.DEFAULT_PAGE_SIZE,
-  };
-}
-
 export default async function CustomersPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const filter = parseSearchParams(await searchParams);
+  const filter = parseCustomerFilter(await searchParams);
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-page-title text-foreground">Customers</h1>
-        <p className="text-description text-foreground-muted">
-          Everyone who has bought a subscription, and what they currently hold.
-        </p>
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-page-title text-foreground">Customers</h1>
+          <p className="text-description text-foreground-muted">
+            Everyone who has bought a subscription, and what they currently hold.
+          </p>
+        </div>
+
+        <ExportCustomersMenu />
       </header>
 
       <Suspense fallback={<Skeleton className="h-11 w-full max-w-md" />}>
@@ -73,7 +51,7 @@ export default async function CustomersPage({
   );
 }
 
-async function CustomersList({ filter }: { filter: ReturnType<typeof parseSearchParams> }) {
+async function CustomersList({ filter }: { filter: ReturnType<typeof parseCustomerFilter> }) {
   const result = await customersService.list(filter);
 
   if (!result.ok) {

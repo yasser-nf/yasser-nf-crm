@@ -1,18 +1,18 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { PAGINATION } from "@/config/constants";
 import {
+  AccountSelectionProvider,
   AccountsFilters,
   AccountsTable,
   BulkAccountsDialog,
   CreateAccountDialog,
+  ExportAccountsMenu,
   accountsService,
-  type AccountSortField,
+  parseAccountFilter,
 } from "@/modules/accounts";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
-import type { AccountRow } from "@/lib/drizzle/schema";
 
 export const metadata: Metadata = {
   title: "Accounts",
@@ -30,89 +30,45 @@ export const metadata: Metadata = {
  * server-side read through one would add a round trip for nothing.
  */
 
-const SORT_FIELDS: readonly AccountSortField[] = [
-  "email",
-  "status",
-  "healthScore",
-  "country",
-  "createdAt",
-];
-
-const ACCOUNT_STATUSES: readonly AccountRow["status"][] = [
-  "healthy",
-  "payment_problem",
-  "incorrect_password",
-  "invalid_email",
-  "something_went_wrong",
-  "archived",
-  "deleted",
-];
-
-/**
- * Query strings are user input.
- *
- * Every value is validated against a known set before it reaches the service. An
- * unrecognised sort column or status silently falls back to the default rather
- * than being passed down.
- */
-function parseSearchParams(params: Record<string, string | string[] | undefined>) {
-  const read = (key: string): string | undefined => {
-    const value = params[key];
-    return Array.isArray(value) ? value[0] : value;
-  };
-
-  const sortByRaw = read("sortBy");
-  const statusRaw = read("status");
-  const offsetRaw = Number.parseInt(read("offset") ?? "0", 10);
-
-  const sortBy = SORT_FIELDS.find((field) => field === sortByRaw) ?? "createdAt";
-  const status = ACCOUNT_STATUSES.find((value) => value === statusRaw);
-
-  return {
-    search: read("search"),
-    status,
-    sortBy,
-    sortDirection: read("sortDirection") === "asc" ? ("asc" as const) : ("desc" as const),
-    offset: Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0,
-    limit: PAGINATION.DEFAULT_PAGE_SIZE,
-  };
-}
-
 export default async function AccountsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const filter = parseSearchParams(await searchParams);
+  const filter = parseAccountFilter(await searchParams);
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-page-title text-foreground">Accounts</h1>
-          <p className="text-description text-foreground-muted">
-            Every Netflix account and the state of its five profiles.
-          </p>
-        </div>
+    <AccountSelectionProvider>
+      <div className="flex flex-col gap-6">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-page-title text-foreground">Accounts</h1>
+            <p className="text-description text-foreground-muted">
+              Every Netflix account and the state of its five profiles.
+            </p>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <BulkAccountsDialog />
-          <CreateAccountDialog />
-        </div>
-      </header>
+          {/* flex-wrap so three controls stack rather than overflow on a phone. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportAccountsMenu />
+            <BulkAccountsDialog />
+            <CreateAccountDialog />
+          </div>
+        </header>
 
-      <Suspense fallback={<FiltersSkeleton />}>
-        <AccountsFilters />
-      </Suspense>
+        <Suspense fallback={<FiltersSkeleton />}>
+          <AccountsFilters />
+        </Suspense>
 
-      <Suspense key={JSON.stringify(filter)} fallback={<TableSkeleton />}>
-        <AccountsList filter={filter} />
-      </Suspense>
-    </div>
+        <Suspense key={JSON.stringify(filter)} fallback={<TableSkeleton />}>
+          <AccountsList filter={filter} />
+        </Suspense>
+      </div>
+    </AccountSelectionProvider>
   );
 }
 
-async function AccountsList({ filter }: { filter: ReturnType<typeof parseSearchParams> }) {
+async function AccountsList({ filter }: { filter: ReturnType<typeof parseAccountFilter> }) {
   const result = await accountsService.listAccounts(filter);
 
   if (!result.ok) {

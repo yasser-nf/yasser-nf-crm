@@ -4,15 +4,31 @@ import { motion } from "framer-motion";
 import { ArrowDown, ArrowUp, ChevronsUpDown, Tv } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { ROUTES } from "@/config/constants";
 import { DURATION, EASING } from "@/config/theme";
 import type { AccountSortField } from "../repositories/accounts.repository";
 import type { AccountListRow } from "../services/accounts.service";
 import { Button } from "@/shared/ui/button";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { EmptyState } from "@/shared/feedback/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
 import { cn } from "@/utils/cn";
+import {
+  EMPTY_SELECTION,
+  actionableIds,
+  allSelected,
+  partitionByProblem,
+  resultSetKey,
+  someSelected,
+  toggleAll,
+  toggleSelected,
+  type Selection,
+} from "../services/account-selection";
+import { validityLabel } from "../services/account-presentation";
+import { useAccountSelection } from "./account-selection-context";
+import { BulkSelectionBar } from "./bulk-selection-bar";
 import { CopyCredentials } from "./copy-credentials";
 import { ProfileIndicators, ProfileIndicatorLegend } from "./profile-indicators";
 import { AccountStatusBadge } from "./status-badge";
@@ -37,30 +53,6 @@ interface AccountsTableProps {
   readonly offset: number;
   readonly sortBy: AccountSortField;
   readonly sortDirection: "asc" | "desc";
-}
-
-/**
- * Remaining account validity, in words.
- *
- * Open-ended is stated rather than rendered as a date, because an account with
- * no boundary is not the same as one expiring today and showing "—" invites the
- * reader to supply their own meaning. No arithmetic here: the number arrives
- * already computed by `accountRemainingDays`.
- */
-function validityLabel(remainingDays: number | null, validUntil: string | null): string {
-  if (remainingDays === null || validUntil === null) {
-    return "Open-ended";
-  }
-
-  if (remainingDays < 0) {
-    return `Expired ${Math.abs(remainingDays)}d ago`;
-  }
-
-  if (remainingDays === 0) {
-    return "Expires today";
-  }
-
-  return `${remainingDays}d left`;
 }
 
 function validityTone(remainingDays: number | null): string {
@@ -105,6 +97,72 @@ export function AccountsTable({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  const visibleIds = items.map((row) => row.account.id);
+
+  /*
+   * Selection is cleared whenever the displayed set changes.
+   *
+   * The page already remounts this component on a filter change, via the
+   * Suspense key, so today this is belt and braces. It is deliberate belt and
+   * braces: if that key is ever removed, selection would silently survive a
+   * search and the next Delete would act on rows the operator can no longer
+   * see. Too dangerous to leave resting on a detail of a parent.
+   *
+   * Assigning state during render is the documented way to reset on a prop
+   * change, and is the pattern accounts-filters.tsx already uses.
+   */
+  const filterKey = resultSetKey({
+    search: searchParams.get("search") ?? undefined,
+    status: searchParams.get("status") ?? undefined,
+    sortBy,
+    sortDirection,
+    offset,
+  });
+
+  /*
+   * The selection lives here, with the rules that govern it. Adjusting state
+   * during render is only legal for a component own state, and the reset
+   * below is exactly that pattern.
+   */
+  const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  const [syncedKey, setSyncedKey] = useState(filterKey);
+
+  if (filterKey !== syncedKey) {
+    setSyncedKey(filterKey);
+    setSelection(EMPTY_SELECTION);
+  }
+
+  /*
+   * Published after commit, never during render, so the Export menu in the page
+   * header sees the same ticks without this component writing to a parent while
+   * it is rendering.
+   */
+  const { publishSelection } = useAccountSelection();
+
+  useEffect(() => {
+    publishSelection(selection);
+  }, [selection, publishSelection]);
+
+  /* Never the raw Set: only ids that are both selected and on screen. */
+  const selectedIds = actionableIds(selection, visibleIds);
+
+  /*
+   * The two problem actions are opposites, so the selection is split by what
+   * each one can act on rather than offered wholesale. A page is routinely a
+   * mix of healthy and problem accounts, and an operator who ticks all of them
+   * should not have to untick half before either action is safe.
+   */
+  const { withProblem, withoutProblem } = partitionByProblem(
+    items.map((row) => ({ id: row.account.id, hasActiveProblem: row.hasActiveProblem })),
+    selection,
+  );
+  const everySelected = allSelected(selection, visibleIds);
+  const partiallySelected = someSelected(selection, visibleIds);
+
+  function clearSelection() {
+    setSelection(EMPTY_SELECTION);
+  }
+
   function buildHref(changes: Record<string, string>): string {
     const params = new URLSearchParams(searchParams.toString());
 
@@ -136,6 +194,13 @@ export function AccountsTable({
 
   return (
     <div className="flex flex-col gap-4">
+      <BulkSelectionBar
+        ids={selectedIds}
+        withProblem={withProblem}
+        withoutProblem={withoutProblem}
+        onClear={clearSelection}
+      />
+
       <ProfileIndicatorLegend />
 
       {/* Desktop */}
@@ -143,6 +208,21 @@ export function AccountsTable({
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
+              {/* Before Email, so a row reads: pick this one, then what it is. */}
+              <TableHead className="w-10">
+                <Checkbox
+                  /*
+                   * Indeterminate when only some rows are ticked. A two-state
+                   * box would have to claim all or nothing, and either claim is
+                   * wrong while a subset is selected.
+                   */
+                  checked={everySelected ? true : partiallySelected ? "indeterminate" : false}
+                  onCheckedChange={() => setSelection(toggleAll(selection, visibleIds))}
+                  aria-label={
+                    everySelected ? "Clear selection" : "Select all accounts on this page"
+                  }
+                />
+              </TableHead>
               {COLUMNS.map((column) => {
                 const isActive = sortBy === column.field;
 
@@ -201,8 +281,20 @@ export function AccountsTable({
                   /* Staggered, but capped so a full page never feels slow. */
                   delay: Math.min(index * 0.015, 0.15),
                 }}
-                className="border-b border-border transition-colors last:border-0 hover:bg-surface-raised"
+                data-selected={selection.has(row.account.id) || undefined}
+                className={cn(
+                  "border-b border-border transition-colors last:border-0 hover:bg-surface-raised",
+                  selection.has(row.account.id) && "bg-primary/5 hover:bg-primary/10",
+                )}
               >
+                <TableCell>
+                  <Checkbox
+                    checked={selection.has(row.account.id)}
+                    onCheckedChange={() => setSelection(toggleSelected(selection, row.account.id))}
+                    aria-label={`Select ${row.account.email}`}
+                  />
+                </TableCell>
+
                 <TableCell className="font-medium">
                   <Link
                     href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
@@ -265,9 +357,37 @@ export function AccountsTable({
         {items.map((row) => (
           <article
             key={row.account.id}
-            className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
+            data-selected={selection.has(row.account.id) || undefined}
+            className={cn(
+              "flex flex-col gap-3 rounded-lg border bg-surface p-4 transition-colors",
+              selection.has(row.account.id) ? "border-primary/40 bg-primary/5" : "border-border",
+            )}
           >
             <div className="flex items-start justify-between gap-3">
+              {/*
+                Same position as the desktop column — first, before the email,
+                and grown to the 44x44 minimum 04_UI_GUIDELINES.md asks for.
+
+                The area is expanded on the button itself, through a pseudo
+                element, rather than by wrapping it in a padded <label>. A
+                <button> is not a labelable control, so a label forwards
+                nothing to it: the padding would hit-test as the label and do
+                nothing at all. That is worse than a small target, because it
+                looks like a large one — verified by hit-testing the padding,
+                which resolved to LABEL and left the box untouched.
+
+                A pseudo element belongs to the button, so every pixel of it is
+                the button. The offsets borrow the card's 16px padding on the
+                left and exactly the 12px gap on the right, which reaches 44px
+                without overlapping the email link and stealing its taps.
+              */}
+              <Checkbox
+                checked={selection.has(row.account.id)}
+                onCheckedChange={() => setSelection(toggleSelected(selection, row.account.id))}
+                aria-label={`Select ${row.account.email}`}
+                className="relative mt-0.5 before:absolute before:-inset-y-3.5 before:-right-3 before:-left-4 before:content-['']"
+              />
+
               <Link
                 href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
                 className="min-w-0 flex-1 truncate text-card-title text-foreground hover:text-primary"

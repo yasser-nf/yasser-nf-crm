@@ -26,6 +26,8 @@ export {
 } from "./services/customer-status";
 
 export { CustomersFilters, CustomersTable } from "./components/customers-table";
+export { ExportCustomersMenu } from "./components/export-customers-menu";
+export { parseCustomerFilter } from "./services/customer-filters";
 export { CustomerDetailView, CustomerTimeline } from "./components/customer-detail";
 export {
   CustomerStatusBadge,

@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { AppUser } from "@/lib/auth";
+import { PAGINATION } from "@/config/constants";
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
@@ -34,6 +35,7 @@ import {
   type ProfileCellState,
 } from "./account-validity";
 import { parseBulkAccounts, type BulkRowError } from "./bulk-accounts.service";
+import { deleteEachAccount, uniqueIds, type BulkDeleteReport } from "./bulk-delete";
 
 /**
  * Accounts service.
@@ -907,6 +909,84 @@ async function softDeleteAccount(id: string, context: AuditContext): Promise<Res
 }
 
 /**
+ * Maximum accounts one bulk delete may touch.
+ *
+ * A page holds 25 and selection cannot reach past the page, so this is not a
+ * limit an operator can meet through the UI. It exists because a Server Action
+ * is a POST endpoint anyone signed in can call directly with a hand-written
+ * array, and an unbounded loop of writes is worth refusing.
+ */
+const MAX_BULK_DELETE = PAGINATION.MAX_PAGE_SIZE;
+
+/**
+ * Soft-deletes several accounts.
+ *
+ * Not a second deletion mechanism: every account goes through
+ * `softDeleteAccount` above, so the permission check, the soft delete and the
+ * audit entry are the same ones a single delete performs. This function adds
+ * only the things a batch needs — validating the list, refusing an unauthorized
+ * caller once rather than `n` times, and reporting which accounts failed.
+ *
+ * Partial success is reported rather than rolled back. See `deleteEachAccount`.
+ */
+async function softDeleteAccounts(
+  ids: unknown,
+  context: AuditContext,
+): Promise<Result<BulkDeleteReport>> {
+  /*
+   * Authorization first, before the input is even inspected. A caller who may
+   * not delete accounts learns nothing about which ids exist.
+   *
+   * Checking here does not replace the check inside softDeleteAccount — that
+   * one still runs for every account. This one exists so a Worker gets a single
+   * clear refusal instead of a report listing every account as failed.
+   */
+  const permitted = assertMayDelete(context.actor);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+    return fail(
+      new ValidationError("Bulk delete received something other than a list of ids", {
+        userMessage: "Select at least one account first.",
+      }),
+    );
+  }
+
+  const requested = uniqueIds(ids as string[]);
+
+  if (requested.length === 0) {
+    return fail(
+      new ValidationError("Bulk delete received no ids", {
+        userMessage: "Select at least one account first.",
+      }),
+    );
+  }
+
+  if (requested.length > MAX_BULK_DELETE) {
+    return fail(
+      new ValidationError(`Bulk delete received ${requested.length} ids`, {
+        userMessage: `You can delete at most ${MAX_BULK_DELETE} accounts at a time.`,
+      }),
+    );
+  }
+
+  const report = await deleteEachAccount(requested, (id) => softDeleteAccount(id, context));
+
+  if (report.failed.length > 0) {
+    logger.warn("Bulk account delete completed with failures", {
+      requested: requested.length,
+      deleted: report.deleted.length,
+      failed: report.failed.length,
+    });
+  }
+
+  return ok(report);
+}
+
+/**
  * Decrypts and returns the stored password.
  *
  * ADR-006 Decision 4: never part of the page payload. Reaching this function
@@ -994,6 +1074,7 @@ export const accountsService = {
   archiveAccount,
   restoreAccount,
   softDeleteAccount,
+  softDeleteAccounts,
   revealPassword,
   getAccountTimeline,
 } as const;

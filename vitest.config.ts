@@ -40,7 +40,18 @@ export default defineConfig({
      * only placeholder credentials are present, so a fresh clone and CI both
      * stay green without a project.
      */
-    include: ["tests/unit/**/*.test.ts", "tests/integration/**/*.test.ts"],
+    /*
+     * `.tsx` is included so a component can be rendered where its behaviour
+     * cannot be expressed as a pure function — a confirmation dialog that must
+     * not submit twice, for instance. Such a file opts into jsdom with its own
+     * `@vitest-environment` docblock; the environment below stays `node`, so
+     * the rest of the suite keeps its speed.
+     */
+    include: [
+      "tests/unit/**/*.test.ts",
+      "tests/unit/**/*.test.tsx",
+      "tests/integration/**/*.test.ts",
+    ],
     setupFiles: ["tests/setup/env.ts"],
     /*
      * One file at a time.

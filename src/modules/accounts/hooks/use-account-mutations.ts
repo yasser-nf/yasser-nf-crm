@@ -10,6 +10,7 @@ import {
   archiveAccountAction,
   createAccountAction,
   deleteAccountAction,
+  deleteAccountsAction,
   restoreAccountAction,
   revealAccountPasswordAction,
   updateAccountAction,
@@ -130,6 +131,54 @@ export function useDeleteAccount(accountId: string) {
  * cached and refetched, and a decrypted credential should live only as long as
  * the interaction that asked for it.
  */
+/**
+ * Soft-deletes the selected accounts.
+ *
+ * Takes the ids at mutate time rather than at hook time: the selection changes
+ * while this hook stays mounted, and a hook bound to one id list would delete
+ * whatever was selected when the table last rendered.
+ *
+ * On success it refreshes rather than navigating away — the operator stays on
+ * the list they were working in, and `router.refresh()` re-runs the server
+ * component so the deleted rows disappear. Clearing the selection is the
+ * caller’s job, because only the caller knows the boxes belong to it.
+ */
+export function useDeleteAccounts() {
+  const router = useRouter();
+
+  return useMutation({
+    mutationFn: async (ids: readonly string[]) =>
+      unwrapAction(await deleteAccountsAction([...ids])),
+    onSuccess: (report) => {
+      /*
+       * A partial failure is reported as a warning rather than a success. The
+       * accounts that were deleted are gone either way, so hiding the refusals
+       * behind a green toast would misreport what happened.
+       */
+      if (report.failed.length > 0) {
+        toast.warning(
+          `Deleted ${report.deleted.length} of ${report.deleted.length + report.failed.length}`,
+          {
+            description:
+              report.failed.length === 1 && report.failed[0]
+                ? report.failed[0].message
+                : `${report.failed.length} accounts could not be deleted.`,
+          },
+        );
+      } else {
+        toast.success(
+          `${report.deleted.length} account${report.deleted.length === 1 ? "" : "s"} deleted`,
+          { description: "The records were kept and marked deleted." },
+        );
+      }
+
+      router.refresh();
+    },
+    onError: (error) =>
+      toast.error("Could not delete accounts", { description: error.userMessage }),
+  });
+}
+
 export function useRevealPassword(accountId: string) {
   return useMutation({
     mutationFn: async () => unwrapAction(await revealAccountPasswordAction(accountId)),
