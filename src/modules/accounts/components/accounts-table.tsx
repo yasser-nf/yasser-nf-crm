@@ -28,6 +28,7 @@ import {
 } from "../services/account-selection";
 import { validityLabel } from "../services/account-presentation";
 import { useAccountSelection } from "./account-selection-context";
+import { AccountNoteCell } from "./account-note-cell";
 import { BulkSelectionBar } from "./bulk-selection-bar";
 import { CopyCredentials } from "./copy-credentials";
 import { ProfileIndicators, ProfileIndicatorLegend } from "./profile-indicators";
@@ -65,7 +66,6 @@ function validityTone(remainingDays: number | null): string {
 const COLUMNS: readonly { field: AccountSortField; label: string; className?: string }[] = [
   { field: "email", label: "Email" },
   { field: "status", label: "Status" },
-  { field: "healthScore", label: "Health" },
   { field: "country", label: "Country" },
   { field: "createdAt", label: "Created" },
 ];
@@ -76,13 +76,6 @@ function formatDate(value: Date | string): string {
     month: "short",
     day: "numeric",
   });
-}
-
-/** Health score colour follows the semantic scale, not a gradient. */
-function healthTone(score: number): string {
-  if (score >= 80) return "text-success";
-  if (score >= 50) return "text-warning";
-  return "text-danger";
 }
 
 export function AccountsTable({
@@ -265,6 +258,7 @@ export function AccountsTable({
               })}
               <TableHead className="text-caption text-foreground-muted">Profiles</TableHead>
               <TableHead className="text-caption text-foreground-muted">Validity</TableHead>
+              <TableHead className="text-caption text-foreground-muted">Notes</TableHead>
               <TableHead className="text-right text-caption text-foreground-muted">Copy</TableHead>
             </TableRow>
           </TableHeader>
@@ -309,9 +303,7 @@ export function AccountsTable({
                     hasActiveProblem={row.hasActiveProblem}
                   />
                 </TableCell>
-                <TableCell className={cn("font-medium", healthTone(row.account.healthScore))}>
-                  {row.account.healthScore}
-                </TableCell>
+
                 <TableCell className="text-foreground-muted">
                   {row.account.country ?? "—"}
                 </TableCell>
@@ -331,6 +323,14 @@ export function AccountsTable({
                   <span className="block text-foreground-subtle">
                     {row.account.profileSlots} of 5 sellable
                   </span>
+                </TableCell>
+
+                <TableCell>
+                  <AccountNoteCell
+                    accountId={row.account.id}
+                    accountEmail={row.account.email}
+                    note={row.account.notes}
+                  />
                 </TableCell>
 
                 <TableCell className="text-right">
@@ -403,12 +403,6 @@ export function AccountsTable({
             <ProfileIndicators indicators={row.indicators} />
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-foreground-muted">
-              <span>
-                Health{" "}
-                <span className={healthTone(row.account.healthScore)}>
-                  {row.account.healthScore}
-                </span>
-              </span>
               <span className={validityTone(row.remainingValidityDays)}>
                 {validityLabel(row.remainingValidityDays, row.account.validUntil)}
               </span>
@@ -416,6 +410,19 @@ export function AccountsTable({
               <span>{row.account.country ?? "—"}</span>
               <span>{formatDate(row.account.createdAt)}</span>
             </div>
+
+            {/*
+              The desktop table is hidden below lg, so this is where a phone
+              sees and edits the note. Rendered inside the card rather than as a
+              column, which is what keeps the narrow layout free of sideways
+              scrolling.
+            */}
+            <AccountNoteCell
+              accountId={row.account.id}
+              accountEmail={row.account.email}
+              note={row.account.notes}
+              className="min-w-0"
+            />
 
             <CopyCredentials
               accountId={row.account.id}

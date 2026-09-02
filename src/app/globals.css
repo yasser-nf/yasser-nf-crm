@@ -56,6 +56,16 @@
   --color-warning-foreground: hsl(25 90% 8%);
   --color-warning-subtle: hsl(25 95% 53% / 0.14);
 
+  /*
+   * Yellow, for an allocation approaching its expiry. Deliberately NOT
+   * --color-warning: that is hue 25, an orange already meaning "blocked by
+   * account" on the same profile badges. Two states one hue apart on the same
+   * row is not a distinction anybody can act on.
+   */
+  --color-caution: hsl(48 96% 53%);
+  --color-caution-foreground: hsl(48 90% 8%);
+  --color-caution-subtle: hsl(48 96% 53% / 0.16);
+
   --color-danger: hsl(0 84% 60%);
   --color-danger-foreground: hsl(0 90% 8%);
   --color-danger-subtle: hsl(0 84% 60% / 0.14);

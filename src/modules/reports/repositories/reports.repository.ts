@@ -73,7 +73,6 @@ function datasetQuery(report: ReportKey, filters: ReportFilters): SQL {
         select
           a.email as "email",
           a.status::text as "status",
-          a.health_score as "healthScore",
           count(p.id)::int as "totalProfiles",
           /* Sellable slots only. M13: rows above a.profile_slots are not stock. */
           count(p.id) filter (

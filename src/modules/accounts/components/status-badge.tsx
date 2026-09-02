@@ -176,9 +176,19 @@ export function AccountStatusBadge({
 export function ProfileStatusBadge({
   status,
   notForSale = false,
+  expiringSoon = false,
   className,
 }: {
   status: ProfileRow["status"];
+  /**
+   * True when the allocation is inside the expiring-soon window.
+   *
+   * Passed in for the same reason `notForSale` is: it is derived from
+   * expiration_date and the clock, and the `expiring_soon` status column is
+   * never written. Without it this badge reads a plain "Sold" beside a yellow
+   * chip for the same profile.
+   */
+  expiringSoon?: boolean;
   /**
    * True when this profile is above the account's sellable slot count.
    *
@@ -192,7 +202,13 @@ export function ProfileStatusBadge({
 }) {
   return (
     <Badge
-      style={notForSale ? NOT_FOR_SALE_STYLE : PROFILE_STATUS_STYLES[status]}
+      style={
+        notForSale
+          ? NOT_FOR_SALE_STYLE
+          : expiringSoon
+            ? PROFILE_STATUS_STYLES.expiring_soon
+            : PROFILE_STATUS_STYLES[status]
+      }
       className={className}
     />
   );

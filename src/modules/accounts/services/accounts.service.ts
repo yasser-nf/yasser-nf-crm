@@ -102,6 +102,15 @@ export interface ProfileAllocation {
   readonly blockedReason: AllocationBlockedReason | null;
   /** Always present, so the UI can explain a rejection with numbers. */
   readonly validity: AllocationValidity;
+  /**
+   * The slot's visual state, from `profileCellState`.
+   *
+   * Carried here so the profile cards read the same derivation as the
+   * indicator strip above them. The card used to badge `profile.status`
+   * directly, which is why a slot could show a green "Sold" beside a yellow
+   * chip for the same profile.
+   */
+  readonly state: ProfileCellState;
 }
 
 /** Everything `evaluateAllocation` needs beyond the two rows themselves. */
@@ -171,11 +180,24 @@ export function evaluateAllocation(
     requestedDays,
   };
 
+  /*
+   * One derivation for the badge, computed before the branches so every exit
+   * carries it — including the blocked ones, where the slot still has a
+   * colour and a customer may still be holding it.
+   */
+  const state = profileCellState(
+    profile,
+    account,
+    today,
+    accountCanAllocate(account, context.hasActiveProblem === true, today),
+  );
+
   const blocked = (reason: AllocationBlockedReason): ProfileAllocation => ({
     profile,
     isAllocatable: false,
     blockedReason: reason,
     validity,
+    state,
   });
 
   if (account.status !== "healthy") {
@@ -230,7 +252,7 @@ export function evaluateAllocation(
     return blocked("insufficient_account_validity");
   }
 
-  return { profile, isAllocatable: true, blockedReason: null, validity };
+  return { profile, isAllocatable: true, blockedReason: null, validity, state };
 }
 
 /**
@@ -246,6 +268,36 @@ export function evaluateAllocation(
  * copy of an authorization decision is a copy that can disagree with the real
  * one.
  */
+/**
+ * Whether the actor may change an account record.
+ *
+ * EDIT_ACCOUNTS exists in the permission matrix and is deliberately withheld
+ * from Workers, but nothing checked it: `updateAccount` validated, wrote and
+ * audited without ever asking who was calling. A Worker could therefore edit
+ * any account through the Server Action, which is a POST endpoint and does not
+ * care that the Edit button is on screen.
+ *
+ * Added because the account note is written through `updateAccount`, and a note
+ * that anyone can change is not the "existing account-management permissions"
+ * this feature was asked to follow.
+ */
+function assertMayEdit(actor: AppUser | null): Result<AppUser> {
+  if (!actor) {
+    return fail(new ForbiddenError("No signed-in user for an account edit"));
+  }
+
+  if (!roleHasPermission(actor.role, PERMISSIONS.EDIT_ACCOUNTS)) {
+    return fail(
+      new ForbiddenError(`Role ${actor.role} may not edit accounts`, {
+        userMessage: "You do not have permission to edit accounts.",
+        context: { actorId: actor.id, role: actor.role },
+      }),
+    );
+  }
+
+  return ok(actor);
+}
+
 function assertMayDelete(actor: AppUser | null): Result<AppUser> {
   if (!actor) {
     return fail(new ForbiddenError("No signed-in user for a delete operation"));
@@ -775,6 +827,12 @@ async function updateAccount(
   input: unknown,
   context: AuditContext,
 ): Promise<Result<AccountRow>> {
+  const permitted = assertMayEdit(context.actor);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
   const parsed = accountUpdateSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -1025,7 +1083,7 @@ async function getAccountTimeline(id: string, pagination: PaginationInput) {
  * Also LOGS them, and that is not incidental.
  *
  * Account creation was broken from the day it was written: the schema demanded
- * `healthScore`, which no form collects. The field error had no input to attach
+ * a defaulted column no form collects. The field error had no input to attach
  * to, so it rendered nowhere and the screen showed only "Could not create
  * account" — a generic message hiding a precise, fixable cause. Nothing on the
  * server said anything at all.

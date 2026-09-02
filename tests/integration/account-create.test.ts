@@ -61,7 +61,7 @@ afterAll(async () => {
 describe.skipIf(!configured)("creating an account", () => {
   it("succeeds with exactly what the create form submits", async () => {
     /*
-     * No healthScore, because no input collects one. This is the payload that
+     * Exactly the fields the form collects. This is the payload that
      * failed for the entire life of the feature.
      */
     const { accountsService } = await import("@/modules/accounts");
@@ -87,7 +87,6 @@ describe.skipIf(!configured)("creating an account", () => {
 
     if (result.ok) {
       createdIds.push(result.value.id);
-      expect(result.value.healthScore).toBe(100);
       expect(result.value.status).toBe("healthy");
     }
   }, 60_000);

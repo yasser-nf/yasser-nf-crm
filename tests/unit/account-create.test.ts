@@ -33,33 +33,6 @@ describe("accountInsertSchema", () => {
     );
   });
 
-  it("defaults healthScore rather than demanding it", () => {
-    /*
-     * The column is `integer().notNull().default(100)`. drizzle-zod would have
-     * generated it optional, but supplying a refinement to createInsertSchema
-     * replaces the generated schema *including its optionality* — which is what
-     * made it required and broke creation.
-     */
-    const parsed = accountInsertSchema.safeParse(formPayload());
-
-    expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data.healthScore).toBe(100);
-  });
-
-  it("still accepts an explicit healthScore", () => {
-    const parsed = accountInsertSchema.safeParse(formPayload({ healthScore: 40 }));
-
-    expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data.healthScore).toBe(40);
-  });
-
-  it("still enforces the documented 0–100 range", () => {
-    /* 01_MASTER_RULES.md, and a check constraint on the table. */
-    expect(accountInsertSchema.safeParse(formPayload({ healthScore: 101 })).success).toBe(false);
-    expect(accountInsertSchema.safeParse(formPayload({ healthScore: -1 })).success).toBe(false);
-    expect(accountInsertSchema.safeParse(formPayload({ healthScore: 1.5 })).success).toBe(false);
-  });
-
   it("requires an email and a password", () => {
     expect(accountInsertSchema.safeParse(formPayload({ email: "" })).success).toBe(false);
     expect(accountInsertSchema.safeParse(formPayload({ password: "" })).success).toBe(false);

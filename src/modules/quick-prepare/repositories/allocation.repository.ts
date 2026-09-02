@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseExecutor } from "@/lib/database";
 import {
@@ -141,7 +141,7 @@ async function readCandidates(
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
         .where(and(allocatableProfile, eligibleAccount))
-        .orderBy(desc(accounts.healthScore), asc(accounts.createdAt), asc(profiles.profileNumber))
+        .orderBy(asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5)
         /* Lock the profile rows only; the account row is read for context. */
         .for("update", { of: profiles, skipLocked: true })
@@ -155,7 +155,7 @@ async function readCandidates(
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
         .where(and(allocatableProfile, eligibleAccount))
-        .orderBy(desc(accounts.healthScore), asc(accounts.createdAt), asc(profiles.profileNumber))
+        .orderBy(asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5);
 
   if (profileRows.length === 0) {

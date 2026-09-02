@@ -22,13 +22,12 @@ import type { AllocationCandidate } from "@/modules/quick-prepare/repositories/a
  * the strategy these tests enforce: concentrate, never fragment.
  */
 
-function account(id: string, healthScore = 100): AccountRow {
+function account(id: string): AccountRow {
   return {
     id,
     email: `${id}@example.com`,
     passwordEncrypted: "v1:a:b:c",
     status: "healthy",
-    healthScore,
     /* M13 defaults: sells all five, open-ended coverage. */
     profileSlots: 5,
     validFrom: null,
@@ -66,12 +65,11 @@ function candidate(
   id: string,
   free: number,
   soldCount = 0,
-  health = 100,
   /* Null is open-ended coverage — the pre-M13 behaviour every old test assumes. */
   remainingValidityDays: number | null = null,
 ): AllocationCandidate {
   return {
-    account: account(id, health),
+    account: account(id),
     availableProfiles: Array.from({ length: free }, (_, i) =>
       profile(`${id}-p${i + 1}`, id, i + 1),
     ),
@@ -112,22 +110,19 @@ describe("buildAllocationPlan — concentration (ADR-007 D1)", () => {
     expect(plan.slices[0]?.account.id).toBe("exact");
   });
 
-  it("prefers the healthier account among equals", () => {
-    const plan = buildAllocationPlan([candidate("low", 5, 0, 40), candidate("high", 5, 0, 95)], 2);
-    expect(plan.slices[0]?.account.id).toBe("high");
-  });
-
   it("ranks covering the request above being partially sold", () => {
     const plan = buildAllocationPlan([candidate("partial", 1, 4), candidate("covers", 4, 0)], 4);
     expect(plan.slices).toHaveLength(1);
     expect(plan.slices[0]?.account.id).toBe("covers");
   });
 
-  it("ranks partially sold above raw health score", () => {
-    const plan = buildAllocationPlan(
-      [candidate("healthy", 1, 0, 100), candidate("used", 1, 2, 10)],
-      2,
-    );
+  it("prefers an account already partially sold, to concentrate the sale", () => {
+    /*
+     * Was "ranks partially sold above raw health score". The health term is
+     * gone from the ranking — it was the same constant for every candidate —
+     * but the preference it outranked is unchanged and still worth pinning.
+     */
+    const plan = buildAllocationPlan([candidate("healthy", 1, 0), candidate("used", 1, 2)], 2);
     expect(plan.slices[0]?.account.id).toBe("used");
   });
 });
@@ -197,7 +192,7 @@ describe("buildAllocationPlan — output shape", () => {
 
 describe("buildAllocationPlan — determinism", () => {
   it("produces an identical plan on repeated runs", () => {
-    const pool = [candidate("a", 2, 1, 80), candidate("b", 3, 0, 80), candidate("c", 1, 5, 80)];
+    const pool = [candidate("a", 2, 1), candidate("b", 3, 0), candidate("c", 1, 5)];
     const first = buildAllocationPlan(pool, 4);
     const second = buildAllocationPlan(pool, 4);
     expect(first.slices.map((s) => s.account.id)).toEqual(second.slices.map((s) => s.account.id));
@@ -220,7 +215,7 @@ describe("buildAllocationPlan — determinism", () => {
 describe("buildAllocationPlan — account validity (M13)", () => {
   it("behaves exactly as before when no duration is supplied", () => {
     /* The preview count path. Nothing about M13 changes it. */
-    const plan = buildAllocationPlan([candidate("short", 5, 0, 100, 3)], 2);
+    const plan = buildAllocationPlan([candidate("short", 5, 0, 3)], 2);
 
     expect(plan.isShort).toBe(false);
     expect(plan.excludedForValidity).toBe(0);
@@ -228,7 +223,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
   });
 
   it("excludes an account that cannot cover the requested duration", () => {
-    const plan = buildAllocationPlan([candidate("short", 5, 0, 100, 30)], 2, {
+    const plan = buildAllocationPlan([candidate("short", 5, 0, 30)], 2, {
       requestedDurationDays: 90,
     });
 
@@ -239,7 +234,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
 
   it("keeps an account whose validity exactly matches the request", () => {
     /* The boundary is inclusive: 90 days left covers a 90-day sale. */
-    const plan = buildAllocationPlan([candidate("exact", 5, 0, 100, 90)], 2, {
+    const plan = buildAllocationPlan([candidate("exact", 5, 0, 90)], 2, {
       requestedDurationDays: 90,
     });
 
@@ -248,7 +243,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
   });
 
   it("treats open-ended validity as covering anything", () => {
-    const plan = buildAllocationPlan([candidate("open", 5, 0, 100, null)], 2, {
+    const plan = buildAllocationPlan([candidate("open", 5, 0, null)], 2, {
       requestedDurationDays: 730,
     });
 
@@ -257,7 +252,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
 
   it("reports the numbers behind a rejection", () => {
     /* So the service can say "Only 18 days remaining, 90 requested". */
-    const plan = buildAllocationPlan([candidate("short", 3, 0, 100, 18)], 2, {
+    const plan = buildAllocationPlan([candidate("short", 3, 0, 18)], 2, {
       requestedDurationDays: 90,
     });
 
@@ -277,7 +272,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
      * hides the second one.
      */
     const noStock = buildAllocationPlan([], 2, { requestedDurationDays: 90 });
-    const shortDated = buildAllocationPlan([candidate("s", 5, 0, 100, 10)], 2, {
+    const shortDated = buildAllocationPlan([candidate("s", 5, 0, 10)], 2, {
       requestedDurationDays: 90,
     });
 
@@ -292,7 +287,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
      * duration is worse than telling them nothing.
      */
     const plan = buildAllocationPlan(
-      [candidate("good", 3, 0, 100, 365), candidate("short", 5, 0, 100, 5)],
+      [candidate("good", 3, 0, 365), candidate("short", 5, 0, 5)],
       10,
       { requestedDurationDays: 90 },
     );
@@ -305,7 +300,7 @@ describe("buildAllocationPlan — account validity (M13)", () => {
 describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
   it("prefers a long-dated account over a short-dated one", () => {
     const plan = buildAllocationPlan(
-      [candidate("expiring", 5, 0, 100, 10), candidate("fresh", 5, 0, 100, 365)],
+      [candidate("expiring", 5, 0, 10), candidate("fresh", 5, 0, 365)],
       2,
       { requestedDurationDays: 5 },
     );
@@ -319,7 +314,7 @@ describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
      * immediately disappear... Only reject when remaining validity is
      * insufficient." A penalty reorders; it never excludes.
      */
-    const plan = buildAllocationPlan([candidate("expiring", 5, 0, 100, 10)], 2, {
+    const plan = buildAllocationPlan([candidate("expiring", 5, 0, 10)], 2, {
       requestedDurationDays: 5,
     });
 
@@ -327,13 +322,13 @@ describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
     expect(plan.slices[0]?.account.id).toBe("expiring");
   });
 
-  it("outranks both health and partial-sale concentration", () => {
+  it("outranks partial-sale concentration", () => {
     /*
      * The penalty must be big enough that a perfect-health, partly-sold,
      * nearly-expired account still loses to a plain healthy one.
      */
     const plan = buildAllocationPlan(
-      [candidate("expiring", 5, 3, 100, 2), candidate("fresh", 5, 0, 60, 365)],
+      [candidate("expiring", 5, 3, 2), candidate("fresh", 5, 0, 365)],
       2,
       { requestedDurationDays: 1 },
     );
@@ -343,7 +338,7 @@ describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
 
   it("does not penalise an open-ended account", () => {
     const plan = buildAllocationPlan(
-      [candidate("open", 5, 0, 50, null), candidate("expiring", 5, 0, 100, 3)],
+      [candidate("open", 5, 0, null), candidate("expiring", 5, 0, 3)],
       2,
       { requestedDurationDays: 1 },
     );
@@ -358,7 +353,7 @@ describe("buildAllocationPlan — near-expiry penalty (M13)", () => {
      * penalty deliberately.
      */
     const plan = buildAllocationPlan(
-      [candidate("expiring", 4, 0, 100, 5), candidate("fresh", 2, 0, 100, 365)],
+      [candidate("expiring", 4, 0, 5), candidate("fresh", 2, 0, 365)],
       4,
       { requestedDurationDays: 3 },
     );

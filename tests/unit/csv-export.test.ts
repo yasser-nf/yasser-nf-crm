@@ -135,7 +135,6 @@ describe("the account row", () => {
       id: "acc-1",
       email: "one@icloud.com",
       status: "healthy" as const,
-      healthScore: 100,
       country: "JP",
       createdAt: new Date("2026-09-01T10:00:00Z"),
       updatedAt: new Date("2026-09-01T10:00:00Z"),
@@ -157,6 +156,7 @@ describe("the account row", () => {
     expiredProfiles: 1,
     remainingValidityDays: null,
     hasActiveProblem: false,
+    health: "healthy" as const,
   } as unknown as Parameters<typeof accountToCsvRow>[0];
 
   it("has one cell per header", () => {
@@ -176,7 +176,6 @@ describe("the account row", () => {
     expect([...ACCOUNT_EXPORT_HEADERS]).toEqual([
       "Email",
       "Status",
-      "Health",
       "Country",
       "Created",
       "Profile 1",
@@ -188,14 +187,18 @@ describe("the account row", () => {
       "Available profiles",
       "Sold profiles",
       "Validity",
+      "Notes",
     ]);
   });
 
   it("uses the tallies it was given rather than recounting", () => {
+    /* Looked up by header, so adding or removing a column cannot break this. */
     const cells = accountToCsvRow(row);
+    const at = (header: (typeof ACCOUNT_EXPORT_HEADERS)[number]) =>
+      cells[ACCOUNT_EXPORT_HEADERS.indexOf(header)];
 
-    expect(cells[11]).toBe(2);
-    expect(cells[12]).toBe(1);
+    expect(at("Available profiles")).toBe(2);
+    expect(at("Sold profiles")).toBe(1);
   });
 
   it("shows Problem instead of Healthy when a problem is open", () => {
@@ -207,7 +210,9 @@ describe("the account row", () => {
   });
 
   it("writes the validity in the same words as the table", () => {
-    expect(accountToCsvRow(row)[13]).toBe("Open-ended");
+    const cells = accountToCsvRow(row);
+
+    expect(cells[ACCOUNT_EXPORT_HEADERS.indexOf("Validity")]).toBe("Open-ended");
   });
 });
 

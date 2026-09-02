@@ -4,12 +4,13 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
 import { Ban, Pencil, TriangleAlert, User, Undo2 } from "lucide-react";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { DURATION, EASING } from "@/config/theme";
 import { ActionError } from "@/lib/errors";
 import type { ProfileRow } from "@/lib/drizzle/schema";
+import { deriveExpirationForInput } from "../services/profile-dates";
 import type { ProfileAllocation } from "../services/accounts.service";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
@@ -148,6 +149,7 @@ export function ProfileCard({
         <ProfileStatusBadge
           status={profile.status}
           notForSale={blockedReason === "profile_not_for_sale"}
+          expiringSoon={allocation.state === "expiring_soon"}
         />
       </header>
 
@@ -297,6 +299,7 @@ function EditProfileDialog({
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
   } = useForm<ProfileEditFormValues>({
     resolver: zodResolver(profileEditFormSchema),
@@ -307,10 +310,30 @@ function EditProfileDialog({
       notes: profile.notes ?? "",
       customerPhone: "",
       saleDate: profile.saleDate ?? "",
-      expirationDate: profile.expirationDate ?? "",
+      /*
+       * Derived on load, not read from the row.
+       *
+       * A profile saved before expiration became derived can carry a stored
+       * value that disagrees with its own sale date and duration. Showing that
+       * number would present the disagreement as fact; recomputing it shows
+       * what the record actually means, and the next save writes it back.
+       */
+      expirationDate: deriveExpirationForInput(
+        profile.saleDate ?? "",
+        profile.durationDays ? String(profile.durationDays) : "",
+      ),
       durationDays: profile.durationDays ? String(profile.durationDays) : "",
     },
   });
+
+  /*
+   * useWatch, not watch(): watch() returns a new function each render and stops
+   * React Compiler. These two are the only inputs expiration has.
+   */
+  const watchedSaleDate = useWatch({ control, name: "saleDate" });
+  const watchedDuration = useWatch({ control, name: "durationDays" });
+
+  const derivedExpiration = deriveExpirationForInput(watchedSaleDate, watchedDuration);
 
   const serverFieldErrors =
     update.error instanceof ActionError ? (update.error.fieldErrors ?? {}) : {};
@@ -346,8 +369,12 @@ function EditProfileDialog({
     if (canAllocate) {
       if (values.customerPhone) payload["customerPhone"] = values.customerPhone;
       if (values.saleDate) payload["saleDate"] = values.saleDate;
-      if (values.expirationDate) payload["expirationDate"] = values.expirationDate;
       if (values.durationDays) payload["durationDays"] = Number(values.durationDays);
+      /*
+       * expirationDate is deliberately absent. The service derives it from the
+       * two fields above, so sending a copy would only create something for it
+       * to disagree with — and a client is not the authority on it anyway.
+       */
     }
 
     update.mutate(payload, { onSuccess: () => onOpenChange(false) });
@@ -433,12 +460,26 @@ function EditProfileDialog({
                   {...register("saleDate")}
                 />
 
+                {/*
+                  Read-only because it is derived. Not disabled: a disabled
+                  input is dimmed and skipped by the keyboard, and this value is
+                  the one the operator most wants to read back after changing a
+                  duration.
+
+                  Deliberately not registered either. Registering it would put a
+                  second, editable copy in form state that could be submitted
+                  and disagree with the two fields above it, which is the bug
+                  this change exists to remove.
+                */}
                 <FormField
                   label="Expiration date"
                   type="date"
-                  disabled={update.isPending}
+                  readOnly
+                  tabIndex={-1}
+                  value={derivedExpiration}
+                  hint="Calculated from sale date + duration."
+                  className="cursor-not-allowed text-foreground-muted"
                   error={fieldError("expirationDate")}
-                  {...register("expirationDate")}
                 />
               </div>
 

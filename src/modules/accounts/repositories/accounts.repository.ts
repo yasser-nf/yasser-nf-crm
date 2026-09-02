@@ -61,7 +61,7 @@ const ENTITY = "Account";
 const liveOnly = accountIsLiveSql;
 
 /** Columns the accounts list may be ordered by. */
-export type AccountSortField = "email" | "status" | "healthScore" | "country" | "createdAt";
+export type AccountSortField = "email" | "status" | "country" | "createdAt";
 
 export interface AccountFilter extends PaginationInput {
   readonly status?: AccountRow["status"] | undefined;
@@ -176,7 +176,6 @@ function buildFilter(filter: AccountFilter) {
 const SORT_COLUMNS = {
   email: accounts.email,
   status: accounts.status,
-  healthScore: accounts.healthScore,
   country: accounts.country,
   createdAt: accounts.createdAt,
 } as const;

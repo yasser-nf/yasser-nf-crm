@@ -312,7 +312,7 @@ export function StockWidget({ stock }: { stock: StockSummary | null }) {
                 {entry.email}
               </Link>
               <span className="text-foreground-subtle">
-                {entry.allocatable}/{entry.total} free · health {entry.healthScore}
+                {entry.allocatable}/{entry.total} free
               </span>
             </li>
           ))}

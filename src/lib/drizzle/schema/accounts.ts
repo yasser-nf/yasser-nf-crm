@@ -3,7 +3,6 @@ import {
   check,
   date,
   index,
-  integer,
   pgTable,
   smallint,
   text,
@@ -49,15 +48,6 @@ export const accounts = pgTable(
     passwordEncrypted: text("password_encrypted").notNull(),
 
     status: accountStatusEnum("status").notNull().default("healthy"),
-
-    /**
-     * 0–100, used by the Smart Stock Engine.
-     *
-     * 01_MASTER_RULES.md forbids returning problematic accounts and requires
-     * scoring rather than picking the first match. The scoring formula belongs to
-     * that engine's milestone; this column only stores the result.
-     */
-    healthScore: integer("health_score").notNull().default(100),
 
     /**
      * How many of the five profile rows may be sold. 1 to 5.
@@ -128,12 +118,15 @@ export const accounts = pgTable(
     index("accounts_country_idx").on(table.country),
 
     /*
-     * Partial composite index for the Smart Stock Engine's hot path: find the
-     * healthiest live account. Ordering by score descending inside the index
-     * means the engine reads the front of it rather than sorting.
+     * Partial index for the Smart Stock Engine hot path: the live accounts it
+     * may choose from. It used to carry `health_score desc` as a second column,
+     * to read the healthiest account off the front of the index. That column was
+     * never calculated — every row held its default — so the ordering it
+     * provided was no ordering at all, and the engine now ranks by status and
+     * age instead.
      */
     index("accounts_stock_selection_idx")
-      .on(table.status, table.healthScore.desc())
+      .on(table.status)
       .where(sql`${table.deletedAt} is null`),
 
     /*
@@ -143,8 +136,6 @@ export const accounts = pgTable(
     index("accounts_validity_idx")
       .on(table.validUntil)
       .where(sql`${table.deletedAt} is null`),
-
-    check("accounts_health_score_range", sql`${table.healthScore} between 0 and 100`),
 
     /* An account can sell no more than the five rows it has, and no fewer than one. */
     check("accounts_profile_slots_range", sql`${table.profileSlots} between 1 and 5`),

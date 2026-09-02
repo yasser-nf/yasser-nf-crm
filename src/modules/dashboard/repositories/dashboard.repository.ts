@@ -536,11 +536,11 @@ export const dashboardRepository: DashboardRepository = {
         from (
           select * from accounts
           where deleted_at is null and status <> 'deleted' and status <> 'archived'
-          order by health_score desc, created_at asc
+          order by created_at asc
           limit ${limit}
         ) a
         left join profiles p on p.account_id = a.id
-        order by a.health_score desc, p.profile_number asc
+        order by a.created_at asc, p.profile_number asc
       `);
 
       const byAccount = new Map<

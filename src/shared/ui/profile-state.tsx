@@ -21,6 +21,12 @@ import { cn } from "@/utils/cn";
  * COLOURS
  *
  *   sold          green    allocated and inside the customer's window
+ *   expiring_soon yellow   allocated and inside the window, but within a few
+ *                          days of closing. Yellow rather than the orange used
+ *                          by `blocked`, because the two appear on the same row
+ *                          and one hue apart is not a distinction anybody can
+ *                          act on. Nothing is wrong yet — it is a prompt to
+ *                          renew, not a fault.
  *   available     neutral  free stock — quiet, because "nothing to do" is
  *                          the most common state and must not shout
  *   expired       red      was allocated, the window closed
@@ -43,10 +49,12 @@ import { cn } from "@/utils/cn";
  * typechecking — the drift is caught at compile time rather than by a missing
  * colour in production.
  */
-export type ProfileSlotState = "sold" | "available" | "expired" | "not_for_sale" | "blocked";
+export type ProfileSlotState =
+  "sold" | "expiring_soon" | "available" | "expired" | "not_for_sale" | "blocked";
 
 export const PROFILE_STATE_STYLES: Record<ProfileSlotState, string> = {
   sold: "border-success/40 bg-success-subtle text-success",
+  expiring_soon: "border-caution/40 bg-caution-subtle text-caution",
   available: "border-border bg-surface-raised text-foreground-muted",
   expired: "border-danger/40 bg-danger-subtle text-danger",
   not_for_sale: "border-dashed border-border bg-transparent text-foreground-subtle opacity-50",
@@ -55,6 +63,7 @@ export const PROFILE_STATE_STYLES: Record<ProfileSlotState, string> = {
 
 export const PROFILE_STATE_LABELS: Record<ProfileSlotState, string> = {
   sold: "sold, active",
+  expiring_soon: "expiring soon",
   available: "available",
   expired: "expired allocation",
   not_for_sale: "not for sale",
@@ -63,6 +72,8 @@ export const PROFILE_STATE_LABELS: Record<ProfileSlotState, string> = {
 
 const LEGEND_ORDER: readonly ProfileSlotState[] = [
   "sold",
+  /* Beside sold, because it is a stage of sold rather than a separate fate. */
+  "expiring_soon",
   "available",
   "blocked",
   "expired",
@@ -70,7 +81,7 @@ const LEGEND_ORDER: readonly ProfileSlotState[] = [
 ];
 
 /**
- * The legend, so four colours do not have to be guessed.
+ * The legend, so the colours do not have to be guessed.
  *
  * Rendered once per screen rather than repeated per row.
  */

@@ -27,7 +27,10 @@ import { cn } from "@/utils/cn";
 function describe(indicator: ProfileIndicator): string {
   const base = `Profile ${indicator.profileNumber}: ${PROFILE_STATE_LABELS[indicator.state]}`;
 
-  if (indicator.state === "sold" && indicator.expirationDate) {
+  if (
+    (indicator.state === "sold" || indicator.state === "expiring_soon") &&
+    indicator.expirationDate
+  ) {
     return `${base}, expires ${indicator.expirationDate}`;
   }
 

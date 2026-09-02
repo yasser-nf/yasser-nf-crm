@@ -42,7 +42,6 @@ function accountRow(id: string, email: string) {
       id,
       email,
       status: "healthy" as const,
-      healthScore: 100,
       country: "JP",
       createdAt: new Date("2026-09-01T10:00:00Z"),
       updatedAt: new Date("2026-09-01T10:00:00Z"),

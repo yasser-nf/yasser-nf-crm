@@ -412,7 +412,7 @@ function ReviewStep({
                 </span>
                 <span className="text-caption text-foreground-muted">
                   Profile{account.profileNumbers.length === 1 ? "" : "s"}{" "}
-                  {account.profileNumbers.join(", ")} · health {account.healthScore}
+                  {account.profileNumbers.join(", ")}
                 </span>
               </div>
 

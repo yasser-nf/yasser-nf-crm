@@ -31,7 +31,6 @@ function account(overrides: Partial<AccountRow> = {}): AccountRow {
     email: "stock@example.com",
     passwordEncrypted: "v1:a:b:c",
     status: "healthy",
-    healthScore: 100,
     profileSlots: 5,
     validFrom: null,
     validUntil: null,

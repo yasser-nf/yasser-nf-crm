@@ -29,7 +29,7 @@ import {
  * Exhaustiveness, checked by the compiler.
  *
  * A `Record` keyed by the DOMAIN type must name every member. If
- * `ProfileCellState` gains a fifth state, this object stops typechecking with a
+ * `ProfileCellState` gains another state, this object stops typechecking with a
  * missing-property error — before anything renders a slot with no colour.
  *
  * A plain array would not do this: a subset of a union is still a valid array of
@@ -37,6 +37,7 @@ import {
  */
 const EVERY_DOMAIN_STATE: Record<ProfileCellState, true> = {
   sold: true,
+  expiring_soon: true,
   available: true,
   expired: true,
   not_for_sale: true,
@@ -49,6 +50,7 @@ const EVERY_DOMAIN_STATE: Record<ProfileCellState, true> = {
  */
 const EVERY_DESIGN_STATE: Record<ProfileSlotState, true> = {
   sold: true,
+  expiring_soon: true,
   available: true,
   expired: true,
   not_for_sale: true,

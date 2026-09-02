@@ -58,7 +58,6 @@ export interface PreparationPreview {
   readonly accounts: readonly {
     readonly accountId: string;
     readonly email: string;
-    readonly healthScore: number;
     readonly profileNumbers: readonly number[];
     /** Days left on the account's own coverage. Null means open-ended. */
     readonly remainingValidityDays: number | null;
@@ -216,7 +215,6 @@ async function preview(input: unknown): Promise<Result<PreparationPreview>> {
     accounts: plan.slices.map((slice) => ({
       accountId: slice.account.id,
       email: slice.account.email,
-      healthScore: slice.account.healthScore,
       profileNumbers: slice.profiles.map((profile) => profile.profileNumber),
       /* Surfaced so the review step can warn before anything is committed. */
       remainingValidityDays:

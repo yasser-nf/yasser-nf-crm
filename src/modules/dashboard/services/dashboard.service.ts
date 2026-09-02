@@ -201,7 +201,6 @@ export const LOW_STOCK_THRESHOLD = 5;
 export interface StockEntry {
   readonly accountId: string;
   readonly email: string;
-  readonly healthScore: number;
   readonly allocatable: number;
   readonly total: number;
 }
@@ -273,7 +272,6 @@ async function stock(actor: AppUser | null): Promise<Result<StockSummary>> {
     return {
       accountId: candidate.account.id,
       email: candidate.account.email,
-      healthScore: candidate.account.healthScore,
       allocatable,
       total: candidate.profiles.length,
     };

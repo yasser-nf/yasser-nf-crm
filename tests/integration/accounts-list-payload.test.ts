@@ -265,6 +265,5 @@ describe.skipIf(!configured)("the payload carries no credential", () => {
     expect(row.account.email).toBe(accountEmail);
     expect(row.account.status).toBe("healthy");
     expect(row.account.profileSlots).toBe(3);
-    expect(typeof row.account.healthScore).toBe("number");
   }, 90_000);
 });

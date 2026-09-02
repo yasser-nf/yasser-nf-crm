@@ -36,8 +36,9 @@ const calendarDate = z.iso.date("Use a calendar date such as 2026-03-31");
  *
  * Defaulted rather than required, and that is not cosmetic. Supplying any
  * refinement to createInsertSchema REPLACES the generated schema including its
- * optionality — the exact trap that made `healthScore` mandatory and broke every
- * account creation from M03 to M13. Every refined column with a database default
+ * optionality — the exact trap that once made a defaulted column mandatory and
+ * broke every account creation from M03 to M13. Every refined column with a
+ * database default
  * must restate `.default()` here or it becomes required again.
  */
 const profileSlots = z
@@ -78,7 +79,6 @@ const baseAccountInsert = createInsertSchema(accounts, {
    * to reveal it. The range is still enforced, and so is the check constraint
    * on the table.
    */
-  healthScore: z.number().int().min(0).max(100).default(100),
   profileSlots,
   /* Both nullable columns: absent means open-ended, which is not the same as expired. */
   validFrom: calendarDate.optional(),
@@ -164,7 +164,6 @@ export const accountUpdateSchema = createUpdateSchema(accounts, {
   email: z.string().trim().toLowerCase().email("Enter a valid email address").optional(),
   country: z.string().trim().length(2).toUpperCase().optional(),
   notes: z.string().trim().max(2000).optional(),
-  healthScore: z.number().int().min(0).max(100).optional(),
   validFrom: calendarDate.optional(),
   validUntil: calendarDate.optional(),
 })

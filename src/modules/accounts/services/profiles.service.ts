@@ -13,6 +13,7 @@ import { fail, ok } from "@/utils/result";
 import { profilesRepository } from "../repositories/profiles.repository";
 import { profileEditSchema } from "../validation/profile.schema";
 import { allocationFitsAccount, isSellableSlot } from "./account-validity";
+import { resolveExpirationDate } from "./profile-dates";
 
 /**
  * Profiles service.
@@ -160,14 +161,40 @@ async function updateProfile(
     const sellable = isSellableSlot(previous, account);
 
     /* The state the row would have after applying the change. */
+    const saleDate = changes.saleDate ?? previous.saleDate;
+    const durationDays = changes.durationDays ?? previous.durationDays;
+
+    /*
+     * Expiration is derived, never accepted.
+     *
+     * Sale date plus duration is the source of truth, so whatever the client
+     * sent for expirationDate is recomputed here. Storing it as an independent
+     * field is what let the three drift apart: changing the duration alone left
+     * the old expiration in place, and the row then disagreed with itself for
+     * every screen that reads it.
+     *
+     * Deriving before the checks below is deliberate. The account-validity rule
+     * and the expiry-after-sale rule must both judge the date that will
+     * actually be written, not the one that was submitted.
+     *
+     * Only derivable when both halves are known. A profile carrying a sale date
+     * but no duration keeps whatever it had — there is nothing to compute from,
+     * and blanking it would destroy information the operator never touched.
+     */
+    const derivedExpiration = resolveExpirationDate(
+      saleDate,
+      durationDays,
+      changes.expirationDate ?? previous.expirationDate,
+    );
+
     const next = {
       profileName: changes.profileName ?? previous.profileName,
       pin: changes.pin ?? previous.pin,
       notes: changes.notes ?? previous.notes,
       customerId: resolvedCustomerId ?? previous.customerId,
-      saleDate: changes.saleDate ?? previous.saleDate,
-      expirationDate: changes.expirationDate ?? previous.expirationDate,
-      durationDays: changes.durationDays ?? previous.durationDays,
+      saleDate,
+      expirationDate: derivedExpiration,
+      durationDays,
     };
 
     const touchesAllocation =

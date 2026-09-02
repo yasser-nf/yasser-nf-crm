@@ -42,7 +42,6 @@ const FORBIDDEN: Record<string, unknown> = {
   passwordEncrypted: "v1:aaa:bbb:ccc",
   profileSlots: 5,
   validUntil: "2099-01-01",
-  healthScore: 0,
 };
 
 describe("the allowlist survives a crafted payload", () => {

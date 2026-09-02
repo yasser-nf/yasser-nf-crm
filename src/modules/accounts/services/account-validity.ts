@@ -1,4 +1,4 @@
-import { addDays, isPast, remainingDays, type DateString } from "@/lib/dates";
+import { addDays, isExpiringSoon, isPast, remainingDays, type DateString } from "@/lib/dates";
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
 
 /**
@@ -195,11 +195,13 @@ export function isProfileFree(profile: ProfileRow, today: Date): boolean {
  * What a profile looks like to an operator scanning a list.
  *
  *   sold          allocated and still inside the customer's window
+ *   expiring_soon allocated, inside the window, but within EXPIRING_SOON_DAYS
  *   available     free stock, sellable right now
  *   expired       was allocated; the customer's window has closed
  *   not_for_sale  above accounts.profile_slots — never stock
  */
-export type ProfileCellState = "sold" | "available" | "expired" | "not_for_sale" | "blocked";
+export type ProfileCellState =
+  "sold" | "expiring_soon" | "available" | "expired" | "not_for_sale" | "blocked";
 
 /**
  * The single derivation behind every profile indicator in the application.
@@ -238,7 +240,21 @@ export function profileCellState(
     profile.status === "reserved" ||
     profile.status === "expiring_soon"
   ) {
-    return "sold";
+    /*
+     * Held, and close enough to expiry to be worth acting on.
+     *
+     * Computed from expiration_date through the same `isExpiringSoon` the
+     * customer screens use, so both answer "soon" with the same window and a
+     * badge turns yellow on its own as the date approaches. The stored
+     * `expiring_soon` status is not consulted: nothing ever writes it, exactly
+     * as nothing ever writes `expired`, so trusting it would report "sold" for
+     * an allocation that is two days from closing.
+     *
+     * Inside the held branch on purpose. A free slot carrying an old
+     * expiration_date from a previous customer is available stock, not an
+     * expiring allocation, and must not go yellow.
+     */
+    return isExpiringSoon(profile.expirationDate, today) ? "expiring_soon" : "sold";
   }
 
   /*

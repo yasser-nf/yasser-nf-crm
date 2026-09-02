@@ -128,7 +128,6 @@ export interface CustomerSubscription {
   readonly accountId: string;
   readonly accountEmail: string;
   readonly accountStatus: AccountRow["status"];
-  readonly accountHealthScore: number;
 }
 
 export interface CustomerDetail {
@@ -202,7 +201,6 @@ async function getDetail(id: string, now = new Date()): Promise<Result<CustomerD
     accountId: account.id,
     accountEmail: account.email,
     accountStatus: account.status,
-    accountHealthScore: account.healthScore,
   }));
 
   const phone = normalizeIdentifier(customer.value.phoneOriginal);

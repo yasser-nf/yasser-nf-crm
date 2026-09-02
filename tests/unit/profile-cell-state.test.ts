@@ -26,7 +26,6 @@ function account(overrides: Partial<AccountRow> = {}): AccountRow {
     email: "stock@example.com",
     passwordEncrypted: "v1:a:b:c",
     status: "healthy",
-    healthScore: 100,
     profileSlots: 5,
     validFrom: null,
     validUntil: null,
@@ -93,14 +92,97 @@ describe("profileCellState", () => {
     expect(profileCellState(lapsed, account(), TODAY)).toBe("expired");
   });
 
-  it("still shows sold on the final day of the window", () => {
+  it("is expiring, not expired, on the final day of the window", () => {
+    /*
+     * Zero days left is still inside the window — the customer holds it today.
+     * It reads expiring_soon rather than sold because a badge that only turns
+     * yellow after the sale has lapsed is a warning nobody can act on.
+     */
     const lastDay = profile({
       status: "sold",
       customerId: CUSTOMER,
       expirationDate: "2026-08-13",
     });
 
-    expect(profileCellState(lastDay, account(), TODAY)).toBe("sold");
+    expect(profileCellState(lastDay, account(), TODAY)).toBe("expiring_soon");
+  });
+
+  it("stays green while the expiry is comfortably ahead", () => {
+    const later = profile({
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-12-01",
+    });
+
+    expect(profileCellState(later, account(), TODAY)).toBe("sold");
+  });
+
+  it("turns yellow exactly at the threshold, and not a day earlier", () => {
+    /*
+     * The boundary, pinned in both directions. EXPIRING_SOON_DAYS is 3, so
+     * 2026-08-16 is the last day that counts as soon and 2026-08-17 is the
+     * first that does not.
+     */
+    const onThreshold = profile({
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-08-16",
+    });
+    const justOutside = profile({
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-08-17",
+    });
+
+    expect(profileCellState(onThreshold, account(), TODAY)).toBe("expiring_soon");
+    expect(profileCellState(justOutside, account(), TODAY)).toBe("sold");
+  });
+
+  it("does not colour a free slot by an old expiration date", () => {
+    /*
+     * A released profile keeps the date of whoever held it last. It is stock,
+     * not an expiring allocation, and must stay dark.
+     */
+    const free = profile({ status: "available", customerId: null, expirationDate: "2026-08-14" });
+
+    expect(profileCellState(free, account(), TODAY)).toBe("available");
+  });
+
+  it("reports expired ahead of expiring, once the window has closed", () => {
+    const lapsed = profile({
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-08-12",
+    });
+
+    expect(profileCellState(lapsed, account(), TODAY)).toBe("expired");
+  });
+
+  it("keeps not_for_sale ahead of everything, including an imminent expiry", () => {
+    /* Priority: a slot outside profile_slots is not stock, whatever else holds. */
+    const parked = profile({
+      profileNumber: 5,
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-08-14",
+    });
+
+    expect(profileCellState(parked, account({ profileSlots: 4 }), TODAY)).toBe("not_for_sale");
+  });
+
+  it("keeps a held slot expiring rather than blocked when the account cannot sell", () => {
+    /*
+     * The documented M13 rule: a sold profile stays sold even on a blocked
+     * account, because the customer still holds it. Blocking only changes what
+     * a FREE slot is offered as, so an expiring allocation stays yellow.
+     */
+    const held = profile({
+      status: "sold",
+      customerId: CUSTOMER,
+      expirationDate: "2026-08-14",
+    });
+
+    expect(profileCellState(held, account(), TODAY, false)).toBe("expiring_soon");
   });
 
   it("shows expired the day after the window closes", () => {

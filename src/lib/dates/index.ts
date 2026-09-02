@@ -77,3 +77,68 @@ export function isPast(boundary: DateString | null, today: Date): boolean {
   const days = remainingDays(boundary, today);
   return days !== null && days < 0;
 }
+
+/**
+ * Parses a `YYYY-MM-DD` string as UTC midnight.
+ *
+ * Explicitly UTC, and that is the whole point. `new Date("2026-09-01")` happens
+ * to parse as UTC, but `new Date("2026-09-01T00:00:00")` parses as local time,
+ * and the two differ by a day for anyone west of Greenwich. Both spellings look
+ * equally reasonable in a diff, so the parse belongs here rather than at each
+ * call site where a future edit could silently pick the wrong one.
+ */
+export function parseDateString(value: DateString | null): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+
+  return Number.isNaN(parsed) ? null : new Date(parsed);
+}
+
+/**
+ * `from` plus a whole number of days, both sides as `YYYY-MM-DD`.
+ *
+ * The string-in, string-out form of `addDays`, which is what both the profile
+ * edit form and the profile service need: a `date` column and an
+ * `<input type="date">` are both YYYY-MM-DD, and routing them through a Date
+ * object at each call site is where a timezone bug gets in.
+ *
+ * Delegates to `addDays` rather than repeating the arithmetic, so month and
+ * year rollover and leap days stay the platform's problem and there is only one
+ * implementation to be right.
+ *
+ * Returns null when the date cannot be parsed, so a malformed value surfaces as
+ * "no expiration" rather than as `Invalid Date` written to a date column.
+ */
+export function addDaysToDateString(from: DateString | null, days: number): DateString | null {
+  const parsed = parseDateString(from);
+
+  return parsed === null ? null : addDays(parsed, days);
+}
+
+/**
+ * How close to expiry counts as "expiring soon".
+ *
+ * Three days, which is the highlight M05 specifies and the window
+ * `expiryUrgency` has always used for the customer screens. Named here rather
+ * than repeated as a literal so the profile badges and the customer badges
+ * cannot drift onto different definitions of soon.
+ */
+export const EXPIRING_SOON_DAYS = 3;
+
+/**
+ * Inside the expiring-soon window, and not yet past.
+ *
+ * Deliberately excludes an expiry that has already passed: that is a different
+ * state with a different colour, and a function that answered true for both
+ * would make the caller re-check the thing it just asked about.
+ *
+ * A null boundary is open-ended, never soon.
+ */
+export function isExpiringSoon(boundary: DateString | null, today: Date): boolean {
+  const days = remainingDays(boundary, today);
+
+  return days !== null && days >= 0 && days <= EXPIRING_SOON_DAYS;
+}

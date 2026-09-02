@@ -79,7 +79,6 @@ export const REPORT_DEFINITIONS: Record<ReportKey, ReportDefinition> = {
     columns: [
       { key: "email", label: "Email" },
       { key: "status", label: "Status" },
-      { key: "healthScore", label: "Health", numeric: true },
       { key: "totalProfiles", label: "Profiles", numeric: true },
       { key: "availableProfiles", label: "Available", numeric: true },
       { key: "soldProfiles", label: "Sold", numeric: true },

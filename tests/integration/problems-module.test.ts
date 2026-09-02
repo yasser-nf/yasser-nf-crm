@@ -92,8 +92,8 @@ beforeAll(async () => {
 
   /* A throwaway account, so nothing real is ever blocked by these tests. */
   const account = await sql!<{ id: string }[]>`
-    insert into public.accounts (email, password_encrypted, status, health_score)
-    values (${`m08-test-${Date.now()}@example.invalid`}, 'test-ciphertext', 'healthy', 100)
+    insert into public.accounts (email, password_encrypted, status)
+    values (${`m08-test-${Date.now()}@example.invalid`}, 'test-ciphertext', 'healthy')
     returning id
   `;
 

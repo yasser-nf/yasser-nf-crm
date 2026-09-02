@@ -19,7 +19,6 @@ import type { AccountFilter, AccountSortField } from "../repositories/accounts.r
 export const ACCOUNT_SORT_FIELDS: readonly AccountSortField[] = [
   "email",
   "status",
-  "healthScore",
   "country",
   "createdAt",
 ];

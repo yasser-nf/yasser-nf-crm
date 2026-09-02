@@ -208,20 +208,6 @@ function SubscriptionCard({
           <dd className="font-mono text-foreground">{subscription.pin ?? "—"}</dd>
         </div>
         <div className="flex flex-col">
-          <dt className="text-foreground-subtle">Account health</dt>
-          <dd
-            className={
-              subscription.accountHealthScore >= 80
-                ? "text-success"
-                : subscription.accountHealthScore >= 50
-                  ? "text-warning"
-                  : "text-danger"
-            }
-          >
-            {subscription.accountHealthScore}
-          </dd>
-        </div>
-        <div className="flex flex-col">
           <dt className="text-foreground-subtle">Started</dt>
           <dd className="text-foreground">{formatDate(subscription.saleDate)}</dd>
         </div>

@@ -139,7 +139,7 @@ async function candidateFrom(
 }> {
   const accounts = await sql!<AccountRow[]>`
     select id, email, password_encrypted as "passwordEncrypted", status,
-      health_score as "healthScore", profile_slots as "profileSlots",
+      profile_slots as "profileSlots",
       valid_from as "validFrom", valid_until as "validUntil", country, notes,
       created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt",
       archived_at as "archivedAt", deleted_at as "deletedAt"

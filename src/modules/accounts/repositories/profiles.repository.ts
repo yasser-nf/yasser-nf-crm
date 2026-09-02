@@ -200,7 +200,7 @@ export const profilesRepository: ProfilesRepository = {
           ),
         )
         /* Highest health first — the Smart Stock Engine must never take the first match. */
-        .orderBy(desc(accounts.healthScore), asc(profiles.profileNumber))
+        .orderBy(asc(profiles.profileNumber))
         .limit(limit);
 
       return rows.map((row) => row.profile);

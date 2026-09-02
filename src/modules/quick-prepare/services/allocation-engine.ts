@@ -112,16 +112,24 @@ function scoreCandidate(candidate: AllocationCandidate, remaining: number): numb
 
   /*
    * Weights are spaced by an order of magnitude so a lower factor can never
-   * outrank a higher one. Health (0-100) cannot overturn "covers the request".
+   * outrank a higher one.
+   *
+   * There used to be a health term here, `healthScore * 100`. The column it
+   * read was never calculated and held its default of 100 for every account,
+   * so the term was the same constant for every candidate and could not order
+   * anything. Removing it leaves the ranking numerically identical.
+   *
+   * Health as a rule has not gone anywhere: an unhealthy account or one with an
+   * open problem never becomes a candidate in the first place, because the
+   * eligibility query and `evaluateAllocation` both apply
+   * `accounts.status = healthy AND no blocking problem`.
    */
   const coversRequest = free >= remaining ? 1_000_000 : 0;
   const partiallySold = candidate.soldCount > 0 ? 100_000 : 0;
-  const health = candidate.account.healthScore * 100;
 
   /*
    * Sized to outrank every preference below it — partial-sale concentration
-   * (100_000) and health (max 10_000) together cannot pull a nearly-expired
-   * account back above a healthy one. It sits BELOW coversRequest on purpose:
+   * (100_000) cannot pull a nearly-expired account back above a healthy one. It sits BELOW coversRequest on purpose:
    * an account that can serve the whole order alone is still worth choosing,
    * because splitting a customer across two accounts to save a few days of
    * shelf life is a worse outcome for them.
@@ -134,7 +142,7 @@ function scoreCandidate(candidate: AllocationCandidate, remaining: number): numb
    */
   const waste = Math.max(free - remaining, 0);
 
-  return coversRequest + partiallySold + health - nearExpiryPenalty - waste;
+  return coversRequest + partiallySold - nearExpiryPenalty - waste;
 }
 
 /** Short-dated but still usable. Null validity is open-ended and never near expiry. */

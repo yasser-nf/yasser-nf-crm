@@ -1,4 +1,4 @@
-import { remainingDays } from "@/lib/dates";
+import { EXPIRING_SOON_DAYS, remainingDays } from "@/lib/dates";
 import type { CustomerRow } from "@/lib/drizzle/schema";
 
 /**
@@ -52,7 +52,7 @@ export function expiryUrgency(expirationDate: string | null, today: Date): Expir
   if (days < 0) return "expired";
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
-  if (days <= 3) return "soon";
+  if (days <= EXPIRING_SOON_DAYS) return "soon";
   return "later";
 }
 

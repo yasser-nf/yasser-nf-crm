@@ -32,6 +32,7 @@ import {
   useRestoreAccount,
   useRevealPassword,
 } from "../hooks/use-account-mutations";
+import { AccountNoteCell } from "./account-note-cell";
 import { EditAccountDialog } from "./account-dialogs";
 import { CopyCredentials } from "./copy-credentials";
 import { AccountStatusBadge } from "./status-badge";
@@ -156,10 +157,6 @@ export function AccountHeader({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Health score">
-          <span className="text-section-title text-foreground">{account.healthScore}</span>
-        </Field>
-
         <Field label="Country">
           <span className="text-foreground">{account.country ?? "—"}</span>
         </Field>
@@ -203,13 +200,21 @@ export function AccountHeader({
         <CopyCredentials accountId={account.id} email={account.email} variant="full" />
       </div>
 
-      {account.notes ? (
-        <Field label="Notes">
-          <p className="text-description whitespace-pre-wrap text-foreground-muted">
-            {account.notes}
-          </p>
-        </Field>
-      ) : null}
+      {/*
+        The same component the accounts list renders, in its full-text form.
+        One component and one column, so the note shown here and the note shown
+        in the list cannot disagree — and it is rendered unconditionally now,
+        because an account with no note still needs somewhere to add one.
+      */}
+      <Field label="Notes">
+        <AccountNoteCell
+          accountId={account.id}
+          accountEmail={account.email}
+          note={account.notes}
+          variant="full"
+          className="items-start"
+        />
+      </Field>
 
       <EditAccountDialog account={account} open={isEditing} onOpenChange={setIsEditing} />
 

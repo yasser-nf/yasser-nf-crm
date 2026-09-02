@@ -32,7 +32,6 @@ import { accountBadgeStyle } from "../components/status-badge";
 export const ACCOUNT_EXPORT_HEADERS = [
   "Email",
   "Status",
-  "Health",
   "Country",
   "Created",
   "Profile 1",
@@ -44,6 +43,7 @@ export const ACCOUNT_EXPORT_HEADERS = [
   "Available profiles",
   "Sold profiles",
   "Validity",
+  "Notes",
 ] as const;
 
 /** Five cells, always, in profile order — a blank where a slot is missing. */
@@ -67,7 +67,6 @@ export function accountToCsvRow(row: AccountListRow): readonly unknown[] {
     row.account.email,
     /* The badge's own rule, so an account with an open problem never exports "Healthy". */
     accountBadgeStyle(row.account.status, row.hasActiveProblem).label,
-    row.account.healthScore,
     row.account.country ?? "",
     isoDate(row.account.createdAt),
     ...profileCells(row),
@@ -75,5 +74,7 @@ export function accountToCsvRow(row: AccountListRow): readonly unknown[] {
     row.availableProfiles,
     row.soldProfiles,
     validityLabel(row.remainingValidityDays, row.account.validUntil),
+    /* Operator free text, and the reason the CSV escaping has to be right. */
+    row.account.notes ?? "",
   ];
 }

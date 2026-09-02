@@ -149,10 +149,9 @@ export function AccountForm({
   /**
    * Server errors naming a field this form does not render.
    *
-   * Account creation was broken from the day it was written and nobody could
-   * see why: the schema rejected `healthScore`, which no input collects, so the
-   * error attached to nothing and the form looked like it had simply refused
-   * without saying anything.
+   * Account creation was once broken for a whole milestone because the schema
+   * rejected a column no input collects: the error attached to nothing and the
+   * form looked like it had simply refused without saying anything.
    *
    * An error with nowhere to go must still be shown. Silence is the one
    * response a form must never give.
