@@ -14,6 +14,16 @@
 export const ROUTES = {
   LOGIN: "/login",
 
+  /**
+   * Where Supabase returns an invited person after it verifies their link.
+   *
+   * Passed to `inviteUserByEmail` as `redirectTo` and allow-listed in the
+   * Supabase dashboard. Without it Supabase falls back to the project Site URL.
+   */
+  AUTH_CALLBACK: "/auth/callback",
+  /** Where a newly invited person chooses their first password. */
+  SET_PASSWORD: "/auth/set-password",
+
   DASHBOARD: "/dashboard",
   ACCOUNTS: "/accounts",
   QUICK_PREPARE: "/quick-prepare",
@@ -31,6 +41,26 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 
 /** The only route a guest may reach. Everything else redirects here. */
 export const PUBLIC_ROUTES: readonly string[] = [ROUTES.LOGIN];
+
+/**
+ * Routes that must not be redirected in EITHER direction.
+ *
+ * The invitation flow crosses the authentication boundary halfway through: a
+ * guest opens the callback, and by the time they reach the password page they
+ * hold a session. Both of the existing rules break that.
+ *
+ * As a PUBLIC_ROUTE the callback would be reachable, but the password page
+ * would bounce a now-authenticated user to the dashboard — with no password
+ * set. As a protected route the callback would bounce a guest to /login,
+ * discarding the invitation in the redirect.
+ *
+ * So these are exempt from both rules. That is NOT a hole in route protection:
+ * neither page reads or displays any application data, and the only privileged
+ * thing either can do — set a password — is a Server Action that independently
+ * requires a valid Supabase session. Exempting a route from redirection is not
+ * the same as exempting it from authorization.
+ */
+export const AUTH_FLOW_ROUTES: readonly string[] = [ROUTES.AUTH_CALLBACK, ROUTES.SET_PASSWORD];
 
 /**
  * Reachable without a session, and never redirected.

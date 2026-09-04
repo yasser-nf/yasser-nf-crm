@@ -10,6 +10,8 @@ import {
 } from "@/config/roles";
 import type { AppUser } from "@/lib/auth";
 import type { Page } from "@/lib/database";
+import { absoluteUrl } from "@/config/app-url";
+import { ROUTES } from "@/config/constants";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { LoginHistoryRow, UserRow } from "@/lib/drizzle/schema";
 import { ConflictError, ExternalServiceError, ForbiddenError, ValidationError } from "@/lib/errors";
@@ -250,7 +252,21 @@ async function invite(input: unknown, context: AuditContext): Promise<Result<Use
    * Supabase email a link and the person set their own password, so no password
    * ever passes through this codebase.
    */
-  const invited = await admin.value.auth.admin.inviteUserByEmail(email);
+  /*
+   * redirectTo is not optional in practice.
+   *
+   * Without it Supabase sends the invited person to the project's dashboard
+   * Site URL, which was `http://localhost:3000` — a server on THEIR machine,
+   * not ours. Every invitation ended on a browser error page. Naming the
+   * callback here makes the application, not a dashboard field somebody set
+   * during setup, the authority on where its own invitations land.
+   *
+   * The destination must also be listed under Supabase's Redirect URLs, which
+   * is what stops this parameter being an open redirect.
+   */
+  const invited = await admin.value.auth.admin.inviteUserByEmail(email, {
+    redirectTo: absoluteUrl(ROUTES.AUTH_CALLBACK),
+  });
 
   if (invited.error || !invited.data.user) {
     return fail(

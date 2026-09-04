@@ -18,6 +18,7 @@ import {
   type ChangePasswordInput,
 } from "../validation/change-password.schema";
 import { loginSchema, type LoginInput } from "../validation/login.schema";
+import { buildSetPasswordSchema, type SetPasswordInput } from "../validation/set-password.schema";
 
 /**
  * Authentication service.
@@ -288,4 +289,99 @@ async function changePassword(
   }
 }
 
-export const authService = { signIn, signOut, changePassword } as const;
+/**
+ * Sets the first password for somebody who arrived from an invitation.
+ *
+ * Separate from `changePassword` because the two guard different things.
+ * changePassword re-authenticates with the CURRENT password before setting a
+ * new one, which is what stops an unattended, already-signed-in browser being
+ * used to take an account over. An invited person has no current password, so
+ * that check cannot be the guard here.
+ *
+ * What guards this instead is the session itself. Supabase issued it seconds
+ * earlier, in exchange for a single-use invitation token that it verified and
+ * consumed. Holding it is proof of controlling the invited mailbox. Without one,
+ * this refuses — so the page being reachable without signing in does not make
+ * the action reachable without an invitation.
+ *
+ * The email is never taken from a form or a URL: `updateUser` acts on whoever
+ * the session says the caller is. There is no parameter here through which a
+ * recipient could name a different account, and no role parameter at all — the
+ * role was set by the administrator who sent the invitation.
+ *
+ * As with changePassword, no password value is logged, returned, or attached to
+ * an error. Field errors carry field names only.
+ */
+async function setInitialPassword(
+  input: SetPasswordInput,
+  context: { readonly passwordMinLength: number },
+): Promise<VoidResult> {
+  /* Revalidated against the SAME configured policy the form used. */
+  const parsed = buildSetPasswordSchema(context.passwordMinLength).safeParse(input);
+
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+
+    for (const issue of parsed.error.issues) {
+      const field = issue.path[0];
+      if (typeof field === "string" && !(field in fieldErrors)) {
+        fieldErrors[field] = issue.message;
+      }
+    }
+
+    return fail(new ValidationError("Set password input failed validation", { fieldErrors }));
+  }
+
+  if (!isSupabaseConfigured()) {
+    return fail(
+      new ConfigurationError("Supabase is not configured", {
+        userMessage: NOT_CONFIGURED_MESSAGE,
+      }),
+    );
+  }
+
+  try {
+    const supabase = createSupabaseBrowserClient();
+
+    /*
+     * The whole authorization check, in one call. An expired or absent session
+     * means the invitation was never completed, or was completed too long ago.
+     */
+    const { data: session } = await supabase.auth.getSession();
+
+    if (!session.session) {
+      return fail(
+        new UnauthorizedError("No session when setting an initial password", {
+          userMessage:
+            "Your invitation link is no longer active. Ask an administrator to send you a new one.",
+        }),
+      );
+    }
+
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: parsed.data.newPassword,
+    });
+
+    if (updateError) {
+      if (updateError.status === AUTH_STATUS.INVALID_CREDENTIALS) {
+        /* Supabase's project password policy, on top of ours. Its wording is
+           the only place that knows what it refused. */
+        return fail(
+          new ValidationError("Supabase refused the new password", {
+            cause: updateError,
+            userMessage: updateError.message,
+            fieldErrors: { newPassword: updateError.message },
+          }),
+        );
+      }
+
+      return fail(translateAuthError(updateError));
+    }
+
+    return ok();
+  } catch (caught) {
+    return fail(toAppError(caught));
+  }
+}
+
+export const authService = { signIn, signOut, changePassword, setInitialPassword } as const;

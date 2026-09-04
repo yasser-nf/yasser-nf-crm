@@ -1,6 +1,7 @@
 ﻿import { NextResponse, type NextRequest } from "next/server";
 
 import {
+  AUTH_FLOW_ROUTES,
   DEFAULT_AUTHENTICATED_ROUTE,
   PUBLIC_ROUTES,
   REDIRECT_QUERY_PARAM,
@@ -92,6 +93,17 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
 
   const isAuthenticated = user !== null;
   const isPublicRoute = PUBLIC_ROUTES.includes(pathname);
+
+  /*
+   * The invitation flow, left alone in both directions.
+   *
+   * Checked AFTER the session is refreshed, not before: the callback needs the
+   * rotated cookies on its response, and the password page needs the session
+   * this flow just established. Only the redirect decisions are skipped.
+   */
+  if (AUTH_FLOW_ROUTES.includes(pathname)) {
+    return withSecurityHeaders(response);
+  }
 
   // The root path is a signpost, not a page.
   if (pathname === "/") {
