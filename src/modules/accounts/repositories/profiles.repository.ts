@@ -11,8 +11,10 @@ import {
 import { accountStillCoveredSql, isSellableSlotSql } from "@/lib/drizzle/predicates";
 import {
   accounts,
+  customers,
   profileEvents,
   profiles,
+  type CustomerRow,
   type ProfileEventRow,
   type ProfileRow,
 } from "@/lib/drizzle/schema";
@@ -20,6 +22,18 @@ import type { Result } from "@/types/result";
 import { ok } from "@/utils/result";
 
 import type { ProfileEventInsert, ProfileUpdate } from "../validation/profile.schema";
+
+/**
+ * A profile slot together with whoever holds it.
+ *
+ * The customer is nullable for two different reasons — an unheld slot, and a
+ * `customer_id` whose row did not come back — which callers separate through
+ * `resolveProfileCustomer` rather than by testing for null themselves.
+ */
+export interface ProfileWithCustomer {
+  readonly profile: ProfileRow;
+  readonly customer: CustomerRow | null;
+}
 
 /**
  * Profiles repository.
@@ -52,7 +66,8 @@ export interface ProfileFilter extends PaginationInput {
 
 export interface ProfilesRepository {
   findById(id: string): Promise<Result<ProfileRow>>;
-  listByAccount(accountId: string): Promise<Result<readonly ProfileRow[]>>;
+  /** The five slots with their customers, in one query. */
+  listByAccount(accountId: string): Promise<Result<readonly ProfileWithCustomer[]>>;
   list(filter?: ProfileFilter): Promise<Result<Page<ProfileRow>>>;
   /**
    * Profiles genuinely sellable right now.
@@ -144,8 +159,14 @@ export const profilesRepository: ProfilesRepository = {
   async listByAccount(accountId) {
     return databaseAdapter.query("profiles.listByAccount", (executor) =>
       executor
-        .select()
+        /*
+         * The same join the accounts list makes, so the detail page and the
+         * inline panel name a slot's customer from one relationship rather than
+         * two lookups that could disagree.
+         */
+        .select({ profile: profiles, customer: customers })
         .from(profiles)
+        .leftJoin(customers, eq(profiles.customerId, customers.id))
         .where(eq(profiles.accountId, accountId))
         .orderBy(asc(profiles.profileNumber)),
     );

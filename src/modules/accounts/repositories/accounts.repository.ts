@@ -12,14 +12,15 @@ import {
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import {
   accounts,
+  customers,
   profileEvents,
   profiles,
   type AccountRow,
-  type ProfileRow,
 } from "@/lib/drizzle/schema";
 import {
   accountCanAllocateSql,
   accountIsLiveSql,
+  accountMatchesStatusSql,
   isSellableSlotSql,
   profileIsFreeSql,
 } from "@/lib/drizzle/predicates";
@@ -27,6 +28,7 @@ import { NotFoundError, ValidationError } from "@/lib/errors";
 import type { Result } from "@/types/result";
 import { fail } from "@/utils/result";
 import { resolveValidity } from "../services/account-validity";
+import type { ProfileWithCustomer } from "./profiles.repository";
 import { PROFILE_NUMBERS } from "../validation/profile.schema";
 import type { AccountInsert, AccountUpdate } from "../validation/account.schema";
 
@@ -100,16 +102,19 @@ export interface AccountWithCounts {
    */
   readonly expiredProfiles: number;
   /**
-   * The account's five profile rows, ordered 1 to 5.
+   * The account's five profile rows with their customers, ordered 1 to 5.
    *
    * Fetched for the whole page in ONE extra query, not one per account: a
    * 25-row page would otherwise issue 25 round trips to render its indicators.
+   * The customer arrives on that same query as a LEFT JOIN, so naming who holds
+   * each slot costs nothing beyond it — no second pass, and no lookup per
+   * profile, which on a full page would have been 125 of them.
    *
    * Raw rows, deliberately. The service turns them into display states through
    * `profileCellState`; handing a component the status column would invite it
    * to invent its own interpretation, which M13 §7 forbids.
    */
-  readonly profiles: readonly ProfileRow[];
+  readonly profiles: readonly ProfileWithCustomer[];
 }
 
 export interface AccountsRepository {
@@ -150,7 +155,15 @@ function buildFilter(filter: AccountFilter) {
   const conditions = [liveOnly];
 
   if (filter.status !== undefined) {
-    conditions.push(eq(accounts.status, filter.status));
+    /*
+     * Matched against what the badge shows, not against the column.
+     *
+     * `eq(accounts.status, ...)` was the bug: ADR-010 Decision 4 keeps problems
+     * out of `accounts.status`, so an account with an open payment problem
+     * stores `healthy` and displays Problem. Filtering the column returned
+     * nothing while that row sat in the table.
+     */
+    conditions.push(accountMatchesStatusSql(filter.status));
   }
 
   if (filter.country !== undefined) {
@@ -407,17 +420,28 @@ export const accountsRepository: AccountsRepository = {
         accountIds.length === 0
           ? []
           : await executor
-              .select()
+              /*
+               * LEFT, not INNER. An inner join would drop every free slot from
+               * the page — the four unsold profiles of an account would simply
+               * vanish from the panel, which is worse than the blank customer
+               * field this join exists to fix.
+               *
+               * Not filtered on the customer's deleted_at either: a soft-deleted
+               * customer still holds the slot they bought, and hiding them would
+               * turn a sold profile into an anonymous one.
+               */
+              .select({ profile: profiles, customer: customers })
               .from(profiles)
+              .leftJoin(customers, eq(profiles.customerId, customers.id))
               .where(inArray(profiles.accountId, accountIds))
               .orderBy(asc(profiles.accountId), asc(profiles.profileNumber));
 
-      const byAccount = new Map<string, ProfileRow[]>();
+      const byAccount = new Map<string, ProfileWithCustomer[]>();
 
-      for (const profile of profileRows) {
-        const existing = byAccount.get(profile.accountId);
-        if (existing) existing.push(profile);
-        else byAccount.set(profile.accountId, [profile]);
+      for (const row of profileRows) {
+        const existing = byAccount.get(row.profile.accountId);
+        if (existing) existing.push(row);
+        else byAccount.set(row.profile.accountId, [row]);
       }
 
       return {

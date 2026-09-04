@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Ban, Pencil, TriangleAlert, User, Undo2 } from "lucide-react";
+import { Ban, Pencil, TriangleAlert, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
@@ -11,7 +11,9 @@ import { DURATION, EASING } from "@/config/theme";
 import { ActionError } from "@/lib/errors";
 import type { ProfileRow } from "@/lib/drizzle/schema";
 import { deriveExpirationForInput } from "../services/profile-dates";
-import type { ProfileAllocation } from "../services/accounts.service";
+import type { ProfileAllocationWithCustomer } from "../services/accounts.service";
+import { ProfileCustomerLine } from "./profile-customer-line";
+import type { ProfileCustomerLink } from "../services/profile-customer";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
 import {
@@ -84,13 +86,17 @@ const HELD_STATUSES: readonly ProfileRow["status"][] = ["sold", "reserved", "exp
 export function ProfileCard({
   allocation,
   accountId,
-  customerLabel,
   canUnassignSale = false,
   index,
 }: {
-  allocation: ProfileAllocation;
+  /*
+   * Carries its own customer. The card used to take a `customerLabel` string
+   * from the page, which is how it came to render "Assigned" for everyone: a
+   * caller can pass a label that has nothing to do with the profile, and one
+   * did. Reading it off the allocation makes that impossible.
+   */
+  allocation: ProfileAllocationWithCustomer;
   accountId: string;
-  customerLabel: string | null;
   /**
    * Whether the signed-in user may remove a sale.
    *
@@ -154,19 +160,7 @@ export function ProfileCard({
       </header>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
-        <div className="flex flex-col gap-0.5">
-          <dt className="text-foreground-subtle">Customer</dt>
-          <dd className="flex items-center gap-1.5 text-foreground">
-            {customerLabel ? (
-              <>
-                <User className="size-3 shrink-0 text-foreground-subtle" aria-hidden="true" />
-                <span className="truncate">{customerLabel}</span>
-              </>
-            ) : (
-              "—"
-            )}
-          </dd>
-        </div>
+        <ProfileCustomerLine customer={allocation.customer} variant="stacked" />
 
         <div className="flex flex-col gap-0.5">
           <dt className="text-foreground-subtle">Sale date</dt>
@@ -253,6 +247,7 @@ export function ProfileCard({
 
       <EditProfileDialog
         profile={profile}
+        customer={allocation.customer}
         accountId={accountId}
         /* Allocation fields are hidden on a slot that cannot hold one. */
         canAllocate={blockedReason !== "profile_not_for_sale"}
@@ -281,19 +276,45 @@ export function ProfileCard({
  * PIN is shown because the operator is editing it; the account password has no
  * business here and is not reachable from it.
  */
-function EditProfileDialog({
+/**
+ * The profile edit form.
+ *
+ * Exported so the accounts list can open the SAME dialog rather than growing a
+ * second copy of this form. It was module-private while the account detail page
+ * was its only caller; nothing about its behaviour changed, and the detail page
+ * still renders it exactly as before.
+ */
+export function EditProfileDialog({
   profile,
+  customer,
   accountId,
   canAllocate,
   open,
   onOpenChange,
 }: {
   profile: ProfileRow;
+  /**
+   * THIS profile's customer, resolved from its own `customer_id`.
+   *
+   * Passed in rather than looked up here: a dialog that fetched its own
+   * customer would be one request per open, and — worse — a component holding
+   * its own copy is how the field comes to show the profile opened before it.
+   * Keyed by profile id at both call sites, so opening Profile 3 after Profile
+   * 1 remounts the form with Profile 3's customer.
+   */
+  customer: ProfileCustomerLink;
   accountId: string;
   canAllocate: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  /*
+   * What the field starts with, remembered so submit can tell an edit from an
+   * untouched field. Only a customer that actually resolved is offered: there
+   * is nothing to prefill for an unheld slot, and prefilling a missing record
+   * would put the words "Customer unavailable" into a phone input.
+   */
+  const initialCustomerPhone = customer.kind === "linked" ? customer.customer.label : "";
   const update = useUpdateProfile(accountId, profile.id);
 
   const {
@@ -308,7 +329,7 @@ function EditProfileDialog({
       profileName: profile.profileName ?? "",
       pin: profile.pin ?? "",
       notes: profile.notes ?? "",
-      customerPhone: "",
+      customerPhone: initialCustomerPhone,
       saleDate: profile.saleDate ?? "",
       /*
        * Derived on load, not read from the row.
@@ -367,7 +388,18 @@ function EditProfileDialog({
     if (values.notes) payload["notes"] = values.notes;
 
     if (canAllocate) {
-      if (values.customerPhone) payload["customerPhone"] = values.customerPhone;
+      /*
+       * Only when it actually changed.
+       *
+       * The field is prefilled now, so "non-empty" no longer means "the
+       * operator wants a reassignment". Sending it unchanged would put
+       * `customerPhone` in every payload, and the service treats its presence
+       * as touching the allocation — a PIN correction would re-resolve the
+       * customer and record an allocation change that nobody made.
+       */
+      if (values.customerPhone && values.customerPhone !== initialCustomerPhone) {
+        payload["customerPhone"] = values.customerPhone;
+      }
       if (values.saleDate) payload["saleDate"] = values.saleDate;
       if (values.durationDays) payload["durationDays"] = Number(values.durationDays);
       /*
@@ -445,7 +477,11 @@ function EditProfileDialog({
                 label="Customer phone"
                 inputMode="tel"
                 placeholder="0663 94 71 16"
-                hint="Any Algerian format. An existing customer is matched, never duplicated. Leave blank to keep the current one."
+                hint={
+                  customer.kind === "linked"
+                    ? "The customer holding this profile. Replace it to reassign — an existing customer is matched, never duplicated."
+                    : "Any Algerian format. An existing customer is matched, never duplicated. Leave blank to leave this profile unassigned."
+                }
                 disabled={update.isPending}
                 error={fieldError("customerPhone")}
                 {...register("customerPhone")}

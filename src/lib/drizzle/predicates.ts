@@ -1,6 +1,7 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import { accounts, issues, profiles } from "./schema";
+import type { AccountRow } from "./schema";
 
 /**
  * Shared SQL predicates for the M13 inventory rules.
@@ -171,4 +172,68 @@ export function rawAccountCanAllocate(accountAlias: string): SQL {
         and bi.status in ('open', 'in_progress', 'waiting')
     )
   )`);
+}
+
+/**
+ * The four statuses that name a fault, and are also the four problem types.
+ *
+ * `account_status` and `issue_type` share these values by design — 03_DATABASE
+ * lists the same four faults in both. That overlap is what makes a status
+ * filter answerable from either place, and why it has to be answered from both.
+ */
+const PROBLEM_STATUSES_SQL = [
+  "payment_problem",
+  "incorrect_password",
+  "invalid_email",
+  "something_went_wrong",
+] as const;
+
+type ProblemStatus = (typeof PROBLEM_STATUSES_SQL)[number];
+
+function isProblemStatus(status: AccountRow["status"]): status is ProblemStatus {
+  return (PROBLEM_STATUSES_SQL as readonly string[]).includes(status);
+}
+
+/**
+ * Accounts whose status BADGE reads as the given status.
+ *
+ * Not `accounts.status = x`. ADR-010 Decision 4 is explicit that a problem
+ * never writes `accounts.status`, so an account with an open payment problem
+ * still stores `healthy` while the badge reads Problem. Filtering the column
+ * therefore asked a different question from the one the screen answers, and the
+ * Payment Problem filter returned nothing while a Problem badge sat in the
+ * table — two definitions of the same word.
+ *
+ * The blocking statuses are written out rather than imported, for the same
+ * reason `accountHasNoBlockingProblemSql` above writes them out: ADR-003
+ * forbids a repository depending on another module. A unit test asserts this
+ * copy still equals BLOCKING_STATUSES.
+ */
+export function accountMatchesStatusSql(status: AccountRow["status"]): SQL {
+  const openProblemOfType = (type: ProblemStatus): SQL => sql`exists (
+    select 1 from ${issues}
+    where ${issues.accountId} = ${accounts.id}
+      and ${issues.status} in ('open', 'in_progress', 'waiting')
+      and ${issues.issueType} = ${type}
+  )`;
+
+  /*
+   * A fault is either recorded on the account or raised as an open problem of
+   * that type. Either way the badge says so, so either way the filter must.
+   */
+  if (isProblemStatus(status)) {
+    return sql`(${eq(accounts.status, status)} or ${openProblemOfType(status)})`;
+  }
+
+  /*
+   * Healthy is the mirror image. An account carrying an open problem shows
+   * Problem, not Healthy, so returning it here would reintroduce the same
+   * contradiction from the other side.
+   */
+  if (status === "healthy") {
+    return sql`(${eq(accounts.status, status)} and ${accountHasNoBlockingProblemSql})`;
+  }
+
+  /* archived and deleted are lifecycle, not fault. Nothing derives them. */
+  return eq(accounts.status, status);
 }

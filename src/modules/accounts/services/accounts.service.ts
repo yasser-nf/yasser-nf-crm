@@ -34,6 +34,7 @@ import {
   profileCellState,
   type ProfileCellState,
 } from "./account-validity";
+import { resolveProfileCustomer, type ProfileCustomerLink } from "./profile-customer";
 import { parseBulkAccounts, type BulkRowError } from "./bulk-accounts.service";
 import { deleteEachAccount, uniqueIds, type BulkDeleteReport } from "./bulk-delete";
 
@@ -113,6 +114,25 @@ export interface ProfileAllocation {
   readonly state: ProfileCellState;
 }
 
+/**
+ * A profile allocation that also names who holds the slot.
+ *
+ * Separate from `ProfileAllocation` on purpose. That type is what the Smart
+ * Stock Engine and Quick Prepare consume to decide whether a slot can be sold,
+ * and the answer to that question does not depend on the customer's identity —
+ * loading one for them would be a join they never read. The screens that draw a
+ * profile card need the name; the engines that allocate do not.
+ */
+export interface ProfileAllocationWithCustomer extends ProfileAllocation {
+  /**
+   * Always present, never undefined, and never a bare null.
+   *
+   * The union's three cases are the three things a card can say, so a screen
+   * cannot accidentally render an empty field by forgetting a branch.
+   */
+  readonly customer: ProfileCustomerLink;
+}
+
 /** Everything `evaluateAllocation` needs beyond the two rows themselves. */
 export interface AllocationContext {
   /** From problemsService. An open problem blocks every profile on the account. */
@@ -139,7 +159,7 @@ export interface AccountDetail {
    * but the ciphertext was, and it did not need to be.
    */
   readonly account: AccountView;
-  readonly profiles: readonly ProfileAllocation[];
+  readonly profiles: readonly ProfileAllocationWithCustomer[];
   /** Per-profile display state, from the same rule the accounts list uses. */
   readonly indicators: readonly ProfileIndicator[];
   /** Open problems blocking this account. Empty when nothing is wrong. */
@@ -389,6 +409,27 @@ export interface AccountListRow extends Omit<AccountWithCounts, "account" | "pro
    * same state the detail page and Quick Prepare show. M13 §7.
    */
   readonly hasActiveProblem: boolean;
+  /**
+   * The account's five profiles, evaluated exactly as the detail page
+   * evaluates them.
+   *
+   * Built from profile rows `listWithCounts` ALREADY loads — one batched
+   * `inArray` for the whole page — so carrying them costs no extra query. The
+   * list used to derive `indicators` from these rows and then discard them.
+   *
+   * PAYLOAD NOTE: this widens what the list sends. `indicators` carried only a
+   * number, a state and a date; a ProfileAllocation carries the whole profile
+   * row, including its PIN and customer id. That is the same data the account
+   * detail page has always sent for one account, now sent for a page of them,
+   * and it is what the inline profiles panel renders. The account password is
+   * still never here: `toAccountView` drops it before this point.
+   *
+   * The customer travels with each slot too, resolved from that profile's own
+   * customer_id through the join the same query makes. Five slots on one
+   * account can name five different customers, and none of them is the
+   * account's customer, because an account does not have one.
+   */
+  readonly profiles: readonly ProfileAllocationWithCustomer[];
 }
 
 /**
@@ -445,8 +486,28 @@ async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountL
         ...rest,
         account: toAccountView(row.account),
         hasActiveProblem: rowHasProblem,
+        /*
+         * The same call the detail page makes, so a slot cannot read one way in
+         * the inline panel and another after clicking through. Sorted by number
+         * because the panel renders "Profile 1..5" and the query does not
+         * promise an order.
+         */
+        profiles: [...rawProfiles]
+          .sort((a, b) => a.profile.profileNumber - b.profile.profileNumber)
+          .map(({ profile, customer }) => ({
+            ...evaluateAllocation(row.account, profile, {
+              hasActiveProblem: rowHasProblem,
+              today,
+            }),
+            /*
+             * From this profile's own customer_id and the row the join returned
+             * for it — never from the account, and never from a neighbouring
+             * slot. Five profiles on one account resolve five times.
+             */
+            customer: resolveProfileCustomer(profile.customerId, customer),
+          })),
         remainingValidityDays: accountRemainingDays(row.account, today),
-        indicators: rawProfiles.map((profile) => ({
+        indicators: rawProfiles.map(({ profile }) => ({
           profileId: profile.id,
           profileNumber: profile.profileNumber,
           state: profileCellState(profile, row.account, today, canAllocate),
@@ -495,7 +556,7 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
      * Same function as the accounts list, so the cells on this page and the
      * cells on that one can never tell different stories. M13 §7.
      */
-    indicators: profilesResult.value.map((profile) => ({
+    indicators: profilesResult.value.map(({ profile }) => ({
       profileId: profile.id,
       profileNumber: profile.profileNumber,
       state: profileCellState(
@@ -506,14 +567,16 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
       ),
       expirationDate: profile.expirationDate,
     })),
-    profiles: profilesResult.value.map((profile) =>
+    profiles: profilesResult.value.map(({ profile, customer }) => ({
       /*
        * No requestedDurationDays: this screen describes what is true, it is not
        * asking to allocate anything. Supplying one would mark free profiles
        * blocked against a duration nobody entered.
        */
-      evaluateAllocation(account, profile, { hasActiveProblem, today }),
-    ),
+      ...evaluateAllocation(account, profile, { hasActiveProblem, today }),
+      /* Same resolver as the list, so both screens name one customer. */
+      customer: resolveProfileCustomer(profile.customerId, customer),
+    })),
     accountAllowsAllocation:
       account.status === "healthy" && !hasActiveProblem && !isAccountExpired(account, today),
     remainingValidityDays: accountRemainingDays(account, today),

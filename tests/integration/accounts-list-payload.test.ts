@@ -10,8 +10,13 @@ import type { AppUser } from "@/lib/auth";
  *
  *   1. Every account row carries exactly five profile indicators, in the right
  *      states — the data behind M13 §1's P1..P5 cells.
- *   2. The payload carries NO credential. Not the plaintext (which never
- *      existed here) and not the AES ciphertext, and no profile PIN.
+ *   2. The payload carries no ACCOUNT credential. Not the plaintext (which
+ *      never existed here) and not the AES ciphertext.
+ *
+ *      Profile rows, PIN included, DO travel now — the inline Profiles panel
+ *      renders them, exactly as the detail page already did. That is a widening
+ *      of the payload made on purpose, and the tests below say so where it
+ *      happens rather than leaving a reader to infer it from silence.
  *
  * The second is the one that needs a test rather than a review. `AccountRow`
  * includes `password_encrypted`, and the list component is a Client Component,
@@ -189,18 +194,75 @@ describe.skipIf(!configured)("the payload carries no credential", () => {
     expect(serialised).not.toContain(stored[0]!.password_encrypted.slice(0, 24));
   }, 90_000);
 
-  it("does not ship profile PINs or raw profile rows", async () => {
+  it("ships profile rows, because the inline panel renders them", async () => {
+    /*
+     * This assertion used to be its opposite: `row` carried indicators only,
+     * and shipping raw profile rows — PIN included — was called out as
+     * deliberate omission.
+     *
+     * The inline Profiles panel changed the requirement, not the risk appetite.
+     * It renders each slot's PIN under the account row, which is the same thing
+     * the account DETAIL page has always done through the same card component.
+     * Serving that from a second query would have cost a round trip per account
+     * to fetch data the page query had already loaded and thrown away.
+     *
+     * So the widening is: profile rows for the accounts on the current page now
+     * reach the client. What did NOT widen is below, and is the part that
+     * mattered — no account credential travels with them.
+     */
+    const { row } = await listRow();
+
+    expect(row.profiles).toHaveLength(5);
+    expect(row.profiles.map((p) => p.profile.profileNumber)).toEqual([1, 2, 3, 4, 5]);
+
+    /* Same rows the indicator strip is built from, so the two cannot disagree. */
+    expect(row.profiles.map((p) => p.state)).toEqual(
+      row.indicators.toSorted((a, b) => a.profileNumber - b.profileNumber).map((i) => i.state),
+    );
+  }, 90_000);
+
+  it("still ships no account credential alongside those profile rows", async () => {
+    /*
+     * The guard that has to survive the widening. A profile row is a child of
+     * the account row; the risk was that carrying it would drag the account's
+     * ciphertext along in some nested shape.
+     */
+    const { page } = await listRow();
+    const serialised = JSON.stringify(page.items.flatMap((item) => item.profiles));
+
+    const stored = await sql!<{ password_encrypted: string }[]>`
+      select password_encrypted from public.accounts where id = ${accountId}::uuid
+    `;
+
+    expect(serialised).not.toContain(PLAINTEXT);
+    expect(serialised).not.toContain(stored[0]!.password_encrypted);
+    expect(serialised).not.toContain(stored[0]!.password_encrypted.slice(0, 24));
+
+    for (const item of page.items) {
+      for (const allocation of item.profiles) {
+        expect(allocation.profile).not.toHaveProperty("passwordEncrypted");
+      }
+    }
+  }, 90_000);
+
+  it("carries the PIN the panel displays, and only for profiles on this page", async () => {
+    /*
+     * Pinned deliberately rather than left implicit: the PIN is now in the
+     * payload BY DESIGN (requirement 5 puts it on the card). What keeps that
+     * bounded is the page — one page of accounts, not the table.
+     */
     const customers = await sql!<{ n: number }[]>`
       select count(*)::int as n from public.customers where deleted_at is null
     `;
 
     const { row, page } = await listRow();
 
-    expect(row).not.toHaveProperty("profiles");
-
     if (customers[0]!.n > 0) {
-      expect(JSON.stringify(page)).not.toContain(PIN);
+      expect(row.profiles[0]?.profile.pin).toBe(PIN);
     }
+
+    expect(page.items.length).toBeLessThanOrEqual(page.limit);
+    expect(page.items.flatMap((i) => i.profiles).length).toBeLessThanOrEqual(page.limit * 5);
   }, 90_000);
 
   it("omits the credential from the account DETAIL payload too", async () => {

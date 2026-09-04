@@ -172,8 +172,13 @@ export function buildWhatsAppLink(input: WhatsAppMessageInput): WhatsAppLink {
  * bug that told a Qatari customer "WhatsApp unavailable" on an allocation that
  * had succeeded, so a digit string too long to be a national number is read as
  * what it is: a key that already carries its own country code.
+ *
+ * Exported for the quick WhatsApp action on a profile card, which opens a chat
+ * with no prefilled text. `buildWhatsAppLink` still owns the credential-message
+ * flow and calls this for its URL, so both paths normalise a number the same
+ * way and Quick Prepare and Quick Replace are untouched by that action existing.
  */
-function whatsappDestination(identifier: string): string | null {
+export function whatsappDestination(identifier: string): string | null {
   const parsed = normalizeIdentifier(identifier);
 
   if (parsed.ok) {

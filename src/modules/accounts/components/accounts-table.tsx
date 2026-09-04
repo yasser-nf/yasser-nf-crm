@@ -1,10 +1,10 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { ArrowDown, ArrowUp, ChevronsUpDown, Tv } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, ChevronsUpDown, Tv } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { ROUTES } from "@/config/constants";
 import { DURATION, EASING } from "@/config/theme";
@@ -29,6 +29,7 @@ import {
 import { validityLabel } from "../services/account-presentation";
 import { useAccountSelection } from "./account-selection-context";
 import { AccountNoteCell } from "./account-note-cell";
+import { AccountProfilesPanel } from "./account-profiles-panel";
 import { BulkSelectionBar } from "./bulk-selection-bar";
 import { CopyCredentials } from "./copy-credentials";
 import { ProfileIndicators, ProfileIndicatorLegend } from "./profile-indicators";
@@ -89,6 +90,8 @@ export function AccountsTable({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  /* Honours the OS setting: the panel still opens, it just does not travel. */
+  const reduceMotion = useReducedMotion();
 
   const visibleIds = items.map((row) => row.account.id);
 
@@ -152,6 +155,25 @@ export function AccountsTable({
   const everySelected = allSelected(selection, visibleIds);
   const partiallySelected = someSelected(selection, visibleIds);
 
+  /*
+   * Which rows are open. A Set rather than a single id, because closing one
+   * account to read another is busywork when the point is comparing them.
+   * Purely local: it touches no query string and no database.
+   */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  function toggleExpanded(accountId: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+
+      if (!next.delete(accountId)) {
+        next.add(accountId);
+      }
+
+      return next;
+    });
+  }
+
   function clearSelection() {
     setSelection(EMPTY_SELECTION);
   }
@@ -201,6 +223,8 @@ export function AccountsTable({
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
+              {/* The disclosure column. Header is blank; the buttons are labelled. */}
+              <TableHead className="w-10" />
               {/* Before Email, so a row reads: pick this one, then what it is. */}
               <TableHead className="w-10">
                 <Checkbox
@@ -264,84 +288,165 @@ export function AccountsTable({
           </TableHeader>
 
           <TableBody>
-            {items.map((row, index) => (
-              <motion.tr
-                key={row.account.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{
-                  duration: DURATION.fast,
-                  ease: EASING.standard,
-                  /* Staggered, but capped so a full page never feels slow. */
-                  delay: Math.min(index * 0.015, 0.15),
-                }}
-                data-selected={selection.has(row.account.id) || undefined}
-                className={cn(
-                  "border-b border-border transition-colors last:border-0 hover:bg-surface-raised",
-                  selection.has(row.account.id) && "bg-primary/5 hover:bg-primary/10",
-                )}
-              >
-                <TableCell>
-                  <Checkbox
-                    checked={selection.has(row.account.id)}
-                    onCheckedChange={() => setSelection(toggleSelected(selection, row.account.id))}
-                    aria-label={`Select ${row.account.email}`}
-                  />
-                </TableCell>
+            {items.map((row, index) => {
+              const isExpanded = expanded.has(row.account.id);
+              const panelId = `account-profiles-${row.account.id}`;
 
-                <TableCell className="font-medium">
-                  <Link
-                    href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
-                    className="text-foreground hover:text-primary"
+              return (
+                <Fragment key={row.account.id}>
+                  <motion.tr
+                    key={row.account.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{
+                      duration: DURATION.fast,
+                      ease: EASING.standard,
+                      /* Staggered, but capped so a full page never feels slow. */
+                      delay: Math.min(index * 0.015, 0.15),
+                    }}
+                    data-selected={selection.has(row.account.id) || undefined}
+                    className={cn(
+                      "border-b border-border transition-colors hover:bg-surface-raised",
+                      selection.has(row.account.id) && "bg-primary/5 hover:bg-primary/10",
+                      /* The panel supplies the separator when the row is open. */
+                      isExpanded && "border-b-0",
+                    )}
                   >
-                    {row.account.email}
-                  </Link>
-                </TableCell>
-                <TableCell>
-                  <AccountStatusBadge
-                    status={row.account.status}
-                    hasActiveProblem={row.hasActiveProblem}
-                  />
-                </TableCell>
+                    <TableCell>
+                      {/*
+                    Its own cell, before the checkbox, so the disclosure never
+                    competes with selection for the same click. The button is the
+                    only thing that toggles: the row itself is not clickable, so
+                    Copy, the note pencil and the email link cannot expand a row
+                    by accident and need no stopPropagation.
+                  */}
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => toggleExpanded(row.account.id)}
+                        aria-expanded={isExpanded}
+                        aria-controls={panelId}
+                        aria-label={`${isExpanded ? "Collapse" : "Expand"} profiles for ${row.account.email}`}
+                        className="text-foreground-subtle hover:text-foreground"
+                      >
+                        {isExpanded ? (
+                          <ChevronUp aria-hidden="true" />
+                        ) : (
+                          <ChevronDown aria-hidden="true" />
+                        )}
+                      </Button>
+                    </TableCell>
 
-                <TableCell className="text-foreground-muted">
-                  {row.account.country ?? "—"}
-                </TableCell>
-                <TableCell className="text-foreground-muted">
-                  {formatDate(row.account.createdAt)}
-                </TableCell>
+                    <TableCell>
+                      <Checkbox
+                        checked={selection.has(row.account.id)}
+                        onCheckedChange={() =>
+                          setSelection(toggleSelected(selection, row.account.id))
+                        }
+                        aria-label={`Select ${row.account.email}`}
+                      />
+                    </TableCell>
 
-                {/* All five, on the same row. M13 §1. */}
-                <TableCell>
-                  <ProfileIndicators indicators={row.indicators} />
-                </TableCell>
+                    <TableCell className="font-medium">
+                      <Link
+                        href={`${ROUTES.ACCOUNTS}/${row.account.id}`}
+                        className="text-foreground hover:text-primary"
+                      >
+                        {row.account.email}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <AccountStatusBadge
+                        status={row.account.status}
+                        hasActiveProblem={row.hasActiveProblem}
+                      />
+                    </TableCell>
 
-                <TableCell className={cn("text-caption", validityTone(row.remainingValidityDays))}>
-                  <span className="whitespace-nowrap">
-                    {validityLabel(row.remainingValidityDays, row.account.validUntil)}
-                  </span>
-                  <span className="block text-foreground-subtle">
-                    {row.account.profileSlots} of 5 sellable
-                  </span>
-                </TableCell>
+                    <TableCell className="text-foreground-muted">
+                      {row.account.country ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-foreground-muted">
+                      {formatDate(row.account.createdAt)}
+                    </TableCell>
 
-                <TableCell>
-                  <AccountNoteCell
-                    accountId={row.account.id}
-                    accountEmail={row.account.email}
-                    note={row.account.notes}
-                  />
-                </TableCell>
+                    {/* All five, on the same row. M13 §1. */}
+                    <TableCell>
+                      <ProfileIndicators indicators={row.indicators} />
+                    </TableCell>
 
-                <TableCell className="text-right">
-                  <CopyCredentials
-                    accountId={row.account.id}
-                    email={row.account.email}
-                    className="justify-end"
-                  />
-                </TableCell>
-              </motion.tr>
-            ))}
+                    <TableCell
+                      className={cn("text-caption", validityTone(row.remainingValidityDays))}
+                    >
+                      <span className="whitespace-nowrap">
+                        {validityLabel(row.remainingValidityDays, row.account.validUntil)}
+                      </span>
+                      <span className="block text-foreground-subtle">
+                        {row.account.profileSlots} of 5 sellable
+                      </span>
+                    </TableCell>
+
+                    <TableCell>
+                      <AccountNoteCell
+                        accountId={row.account.id}
+                        accountEmail={row.account.email}
+                        note={row.account.notes}
+                      />
+                    </TableCell>
+
+                    <TableCell className="text-right">
+                      <CopyCredentials
+                        accountId={row.account.id}
+                        email={row.account.email}
+                        className="justify-end"
+                      />
+                    </TableCell>
+                  </motion.tr>
+
+                  <AnimatePresence initial={false}>
+                    {isExpanded ? (
+                      <motion.tr
+                        key="panel"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{
+                          duration: reduceMotion ? 0 : DURATION.fast,
+                          ease: EASING.standard,
+                        }}
+                        className="border-b border-border"
+                      >
+                        <TableCell colSpan={COLUMNS.length + 6} className="p-0">
+                          {/*
+                            Height is animated on an inner div rather than on the
+                            row: a <tr> cannot be given overflow, so collapsing it
+                            directly leaves the content spilling over the row below.
+                          */}
+                          <motion.div
+                            initial={{ height: 0 }}
+                            animate={{ height: "auto" }}
+                            exit={{ height: 0 }}
+                            transition={{
+                              duration: reduceMotion ? 0 : DURATION.fast,
+                              ease: EASING.standard,
+                            }}
+                            className="overflow-hidden"
+                          >
+                            <div className="px-3 pb-3">
+                              <AccountProfilesPanel
+                                id={panelId}
+                                accountId={row.account.id}
+                                accountEmail={row.account.email}
+                                profiles={row.profiles}
+                              />
+                            </div>
+                          </motion.div>
+                        </TableCell>
+                      </motion.tr>
+                    ) : null}
+                  </AnimatePresence>
+                </Fragment>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
@@ -430,6 +535,56 @@ export function AccountsTable({
               variant="full"
               className="flex-wrap"
             />
+
+            {/*
+              The desktop table is hidden below lg, so this is the disclosure a
+              phone actually uses. Full width and min-h-11, which is the 44px
+              touch target 04_UI_GUIDELINES.md requires — reached by sizing the
+              control itself rather than haloing a small one.
+            */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => toggleExpanded(row.account.id)}
+              aria-expanded={expanded.has(row.account.id)}
+              aria-controls={`account-profiles-card-${row.account.id}`}
+              aria-label={`${expanded.has(row.account.id) ? "Collapse" : "Expand"} profiles for ${row.account.email}`}
+              className="min-h-11 w-full gap-2"
+            >
+              {expanded.has(row.account.id) ? (
+                <>
+                  <ChevronUp className="size-4" aria-hidden="true" />
+                  Hide profiles
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="size-4" aria-hidden="true" />
+                  Show profiles
+                </>
+              )}
+            </Button>
+
+            <AnimatePresence initial={false}>
+              {expanded.has(row.account.id) ? (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{
+                    duration: reduceMotion ? 0 : DURATION.fast,
+                    ease: EASING.standard,
+                  }}
+                  className="overflow-hidden"
+                >
+                  <AccountProfilesPanel
+                    id={`account-profiles-card-${row.account.id}`}
+                    accountId={row.account.id}
+                    accountEmail={row.account.email}
+                    profiles={row.profiles}
+                  />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
           </article>
         ))}
       </div>

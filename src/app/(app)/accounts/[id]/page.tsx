@@ -16,7 +16,7 @@ import {
   accountsService,
 } from "@/modules/accounts";
 import type { AccountRow } from "@/lib/drizzle/schema";
-import type { ProfileAllocation } from "@/modules/accounts";
+import { profileCustomerLabel, type ProfileAllocationWithCustomer } from "@/modules/accounts";
 import { ProblemSeverityBadge, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
 import { ReplaceAccountButton } from "@/modules/quick-prepare";
 import { ErrorState } from "@/shared/feedback/error-state";
@@ -52,13 +52,28 @@ function ReplaceAllocations({
   /* Only what the button reads. Keeps the credential off this page entirely. */
   /* `email` is how the replacement preview looks the account up. */
   account: Pick<AccountRow, "id" | "status" | "email">;
-  profiles: readonly ProfileAllocation[];
+  profiles: readonly ProfileAllocationWithCustomer[];
 }) {
-  const byCustomer = new Map<string, number>();
+  /*
+   * Grouped by the customer each profile actually names, and carrying that
+   * customer's label. "Customer 1", "Customer 2" told an operator nothing about
+   * who they were being asked to move — they had to open the customer page to
+   * find out which of their people was affected.
+   */
+  const byCustomer = new Map<string, { count: number; label: string }>();
 
-  for (const { profile } of profiles) {
-    if (profile.customerId) {
-      byCustomer.set(profile.customerId, (byCustomer.get(profile.customerId) ?? 0) + 1);
+  for (const { profile, customer } of profiles) {
+    if (!profile.customerId) continue;
+
+    const existing = byCustomer.get(profile.customerId);
+
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byCustomer.set(profile.customerId, {
+        count: 1,
+        label: profileCustomerLabel(customer),
+      });
     }
   }
 
@@ -76,19 +91,20 @@ function ReplaceAllocations({
       </div>
 
       <ul className="flex flex-col gap-2">
-        {[...byCustomer.entries()].map(([customerId, count], index) => (
+        {[...byCustomer.entries()].map(([customerId, { count, label }]) => (
           <li
             key={customerId}
             className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-background-secondary px-4 py-3"
           >
             <span className="text-description text-foreground">
-              Customer {index + 1} · {count} profile{count === 1 ? "" : "s"}
+              <span className="font-mono">{label}</span> · {count} profile
+              {count === 1 ? "" : "s"}
             </span>
 
             <ReplaceAccountButton
               account={account}
               customerId={customerId}
-              customerLabel={`customer ${index + 1}`}
+              customerLabel={label}
               profileCount={count}
             />
           </li>
@@ -244,11 +260,6 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
               allocation={allocation}
               accountId={account.id}
               canUnassignSale={canUnassignSale}
-              /*
-               * Customer names arrive with the Customers module. Showing the raw
-               * id would be worse than showing nothing.
-               */
-              customerLabel={allocation.profile.customerId ? "Assigned" : null}
               index={index}
             />
           ))}

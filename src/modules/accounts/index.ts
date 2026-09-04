@@ -25,6 +25,7 @@ export {
   type AllocationValidity,
   type BulkCreateResult,
   type ProfileAllocation,
+  type ProfileAllocationWithCustomer,
   type ProfileIndicator,
   type ProfileView,
 } from "./services/accounts.service";
@@ -48,6 +49,15 @@ export {
   resolveValidity,
   type ProfileCellState,
 } from "./services/account-validity";
+
+export {
+  profileCustomerLabel,
+  resolveProfileCustomer,
+  PROFILE_CUSTOMER_EMPTY_LABEL,
+  PROFILE_CUSTOMER_MISSING_LABEL,
+  type ProfileCustomerLink,
+  type ProfileCustomerSummary,
+} from "./services/profile-customer";
 
 export {
   parseBulkAccounts,

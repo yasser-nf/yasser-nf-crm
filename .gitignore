@@ -50,3 +50,12 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# agent skills
+# Installed per-project by `npx skills add`, not authored here. They are
+# tooling for whoever is working on the repo, they carry no application code,
+# and at 4MB they would otherwise be committed by `git add -A` and uploaded
+# into the production bundle by `vercel deploy`, which reads this file.
+.agents/
+.claude/skills/
+skills-lock.json

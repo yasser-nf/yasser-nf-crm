@@ -400,7 +400,15 @@ async function recordChanges(
 }
 
 async function listForAccount(accountId: string): Promise<Result<readonly ProfileRow[]>> {
-  return profilesRepository.listByAccount(accountId);
+  const rows = await profilesRepository.listByAccount(accountId);
+
+  /*
+   * The repository now returns each slot with its customer, because the pages
+   * that draw profile cards need to name who holds one. This caller does not,
+   * so it keeps its narrower promise rather than widening a public signature to
+   * follow a change made for somebody else.
+   */
+  return rows.ok ? ok(rows.value.map(({ profile }) => profile)) : rows;
 }
 
 /**
