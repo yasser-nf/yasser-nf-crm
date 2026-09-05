@@ -13,12 +13,26 @@ export { usersService, type UserDetail, type UserListEntry } from "./services/us
 export { sessionsService } from "./services/sessions.service";
 export { activityService } from "./services/activity.service";
 export { derivePresence, type PresenceState } from "./services/presence";
+export {
+  deriveInvitationState,
+  mayResendInvitation,
+  INVITE_LINK_LIFETIME_HOURS,
+  type InvitationState,
+  type InvitationTimestamps,
+} from "./services/invitation-status";
 
 /* Components consumed by app/ page composition. */
 export { InviteUserButton, OnlineNow, UsersFilters, UsersTable } from "./components/users-table";
 export { InviteUserForm } from "./components/invite-user-form";
 export { UserDetailView } from "./components/user-detail";
-export { PresenceDot, RoleBadge, UserStatusBadge, describeDevice } from "./components/user-shared";
+export {
+  InvitationBadge,
+  PresenceDot,
+  RoleBadge,
+  UserStatusBadge,
+  describeDevice,
+} from "./components/user-shared";
+export { ResendInviteButton } from "./components/resend-invite-button";
 
 export type { SessionRow } from "./repositories/sessions.repository";
 export type { ActivityEntry } from "./repositories/activity.repository";

@@ -12,9 +12,16 @@ import type { AppUser } from "@/lib/auth";
 import type { Page } from "@/lib/database";
 import { absoluteUrl } from "@/config/app-url";
 import { ROUTES } from "@/config/constants";
+import { logger } from "@/lib/logger";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { LoginHistoryRow, UserRow } from "@/lib/drizzle/schema";
-import { ConflictError, ExternalServiceError, ForbiddenError, ValidationError } from "@/lib/errors";
+import {
+  ConflictError,
+  ExternalServiceError,
+  ForbiddenError,
+  ValidationError,
+  type AppError,
+} from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
@@ -23,6 +30,11 @@ import { derivePresence, type PresenceState } from "./presence";
 import { sessionsRepository, type SessionRow } from "../repositories/sessions.repository";
 import { usersRepository, type UserFilter } from "../repositories/users.repository";
 import { changeRoleSchema, changeStatusSchema, inviteUserSchema } from "../validation/user.schema";
+import {
+  deriveInvitationState,
+  mayResendInvitation,
+  type InvitationState,
+} from "./invitation-status";
 
 /**
  * Users service.
@@ -37,6 +49,16 @@ export interface UserListEntry {
   readonly user: UserRow;
   readonly presence: PresenceState;
   readonly lastActiveAt: Date | null;
+  /**
+   * Derived from Supabase's timestamps, never stored.
+   *
+   * Distinct from `user.status`, which is the operational state an
+   * administrator sets. A person can be `active` and still not have accepted
+   * their invitation — that is precisely the case the Resend action exists for.
+   */
+  readonly invitation: InvitationState;
+  /** When the most recent invitation was sent. Null if they were never invited. */
+  readonly invitedAt: Date | null;
 }
 
 export interface UserDetail {
@@ -105,9 +127,17 @@ async function list(
 
   return ok({
     ...page.value,
-    items: page.value.items.map((user) => {
+    items: page.value.items.map(({ user, invitedAt, acceptedAt }) => {
       const lastActiveAt = lastActivity.get(user.id) ?? null;
-      return { user, lastActiveAt, presence: derivePresence(lastActiveAt, now) };
+
+      return {
+        user,
+        lastActiveAt,
+        presence: derivePresence(lastActiveAt, now),
+        /* Same clock as presence, so one row cannot straddle the boundary. */
+        invitation: deriveInvitationState({ invitedAt, acceptedAt }, now),
+        invitedAt,
+      };
     }),
   });
 }
@@ -144,9 +174,16 @@ async function onlineNow(actor: AppUser | null): Promise<Result<readonly UserLis
   const now = new Date();
 
   const present = page.value.items
-    .map((user) => {
+    .map(({ user, invitedAt, acceptedAt }) => {
       const lastActiveAt = activity.value.get(user.id) ?? null;
-      return { user, lastActiveAt, presence: derivePresence(lastActiveAt, now) };
+
+      return {
+        user,
+        lastActiveAt,
+        presence: derivePresence(lastActiveAt, now),
+        invitation: deriveInvitationState({ invitedAt, acceptedAt }, now),
+        invitedAt,
+      };
     })
     .filter((entry) => entry.presence !== "offline")
     .sort((a, b) => (b.lastActiveAt?.getTime() ?? 0) - (a.lastActiveAt?.getTime() ?? 0));
@@ -561,11 +598,223 @@ async function guardLastSuperAdmin(
   return ok(true);
 }
 
+/**
+ * Sends a fresh invitation to somebody who never accepted their last one.
+ *
+ * NOT a second invitation implementation. It calls the same
+ * `inviteUserByEmail` with the same `absoluteUrl(ROUTES.AUTH_CALLBACK)` that
+ * `invite` uses, so a resent link enters the identical flow — Supabase, then
+ * /auth/callback, then /auth/set-password, then the dashboard. What it does NOT
+ * do is anything `invite` does around that call: no schema parse, no email
+ * uniqueness check, and above all no `usersRepository.create`, because the
+ * public.users row already exists and creating a second one is the failure mode
+ * this method has to avoid.
+ *
+ * Supabase reissues against the existing auth identity — the same user id, a new
+ * token — so the previous link stops being the one to use. The auth user is
+ * never recreated either.
+ *
+ * The six steps the brief asks for, in order: authenticate (the action supplies
+ * a context, and a null actor is refused by requirePermission), authorize,
+ * load the target, verify eligibility, send, audit.
+ */
+/**
+ * What the operator is told when Supabase refuses, and why each differs.
+ *
+ * Exported so a test asserts the exact wording rather than a paraphrase, and so
+ * the button can title its toast by outcome.
+ */
+export const RESEND_FAILURE = {
+  RATE_LIMITED:
+    "Too many invitation emails have been sent recently. Please wait a few minutes and try again.",
+  ALREADY_REGISTERED:
+    "That address is already registered in Supabase, so no new invitation can be sent to it.",
+  INVALID_ADDRESS:
+    "Supabase rejected that email address. Check it is spelled correctly and can receive mail.",
+  UNKNOWN: "The invitation could not be sent. Try again in a moment.",
+} as const;
+
+/**
+ * Maps Supabase's refusal onto one of our errors.
+ *
+ * Keyed on `error_code` — Supabase's stable machine-readable field — and NOT on
+ * substrings of the human message, which change without notice and would fall
+ * silently through to the generic case when they do. HTTP status is a fallback
+ * for responses that carry no code.
+ *
+ * All three were observed against the live project rather than guessed at:
+ *
+ *   over_email_send_rate_limit  429  the built-in SMTP allows only a few
+ *                                    messages an hour. Waiting is the only
+ *                                    remedy, so the message says so; retrying
+ *                                    immediately makes it worse.
+ *   email_exists                422  Supabase refuses to invite an identity it
+ *                                    already holds. Our own eligibility check
+ *                                    normally stops this case first.
+ *   email_address_invalid       400  Supabase would not accept the address.
+ *
+ * The error CLASS differs per case deliberately: `code` survives the RSC
+ * boundary, so the browser can title these differently without parsing English.
+ */
+function resendFailureError(
+  error: { message?: string; code?: string; status?: number } | null,
+): AppError {
+  const code = error?.code ?? "";
+  const status = error?.status;
+  const detail = `Supabase invitation resend failed: ${error?.message ?? "no user returned"}`;
+
+  if (code === "over_email_send_rate_limit" || status === 429) {
+    return new ExternalServiceError(detail, {
+      cause: error,
+      userMessage: RESEND_FAILURE.RATE_LIMITED,
+    });
+  }
+
+  if (code === "email_exists" || status === 422) {
+    return new ConflictError(detail, {
+      cause: error,
+      userMessage: RESEND_FAILURE.ALREADY_REGISTERED,
+    });
+  }
+
+  if (code === "email_address_invalid") {
+    return new ValidationError(detail, {
+      cause: error,
+      userMessage: RESEND_FAILURE.INVALID_ADDRESS,
+    });
+  }
+
+  return new ExternalServiceError(detail, { cause: error, userMessage: RESEND_FAILURE.UNKNOWN });
+}
+
+async function resendInvite(id: string, context: AuditContext): Promise<Result<UserRow>> {
+  /*
+   * Same permission as sending the first invitation. A resend puts a working
+   * credential-setting link into somebody's inbox, so it is exactly as
+   * privileged as inviting them, and must not be reachable by a worker who
+   * happens to know the Server Action's name.
+   */
+  const permitted = requirePermission(
+    context.actor,
+    PERMISSIONS.MANAGE_USERS,
+    "resend invitations",
+  );
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  const existing = await usersRepository.findById(id);
+
+  if (!existing.ok) {
+    /* Already a NotFoundError from the repository. */
+    return existing;
+  }
+
+  const target = existing.value;
+
+  /*
+   * Eligibility is re-derived HERE, from Supabase, rather than trusted from the
+   * client. The button being hidden is a courtesy; this is the check.
+   */
+  const invitation = await usersRepository.invitationTimestamps(id);
+
+  if (!invitation.ok) {
+    return invitation;
+  }
+
+  const state = deriveInvitationState(invitation.value);
+
+  if (!mayResendInvitation(state)) {
+    return fail(
+      new ConflictError(`Invitation resend refused for accepted user ${id}`, {
+        userMessage:
+          "That person has already accepted their invitation and does not need a new one.",
+      }),
+    );
+  }
+
+  const admin = createSupabaseAdminClient();
+
+  if (!admin.ok) {
+    return admin;
+  }
+
+  /*
+   * The stored email, never one supplied by the caller. The action takes an id
+   * and nothing else, so there is no parameter through which an invitation
+   * could be redirected to a different mailbox.
+   */
+  const invited = await admin.value.auth.admin.inviteUserByEmail(target.email, {
+    redirectTo: absoluteUrl(ROUTES.AUTH_CALLBACK),
+  });
+
+  if (invited.error || !invited.data.user) {
+    /*
+     * Logged, because otherwise a failed invitation tells an operator nothing.
+     * The generic message the UI shows is deliberate — Supabase's wording can
+     * name internals — but somebody has to be able to find out WHY, and the
+     * error's own text is the only place that knows.
+     *
+     * Safe to record: this is a refusal reason, not a credential. No token, no
+     * link and no session goes near it.
+     */
+    logger.error("Supabase refused an invitation resend", invited.error, {
+      userId: target.id,
+      status: invited.error?.status,
+      code: invited.error?.code,
+    });
+
+    /*
+     * Nothing has been written at this point and nothing will be: no audit
+     * entry, no auth event, and no timestamp anywhere. A refused send leaves
+     * the invitation exactly as it was, which is what stops the UI claiming a
+     * resend that never happened.
+     */
+    return fail(resendFailureError(invited.error));
+  }
+
+  /*
+   * Recorded as an update to the user, carrying what happened rather than a
+   * changed field — nothing on the row changes, and `audit_action` has no
+   * value for this. Adding one would mean a migration for a label.
+   *
+   * No token, no link and no session detail: the entry says an invitation was
+   * resent, by whom, to which user, and when. That is the whole of what an
+   * audit reader needs and the whole of what is safe to keep.
+   */
+  await auditService.recordOrWarn(
+    {
+      entity: "user",
+      entityId: target.id,
+      action: "update",
+      before: { invitationState: state },
+      after: { invitationState: "pending", event: "invitation_resent" },
+    },
+    context,
+  );
+
+  /*
+   * The same auth event `invite` records. A resend IS an invitation being sent,
+   * so it belongs in the same series rather than a new event type — the user's
+   * timeline then reads as the sequence of invitations it actually was.
+   */
+  await activityRepository.recordAuthEvent({
+    userId: target.id,
+    email: target.email,
+    eventType: "invitation_sent",
+    ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
+  });
+
+  return ok(target);
+}
+
 export const usersService = {
   list,
   onlineNow,
   getDetail,
   invite,
+  resendInvite,
   changeRole,
   changeStatus,
   archive,

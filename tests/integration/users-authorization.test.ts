@@ -99,6 +99,26 @@ describe.skipIf(!configured)("usersService — reads as a real Super Admin", () 
 
       for (const entry of result.value.items) {
         expect(["online", "idle", "offline"]).toContain(entry.presence);
+
+        /*
+         * REGRESSION. The Users page once failed outright with "Could not load
+         * users" because these two arrived as STRINGS: they are read from
+         * auth.users through a raw `sql` fragment, which carries no column type,
+         * so Drizzle applied no mapper and postgres.js handed back what it
+         * decoded. The declared `Date | null` was a lie until `.mapWith()` made
+         * it true, and the only symptom was `.getTime is not a function` deep in
+         * the derivation.
+         *
+         * Asserted against the live database on purpose. A mocked repository
+         * returns whatever the mock says and would never have caught this.
+         */
+        if (entry.invitedAt !== null) {
+          expect(entry.invitedAt).toBeInstanceOf(Date);
+          expect(Number.isNaN(entry.invitedAt.getTime())).toBe(false);
+        }
+
+        /* And the derivation itself survives every real row on the page. */
+        expect(["accepted", "pending", "expired"]).toContain(entry.invitation);
       }
 
       /* The signed-in Super Admin must appear in their own list. */

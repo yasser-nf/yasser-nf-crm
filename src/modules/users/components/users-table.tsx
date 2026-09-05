@@ -14,7 +14,14 @@ import { Input } from "@/shared/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
 import { cn } from "@/utils/cn";
 import type { UserListEntry } from "../services/users.service";
-import { PresenceDot, RoleBadge, UserStatusBadge, formatDateTime } from "./user-shared";
+import {
+  InvitationBadge,
+  PresenceDot,
+  RoleBadge,
+  UserStatusBadge,
+  formatDateTime,
+} from "./user-shared";
+import { ResendInviteButton } from "./resend-invite-button";
 
 /**
  * Users list.
@@ -148,13 +155,24 @@ export function UsersTable({ items, total, limit, offset }: Props) {
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
-              {["Name", "Email", "Role", "Status", "Presence", "Last login", "Created"].map(
-                (label) => (
-                  <TableHead key={label} className="text-caption text-foreground-muted">
-                    {label}
-                  </TableHead>
-                ),
-              )}
+              {[
+                "Name",
+                "Email",
+                "Role",
+                "Status",
+                "Invitation",
+                "Presence",
+                "Last login",
+                "Created",
+                "",
+              ].map((label) => (
+                <TableHead key={label} className="text-caption text-foreground-muted">
+                  {/* The Actions column is deliberately unlabelled — the row's
+                        controls speak for themselves and a header would widen
+                        the table for nothing. */}
+                  {label}
+                </TableHead>
+              ))}
             </TableRow>
           </TableHeader>
 
@@ -190,6 +208,14 @@ export function UsersTable({ items, total, limit, offset }: Props) {
                   />
                 </TableCell>
                 <TableCell>
+                  {/*
+                    A second badge rather than a fourth value in the status one:
+                    somebody can be Active AND not have accepted their invitation,
+                    and that pair is exactly who the Resend action is for.
+                  */}
+                  <InvitationBadge state={entry.invitation} />
+                </TableCell>
+                <TableCell>
                   <PresenceDot presence={entry.presence} />
                 </TableCell>
                 <TableCell className="text-caption text-foreground-muted">
@@ -197,6 +223,12 @@ export function UsersTable({ items, total, limit, offset }: Props) {
                 </TableCell>
                 <TableCell className="text-caption text-foreground-muted">
                   {formatDateTime(entry.user.createdAt)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {/* Far right, and present only where there is something to resend. */}
+                  {entry.invitation !== "accepted" ? (
+                    <ResendInviteButton userId={entry.user.id} email={entry.user.email} />
+                  ) : null}
                 </TableCell>
               </motion.tr>
             ))}
@@ -207,29 +239,51 @@ export function UsersTable({ items, total, limit, offset }: Props) {
       {/* Mobile — cards, per 04_UI_GUIDELINES.md */}
       <div className="flex flex-col gap-3 lg:hidden">
         {items.map((entry) => (
-          <Link
+          /*
+           * The card was a single <Link> wrapping everything. It cannot stay
+           * one: a <button> inside an <a> is invalid HTML, and tapping Resend
+           * would navigate to the user instead of opening the confirmation.
+           *
+           * So the link now covers the part that is a link — the person — and
+           * the action sits beside it as a sibling. Tapping the card still opens
+           * the user, which is the behaviour that had to survive.
+           */
+          <div
             key={entry.user.id}
-            href={`${ROUTES.USERS}/${entry.user.id}`}
             className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate text-card-title text-foreground">{entry.user.name}</span>
-                <span className="truncate text-caption text-foreground-subtle">
-                  {entry.user.email}
-                </span>
+            <Link href={`${ROUTES.USERS}/${entry.user.id}`} className="flex flex-col gap-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate text-card-title text-foreground">
+                    {entry.user.name}
+                  </span>
+                  <span className="truncate text-caption text-foreground-subtle">
+                    {entry.user.email}
+                  </span>
+                </div>
+                <PresenceDot presence={entry.presence} />
               </div>
-              <PresenceDot presence={entry.presence} />
-            </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <RoleBadge role={entry.user.role} />
-              <UserStatusBadge
-                status={entry.user.status}
-                archived={entry.user.deletedAt !== null}
+              <div className="flex flex-wrap items-center gap-2">
+                <RoleBadge role={entry.user.role} />
+                <UserStatusBadge
+                  status={entry.user.status}
+                  archived={entry.user.deletedAt !== null}
+                />
+                <InvitationBadge state={entry.invitation} />
+              </div>
+            </Link>
+
+            {entry.invitation !== "accepted" ? (
+              /* Full width so it cannot overflow a narrow card. */
+              <ResendInviteButton
+                userId={entry.user.id}
+                email={entry.user.email}
+                className="h-11 w-full justify-center gap-1.5 border border-border text-foreground-muted"
               />
-            </div>
-          </Link>
+            ) : null}
+          </div>
         ))}
       </div>
 

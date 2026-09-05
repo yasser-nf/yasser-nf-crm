@@ -11,6 +11,7 @@ import {
 import { users, type UserRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 import { ok } from "@/utils/result";
+import type { InvitationTimestamps } from "../services/invitation-status";
 import type { UserInsert, UserUpdate } from "../validation/user.schema";
 
 /**
@@ -34,6 +35,21 @@ const ENTITY = "User";
 const liveOnly = isNull(users.deletedAt);
 
 export type UserSortField = "name" | "email" | "role" | "status" | "lastLoginAt" | "createdAt";
+
+/**
+ * A user row with the two Supabase timestamps that describe their invitation.
+ *
+ * Read from `auth.users` because that is where they live — `public.users` has
+ * never recorded anything about invitations, and adding a column for it would
+ * create a copy nothing maintains.
+ */
+export interface UserWithInvitation {
+  readonly user: UserRow;
+  /** auth.users.invited_at. Null for an account created directly. */
+  readonly invitedAt: Date | null;
+  /** auth.users.email_confirmed_at. Non-null once the link was followed. */
+  readonly acceptedAt: Date | null;
+}
 
 export interface UserFilter extends PaginationInput {
   readonly role?: UserRow["role"] | undefined;
@@ -63,7 +79,16 @@ export interface UsersRepository {
   findById(id: string): Promise<Result<UserRow>>;
   findByEmail(email: string): Promise<Result<UserRow>>;
   exists(id: string): Promise<Result<boolean>>;
-  list(filter?: UserFilter): Promise<Result<Page<UserRow>>>;
+  /** The users screen. Carries each person's invitation timestamps. */
+  list(filter?: UserFilter): Promise<Result<Page<UserWithInvitation>>>;
+  /**
+   * One person's invitation timestamps, straight from auth.users.
+   *
+   * Read on its own before a resend rather than taken from the list the browser
+   * was shown: that page may be minutes old, and eligibility must be decided on
+   * what is true now.
+   */
+  invitationTimestamps(id: string): Promise<Result<InvitationTimestamps>>;
   create(input: UserInsert): Promise<Result<UserRow>>;
   update(id: string, input: UserUpdate): Promise<Result<UserRow>>;
   recordLogin(id: string): Promise<Result<UserRow>>;
@@ -164,8 +189,29 @@ export const usersRepository: UsersRepository = {
      * disagrees with the page the user is looking at.
      */
     return databaseAdapter.transaction("users.list", async (executor) => {
+      /*
+       * The invitation timestamps come from auth.users as two correlated
+       * subselects rather than a join.
+       *
+       * A join would need `auth.users` declared as a Drizzle table, and this
+       * project hand-writes its migrations because drizzle-kit's snapshots stop
+       * at 0006 and its generated diffs are dangerous. Declaring a table in a
+       * schema Supabase owns invites exactly that tool to propose creating or
+       * altering it. These subselects read the same data, are primary-key
+       * lookups, and are invisible to migration tooling.
+       */
       const items = await executor
-        .select()
+        .select({
+          user: users,
+          invitedAt:
+            sql<Date | null>`(select ai.invited_at from auth.users ai where ai.id = public.users.id)`.mapWith(
+              (value) => (value === null ? null : new Date(value as string)),
+            ),
+          acceptedAt:
+            sql<Date | null>`(select ai.email_confirmed_at from auth.users ai where ai.id = public.users.id)`.mapWith(
+              (value) => (value === null ? null : new Date(value as string)),
+            ),
+        })
         .from(users)
         .where(where)
         .orderBy(resolveOrderBy(filter))
@@ -176,6 +222,31 @@ export const usersRepository: UsersRepository = {
 
       return { items, total: readCount(totals), limit, offset };
     });
+  },
+
+  async invitationTimestamps(id) {
+    const result = await databaseAdapter.query("users.invitationTimestamps", (executor) =>
+      executor
+        .select({
+          invitedAt:
+            sql<Date | null>`(select ai.invited_at from auth.users ai where ai.id = public.users.id)`.mapWith(
+              (value) => (value === null ? null : new Date(value as string)),
+            ),
+          acceptedAt:
+            sql<Date | null>`(select ai.email_confirmed_at from auth.users ai where ai.id = public.users.id)`.mapWith(
+              (value) => (value === null ? null : new Date(value as string)),
+            ),
+        })
+        .from(users)
+        .where(and(eq(users.id, id), isNull(users.deletedAt)))
+        .limit(1),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return requireFound(result.value[0], ENTITY, id);
   },
 
   async create(input) {

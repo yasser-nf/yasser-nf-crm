@@ -93,6 +93,22 @@ export async function inviteUserAction(input: unknown) {
   return run(async (context) => usersService.invite(input, context), [ROUTES.USERS]);
 }
 
+/**
+ * Sends a fresh invitation to somebody who never accepted theirs.
+ *
+ * Takes an id and nothing else. No email, no role, no redirect — every one of
+ * those is resolved on the server from the stored row, so there is no parameter
+ * a caller could use to point an invitation somewhere else. Authorization is the
+ * service's, not this wrapper's: `run` refuses without a session, and
+ * `resendInvite` refuses without MANAGE_USERS.
+ */
+export async function resendInviteAction(id: string) {
+  return run(
+    async (context) => usersService.resendInvite(id, context),
+    [ROUTES.USERS, `${ROUTES.USERS}/${id}`],
+  );
+}
+
 export async function changeUserRoleAction(id: string, role: string) {
   return run(
     async (context) => usersService.changeRole(id, { role }, context),
