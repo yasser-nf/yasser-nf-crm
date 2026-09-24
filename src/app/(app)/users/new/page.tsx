@@ -3,38 +3,40 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { ROUTES } from "@/config/constants";
-import { isInvitationConfigured } from "@/config/env.server";
-import { PERMISSIONS, roleHasPermission } from "@/config/roles";
+import { isUserCreationConfigured } from "@/config/env.server";
 import { getCurrentUser } from "@/lib/auth/session";
-import { InviteUserForm } from "@/modules/users";
+import { configurationService } from "@/modules/settings";
+import { CreateUserForm, assignableRoles } from "@/modules/users";
 
-export const metadata: Metadata = { title: "Invite user" };
+export const metadata: Metadata = { title: "Create user" };
 
 /**
- * Invite a user.
- *
- * ADR-008 Decision 3: the only way a user is created. No password is collected
- * here or anywhere else.
+ * Create a user. ADR-014: directly, with a password, usable at once.
  *
  * The permission check below only decides whether to render the form. The
- * service refuses the invitation independently, so a Worker who posts to the
- * action directly is still refused.
+ * service refuses the creation independently — including a role the actor may
+ * not assign — so a Worker who posts to the action directly is still refused.
+ *
+ * The password policy is read here from the same configured value the service
+ * enforces, so the hint and the client rule cannot disagree with the server.
  */
 export default async function NewUserPage() {
   const actor = await getCurrentUser();
-  const permitted = actor !== null && roleHasPermission(actor.role, PERMISSIONS.MANAGE_USERS);
+  const roles = actor === null ? [] : assignableRoles(actor.role);
 
-  if (!permitted) {
+  if (roles.length === 0) {
     return (
       <div className="flex flex-col items-center gap-3 rounded-lg border border-border px-6 py-16 text-center">
         <ShieldAlert className="size-6 text-foreground-subtle" aria-hidden="true" />
         <h1 className="text-section-title text-foreground">Not available to your role</h1>
         <p className="max-w-sm text-description text-foreground-muted">
-          Inviting users is restricted to Super Admins.
+          Creating users is restricted to Super Admins.
         </p>
       </div>
     );
   }
+
+  const security = await configurationService.security();
 
   return (
     <div className="flex flex-col gap-6">
@@ -45,13 +47,17 @@ export default async function NewUserPage() {
         >
           &larr; All users
         </Link>
-        <h1 className="text-page-title text-foreground">Invite a user</h1>
+        <h1 className="text-page-title text-foreground">Create a user</h1>
         <p className="text-description text-foreground-muted">
-          They receive an email, choose their own password, and appear here once they sign in.
+          They can sign in straight away with the email and password you set here.
         </p>
       </div>
 
-      <InviteUserForm invitationsConfigured={isInvitationConfigured()} />
+      <CreateUserForm
+        assignableRoles={roles}
+        passwordMinLength={security.passwordMinLength}
+        creationConfigured={isUserCreationConfigured()}
+      />
     </div>
   );
 }

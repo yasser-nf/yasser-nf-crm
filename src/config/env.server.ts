@@ -94,16 +94,16 @@ export function isEncryptionConfigured(): boolean {
 /**
  * Whether the service role key is present.
  *
- * Two features need it: inviting users (M06) and backup storage (M07). Both ask
- * before acting so the UI can explain the gap rather than failing at the point
- * of use.
+ * Two features need it: creating users (M06, direct since ADR-014) and backup
+ * storage (M07). Both ask before acting so the UI can explain the gap rather
+ * than failing at the point of use.
  */
 export function isServiceRoleConfigured(): boolean {
   return Boolean(serverEnv.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-/** Whether the invitation flow can run. */
-export function isInvitationConfigured(): boolean {
+/** Whether users can be created (and pre-ADR-014 invitations resent). */
+export function isUserCreationConfigured(): boolean {
   return isServiceRoleConfigured();
 }
 

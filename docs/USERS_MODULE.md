@@ -12,7 +12,7 @@ Authority: `.ai/` decides, this describes.
 | Owns | Does not own |
 | ---- | ------------ |
 | Authorization decisions about people | Authentication — Supabase Auth is the only identity provider |
-| Role assignment and the permission matrix | Passwords, at any point, in any form |
+| Role assignment and the permission matrix | Storing passwords — Supabase Auth holds them (ADR-014) |
 | User status (`active` / `suspended` / `disabled`) | The audit log — that is `modules/audit` |
 | Session listing and revocation | Customer, account or profile state |
 | Login history | Presence storage — presence is derived |
@@ -127,33 +127,49 @@ authentication boundary rather than only in the UI.
 
 ---
 
-## 5. Invitation Flow
+## 5. User Creation (ADR-014)
 
-**The CRM never owns a password.** ADR-008 Decision 2, and the reason
-`admin.createUser` appears nowhere in this codebase — it requires a password,
-which would mean the CRM choosing or handling one.
+M02 replaced invitations with direct creation. ADR-014 supersedes ADR-008
+Decisions 2 (in part) and 3.
 
 ```
-Super Admin submits name + email + role
-  → usersService.invite()
-      → permission check
-      → duplicate email check
-      → supabase.auth.admin.inviteUserByEmail(email)   ← no password
-      → public.users row created with the returned auth id
-      → audit entry + login_history "invitation_sent"
-  → Supabase emails a link; the person sets their own password
+Super Admin submits name + email + password + role
+  → createUserAction            (session check, audit context)
+  → usersService.create()
+      → MANAGE_USERS check
+      → validation — password minimum is the STORED security.passwordMinLength
+      → role check — Super Admin requires MODIFY_PERMISSIONS (assignableRoles)
+      → duplicate email check (public.users, live rows)
+      → supabase.auth.admin.createUser({ email, password, email_confirm: true })
+      → public.users row with the returned auth id, status active
+          └─ on failure: auth.admin.deleteUser(that id) — compensation
+      → audit entry: entity user, action create, event user_created
+  → the person signs in immediately; no email is sent
 ```
 
-There is no password field on the invite form, and there will never be one — its
-existence is what would make storing one possible.
+**Where the password goes:** from the form to Supabase Auth, once. Not into
+`public.users` (no column), not into the audit log (not on the `user`
+allow-list, and deep redaction would catch it), not into logs (Supabase errors
+are reduced to code and status; messages are scrubbed of the password), and not
+back to the browser (the action returns the stored row).
 
-The `public.users` row is written immediately rather than on first sign-in.
-Without it, `getCurrentUser` would reject the new person as an identity with no
-CRM record and their first sign-in would fail silently.
+**Consistency:** Supabase first, because `public.users.id` references
+`auth.users.id`. If the CRM row fails, the identity just created — and only
+that one — is deleted. If that delete also fails, the orphaned id is logged and
+the operator is told. A duplicate address is refused before anything is
+written, so no existing user is ever touched by a failed creation.
 
-If the CRM row fails to write after the invite succeeds, the auth identity is
-**not** rolled back. Deleting an auth user is destructive; the recoverable state
-is a pending invite that can be re-sent. The failure is surfaced, not swallowed.
+### What remains of invitations
+
+For people invited before M02 only:
+
+| Kept | Why |
+| ---- | --- |
+| `/auth/callback`, `/auth/set-password` | outstanding invitation links land there; the callback also accepts `type=recovery` |
+| `resendInvite` + button | offered only while an invitation is unaccepted — never true of a directly created user |
+| Invitation state derivation | a direct user has no `invited_at` and a confirmed email, so reads `accepted` |
+
+Removed: `invite`, `inviteUserAction`, the invite form, `inviteUserSchema`.
 
 The service role key is read only inside `src/lib/supabase/admin.ts`, which is
 `server-only`. It is never imported into client code and never serialized.
@@ -237,7 +253,7 @@ write did.
 | `login_success` | `recordLoginAction`, after the server resolves the identity from the cookie |
 | `logout` | `recordLogoutAction`, **awaited before** `signOut` — afterwards no session remains to resolve |
 | `login_failed` | `recordFailedLoginAction`, `user_id` null, attempted address only |
-| `invitation_sent` | `usersService.invite` |
+| `invitation_sent` | `usersService.resendInvite` (pre-M02 invitations only) |
 | `session_revoked` | `sessionsService`, and `changeStatus` when disabling |
 
 `failure_reason` never carries a password, a token, or anything derived from
@@ -257,7 +273,8 @@ having — but it wants a rate limit before anything wider.
 | ------- | ----- |
 | Permission check before every operation | `users.service.ts` |
 | Service role key server-only | `lib/supabase/admin.ts` |
-| No password handling anywhere | by construction — no field, no parameter, no column |
+| Password passes through to Supabase only | no column; audit allow-list + redaction; scrubbed errors; not returned (ADR-014) |
+| Partial creation compensated | `usersService.create` deletes the auth identity it just made |
 | `REVOKE ALL` + RLS + explicit policies on `login_history` | migrations 0005, 0006 |
 | Session ownership verified before revocation | `sessions.service.ts` |
 | Last-Super-Admin guard | `users.service.ts` |
@@ -287,7 +304,10 @@ tables, so the same gap cannot reopen quietly.
 | `tests/unit/roles.test.ts` | 44 cases — permission matrix, Worker allow-list, status semantics |
 | `tests/integration/rbac-and-rls.test.ts` | anonymous access refused, RLS enabled on all 9 tables |
 | `tests/integration/users-module.test.ts` | 10 cases — the hand-written `auth.sessions` SQL executed live, the activity UNION's ordering, login history reads, nullable columns, the three-status enum |
-| `tests/integration/users-authorization.test.ts` | 25 cases — RBAC and every guard, as the real Super Admin and as a Worker, against the live database |
+| `tests/integration/users-authorization.test.ts` | RBAC and every guard, as a Super Admin and as a Worker, including creation refused before Supabase |
+| `tests/unit/user-creation.test.ts` | direct creation: authorization, validation, duplicates, compensation, and the password absent from audit, logs, errors and responses |
+| `tests/unit/create-user-form.test.tsx` | the form: masking, toggle, validation messages, password cleared after every submission |
+| `tests/integration/users-create.test.ts` | isolated DB with a Supabase stand-in: both rows written or neither, audit entry, getCurrentUser accepts the new user, existing users unchanged, password in no table |
 
 The `users-authorization` suite is where RBAC is actually proven. It authorizes
 as the real Super Admin row and as a constructed Worker actor, and asserts the
@@ -322,3 +342,4 @@ writing a `last_seen` column fails there rather than passing quietly.
 | Failed-login endpoint has no rate limit | See section 7 |
 | Authenticated UI never rendered by a real Super Admin session in M06 | Every screen in this module is UNVERIFIED in the browser; see the M06 report |
 | Session revocation never executed | Both the single and bulk paths are unexercised — the tests are read-only by design |
+| Direct creation never run against real Supabase Auth | Isolated tests use a stand-in for `auth.admin.createUser`/`deleteUser`; a real password sign-in by a newly created user is to be verified after deployment, with the owner's approval |

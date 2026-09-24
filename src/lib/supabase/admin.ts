@@ -25,7 +25,8 @@ import { fail, ok } from "@/utils/result";
  *      It is never placed in `config/env.ts`, so it cannot be inlined into the
  *      client bundle by Next's NEXT_PUBLIC substitution.
  *
- * Used for two things: sending invitations (M06) and reading and writing backup
+ * Used for two things: user administration in Supabase Auth — creating users
+ * (ADR-014) and resending pre-M02 invitations — and reading and writing backup
  * objects in Supabase Storage (M07). Every database operation goes through the
  * Database Adapter as `postgres`, which is already privileged and does not need
  * this key.
@@ -35,7 +36,7 @@ import { fail, ok } from "@/utils/result";
  * Builds an admin client, or explains why it cannot.
  *
  * Returns a Result rather than throwing so a missing key surfaces as a
- * configuration message on the invite form instead of a crashed request.
+ * configuration message on the Create User form instead of a crashed request.
  */
 export function createSupabaseAdminClient(): Result<SupabaseClient> {
   if (!isServiceRoleConfigured()) {

@@ -3,9 +3,12 @@
  *
  * THE CRM DOES NOT STORE THIS, and deliberately should not start.
  * `public.users.status` is active | suspended | disabled — an operational
- * status an administrator sets — and `invite()` writes `active` the moment the
- * invitation is sent, so authorization exists before the person first signs in
- * (ADR-008 Decision 3). Nothing in that column has ever described an invitation.
+ * status an administrator sets — and the pre-ADR-014 `invite()` wrote `active`
+ * the moment the invitation was sent, so authorization existed before the person
+ * first signed in. Nothing in that column has ever described an invitation.
+ *
+ * Since ADR-014 users are created directly, confirmed, and never invited, so
+ * they read `accepted`. This remains for people invited before that change.
  *
  * The truth lives in Supabase's `auth.users`, which records both halves:
  *

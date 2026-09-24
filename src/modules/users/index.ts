@@ -9,7 +9,12 @@
  * modules where the repository predates its service, this one has services from
  * the start.
  */
-export { usersService, type UserDetail, type UserListEntry } from "./services/users.service";
+export {
+  assignableRoles,
+  usersService,
+  type UserDetail,
+  type UserListEntry,
+} from "./services/users.service";
 export { sessionsService } from "./services/sessions.service";
 export { activityService } from "./services/activity.service";
 export { derivePresence, type PresenceState } from "./services/presence";
@@ -22,8 +27,8 @@ export {
 } from "./services/invitation-status";
 
 /* Components consumed by app/ page composition. */
-export { InviteUserButton, OnlineNow, UsersFilters, UsersTable } from "./components/users-table";
-export { InviteUserForm } from "./components/invite-user-form";
+export { CreateUserButton, OnlineNow, UsersFilters, UsersTable } from "./components/users-table";
+export { CreateUserForm } from "./components/create-user-form";
 export { UserDetailView } from "./components/user-detail";
 export {
   InvitationBadge,
@@ -41,14 +46,14 @@ export type { UserFilter, UserSortField } from "./repositories/users.repository"
 export {
   changeRoleSchema,
   changeStatusSchema,
-  inviteUserSchema,
   loginHistoryInsertSchema,
   userInsertSchema,
   userSelectSchema,
   userUpdateSchema,
-  type InviteUserInput,
   type LoginHistoryInsert,
   type UserInsert,
   type UserSelect,
   type UserUpdate,
 } from "./validation/user.schema";
+
+export { buildCreateUserSchema, type CreateUserInput } from "./validation/create-user.schema";

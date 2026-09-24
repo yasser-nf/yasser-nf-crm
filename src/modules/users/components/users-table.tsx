@@ -141,7 +141,7 @@ export function UsersTable({ items, total, limit, offset }: Props) {
       <EmptyState
         icon={UsersIcon}
         title="No users match"
-        description="Invite a colleague to give them access to the CRM."
+        description="Create a user to give a colleague access to the CRM."
       />
     );
   }
@@ -354,12 +354,12 @@ export function OnlineNow({ entries }: { entries: readonly UserListEntry[] }) {
   );
 }
 
-export function InviteUserButton() {
+export function CreateUserButton() {
   return (
     <Button asChild className="gap-2">
       <Link href={`${ROUTES.USERS}/new`}>
         <UserPlus className="size-4" aria-hidden="true" />
-        Invite user
+        Create User
       </Link>
     </Button>
   );

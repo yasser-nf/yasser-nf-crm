@@ -189,10 +189,10 @@ describe.skipIf(!configured)("RBAC — a Worker is refused everything administra
     expect(result.ok).toBe(false);
   });
 
-  it("cannot invite", async () => {
+  it("cannot create a user", async () => {
     const { usersService } = await services();
-    const result = await usersService.invite(
-      { name: "Nope", email: "nope@example.invalid", role: "worker" },
+    const result = await usersService.create(
+      { name: "Nope", email: "nope@example.invalid", password: "long-enough-pass", role: "worker" },
       { actor: WORKER },
     );
 
@@ -331,16 +331,19 @@ describe.skipIf(!configured)("Guards that outrank the permission check", () => {
   });
 });
 
-describe.skipIf(!configured)("Invitation guards — refused before any email is sent", () => {
+describe.skipIf(!configured)("Creation guards — refused before Supabase is asked", () => {
+  /*
+   * Every case stops before `auth.admin.createUser`, so no auth identity is
+   * created anywhere. The happy path and compensation are covered with a
+   * stand-in for Supabase in tests/integration/users-create.test.ts.
+   */
+  const PASSWORD = "a-perfectly-long-password";
+
   it("refuses an email that already belongs to a user", async () => {
     const { usersService } = await services();
 
-    /*
-     * Reaches the duplicate check and stops. inviteUserByEmail is never called,
-     * so no invitation reaches a real inbox.
-     */
-    const result = await usersService.invite(
-      { name: "Duplicate", email: superAdmin.email, role: "worker" },
+    const result = await usersService.create(
+      { name: "Duplicate", email: superAdmin.email, password: PASSWORD, role: "worker" },
       { actor: superAdmin },
     );
 
@@ -348,11 +351,28 @@ describe.skipIf(!configured)("Invitation guards — refused before any email is 
     if (!result.ok) expect(result.error.message).toContain("already exists");
   });
 
+  it("refuses the same address in different case and padding", async () => {
+    const { usersService } = await services();
+
+    const result = await usersService.create(
+      {
+        name: "Duplicate",
+        email: `  ${superAdmin.email.toUpperCase()} `,
+        password: PASSWORD,
+        role: "worker",
+      },
+      { actor: superAdmin },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("CONFLICT");
+  });
+
   it("refuses a malformed email before touching Supabase", async () => {
     const { usersService } = await services();
 
-    const result = await usersService.invite(
-      { name: "Bad", email: "not-an-email", role: "worker" },
+    const result = await usersService.create(
+      { name: "Bad", email: "not-an-email", password: PASSWORD, role: "worker" },
       { actor: superAdmin },
     );
 
@@ -363,8 +383,8 @@ describe.skipIf(!configured)("Invitation guards — refused before any email is 
   it("refuses an unknown role", async () => {
     const { usersService } = await services();
 
-    const result = await usersService.invite(
-      { name: "Bad", email: "fresh@example.invalid", role: "owner" },
+    const result = await usersService.create(
+      { name: "Bad", email: "fresh@example.invalid", password: PASSWORD, role: "owner" },
       { actor: superAdmin },
     );
 
@@ -372,23 +392,19 @@ describe.skipIf(!configured)("Invitation guards — refused before any email is 
     if (!result.ok) expect(result.error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("accepts no password field — the schema strips or rejects it", async () => {
-    const { inviteUserSchema } = await import("@/modules/users/validation/user.schema");
+  it("refuses a password shorter than the configured policy", async () => {
+    const { usersService } = await services();
 
-    const parsed = inviteUserSchema.safeParse({
-      name: "Someone",
-      email: "someone@example.invalid",
-      role: "worker",
-      password: "should-not-survive",
-    });
+    const result = await usersService.create(
+      { name: "Short", email: "fresh@example.invalid", password: "short", role: "worker" },
+      { actor: superAdmin },
+    );
 
-    /*
-     * ADR-008 Decision 2. Whether Zod strips the key or rejects the object, what
-     * must never happen is a password arriving in the invite payload and being
-     * carried forward.
-     */
-    if (parsed.success) {
-      expect(parsed.data).not.toHaveProperty("password");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_ERROR");
+      /* The rule is named; the value is not repeated back. */
+      expect(JSON.stringify(result.error.toLogObject())).not.toContain('"short"');
     }
   });
 });

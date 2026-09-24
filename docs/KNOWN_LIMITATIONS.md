@@ -85,6 +85,17 @@ occurred during testing. Correct by inspection only.
 `drizzle/down/*.down.sql` is hand-written because drizzle-kit generates none.
 Testing it means dropping all eight tables. It has not been run.
 
+### Direct user creation has not run against real Supabase Auth — MEDIUM
+
+*Added in M02.* `usersService.create` (ADR-014) is tested against the isolated
+database with a stand-in for `auth.admin.createUser` and `deleteUser` that
+writes the `auth.users` shim. That proves both rows are written or neither, the
+audit entry, and that getCurrentUser accepts the new user. It cannot prove that
+Supabase accepts a password sign-in for the new identity, or that
+`deleteUser` compensation succeeds against the real API: there is no GoTrue
+locally, and doing it in production creates a real user. One creation and
+sign-in should be verified after deployment, with the owner's approval.
+
 ---
 
 ## 3. Functional Gaps

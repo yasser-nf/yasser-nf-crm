@@ -75,25 +75,6 @@ export const loginHistoryInsertSchema = createInsertSchema(loginHistory, {
 
 export type LoginHistoryInsert = z.infer<typeof loginHistoryInsertSchema>;
 
-/**
- * Inviting a Worker.
- *
- * No password field, and there never will be one. ADR-008 Decision 2: the CRM
- * must never own a password, so a form that could accept one must not exist.
- */
-export const inviteUserSchema = z.object({
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .min(1, "Email is required")
-    .email("Enter a valid email address"),
-  name: z.string().trim().min(1, "Name is required").max(120),
-  role: z.enum(["super_admin", "worker"]),
-});
-
-export type InviteUserInput = z.infer<typeof inviteUserSchema>;
-
 /** Changing a role. Separated so a profile edit cannot carry one. */
 export const changeRoleSchema = z.object({
   role: z.enum(["super_admin", "worker"]),

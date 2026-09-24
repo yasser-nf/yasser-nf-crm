@@ -6,10 +6,11 @@ import { PAGINATION } from "@/config/constants";
 import { getCurrentUser } from "@/lib/auth/session";
 import { ForbiddenError } from "@/lib/errors";
 import {
-  InviteUserButton,
+  CreateUserButton,
   OnlineNow,
   UsersFilters,
   UsersTable,
+  assignableRoles,
   usersService,
   type UserFilter,
 } from "@/modules/users";
@@ -56,6 +57,14 @@ export default async function UsersPage({
 }) {
   const filter = parseSearchParams(await searchParams);
 
+  /*
+   * Presentation only: whether to offer the button. The service refuses a
+   * creation from anyone who may not assign a role, however it was reached.
+   * getCurrentUser is cached per request, so this is not an extra lookup.
+   */
+  const actor = await getCurrentUser();
+  const canCreate = actor !== null && assignableRoles(actor.role).length > 0;
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -66,7 +75,7 @@ export default async function UsersPage({
           </p>
         </div>
 
-        <InviteUserButton />
+        {canCreate ? <CreateUserButton /> : null}
       </header>
 
       {/* Streams separately: a slow session read must not hold up the table. */}

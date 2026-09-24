@@ -23,13 +23,15 @@ import {
   type AppError,
 } from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
+import { configurationService } from "@/modules/settings";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
 import { activityRepository, type ActivityEntry } from "../repositories/activity.repository";
 import { derivePresence, type PresenceState } from "./presence";
 import { sessionsRepository, type SessionRow } from "../repositories/sessions.repository";
 import { usersRepository, type UserFilter } from "../repositories/users.repository";
-import { changeRoleSchema, changeStatusSchema, inviteUserSchema } from "../validation/user.schema";
+import { buildCreateUserSchema } from "../validation/create-user.schema";
+import { changeRoleSchema, changeStatusSchema } from "../validation/user.schema";
 import {
   deriveInvitationState,
   mayResendInvitation,
@@ -225,25 +227,148 @@ async function getDetail(id: string, actor: AppUser | null): Promise<Result<User
 }
 
 /**
- * Invites someone to the CRM.
+ * The roles an actor may give somebody when creating them.
  *
- * ADR-008 Decision 3: this is the only way a user is created. No password is
- * ever accepted, generated, or stored by the CRM — Supabase emails an invite,
- * the person sets their own password, and the public.users row is written here
- * so authorization exists the moment they first sign in.
+ * Read off the existing matrix, not a new hierarchy. Creating a user at all is
+ * MANAGE_USERS; giving someone Super Admin is granting every permission there
+ * is, which the matrix already reserves for MODIFY_PERMISSIONS — the same
+ * permission `changeRole` requires. Today both belong to Super Admin alone, so
+ * a Super Admin may assign either role and nobody else may create anyone.
  *
- * The CRM row is created immediately rather than on first login. Without it,
- * getCurrentUser would reject the new person as an identity with no CRM record,
- * and their first sign-in would silently fail.
+ * Exported so the form lists exactly what the service will accept.
  */
-async function invite(input: unknown, context: AuditContext): Promise<Result<UserRow>> {
-  const permitted = requirePermission(context.actor, PERMISSIONS.MANAGE_USERS, "invite users");
+export function assignableRoles(actorRole: UserRole): readonly UserRole[] {
+  if (!roleHasPermission(actorRole, PERMISSIONS.MANAGE_USERS)) {
+    return [];
+  }
+
+  return roleHasPermission(actorRole, PERMISSIONS.MODIFY_PERMISSIONS)
+    ? [USER_ROLES.WORKER, USER_ROLES.SUPER_ADMIN]
+    : [USER_ROLES.WORKER];
+}
+
+/**
+ * What the operator is told when a user cannot be created.
+ *
+ * Exported so tests assert the exact wording rather than a paraphrase.
+ */
+export const CREATE_FAILURE = {
+  EMAIL_TAKEN: "That email address is already registered. Each user needs their own address.",
+  WEAK_PASSWORD: "Supabase rejected that password as too weak. Choose a longer or less common one.",
+  INVALID_ADDRESS:
+    "Supabase rejected that email address. Check it is spelled correctly and can receive mail.",
+  UNKNOWN: "The user could not be created. Try again in a moment.",
+  PROFILE_FAILED: "The user could not be created. Nothing was saved; try again in a moment.",
+  ROLLBACK_FAILED:
+    "The user could not be created, and the sign-in account Supabase made could not be removed. Ask a developer to check Supabase Auth before retrying this address.",
+} as const;
+
+/**
+ * Removes every occurrence of the password from a piece of text.
+ *
+ * Defence in depth. Nothing in this module puts the password into a message,
+ * but Supabase's wording is not ours: if it ever quoted the input back, this is
+ * what keeps that out of a log line or an error the browser receives.
+ */
+function withoutPassword(text: string, password: string): string {
+  return password.length > 0 ? text.split(password).join("[redacted]") : text;
+}
+
+interface SafeAuthFailure {
+  readonly code: string;
+  readonly status: number | undefined;
+  readonly message: string;
+}
+
+/**
+ * The part of a Supabase error that is safe to carry onwards.
+ *
+ * The error object itself is never kept as a `cause`: `toLogObject` stringifies
+ * causes, and a third-party object is not ours to trust. Code and status are
+ * machine values; the message is scrubbed of the password first.
+ */
+function safeAuthFailure(
+  error: { message?: string; code?: string; status?: number } | null,
+  password: string,
+): SafeAuthFailure {
+  return {
+    code: error?.code ?? "",
+    status: error?.status,
+    message: withoutPassword(error?.message ?? "no user returned", password),
+  };
+}
+
+/**
+ * Maps Supabase's refusal onto one of our errors.
+ *
+ * Keyed on `error_code`, as `resendFailureError` is, with HTTP status as the
+ * fallback for responses that carry no code.
+ */
+function createFailureError(failure: SafeAuthFailure): AppError {
+  const detail = `Supabase user creation failed: ${failure.code || String(failure.status ?? "unknown")} ${failure.message}`;
+  const context = { code: failure.code, status: failure.status };
+
+  if (
+    failure.code === "email_exists" ||
+    failure.code === "user_already_exists" ||
+    (failure.code === "" && failure.status === 422)
+  ) {
+    return new ConflictError(detail, {
+      context,
+      userMessage: CREATE_FAILURE.EMAIL_TAKEN,
+    });
+  }
+
+  if (failure.code === "weak_password") {
+    return new ValidationError(detail, {
+      context,
+      userMessage: CREATE_FAILURE.WEAK_PASSWORD,
+      fieldErrors: { password: CREATE_FAILURE.WEAK_PASSWORD },
+    });
+  }
+
+  if (failure.code === "email_address_invalid") {
+    return new ValidationError(detail, {
+      context,
+      userMessage: CREATE_FAILURE.INVALID_ADDRESS,
+      fieldErrors: { email: CREATE_FAILURE.INVALID_ADDRESS },
+    });
+  }
+
+  return new ExternalServiceError(detail, { context, userMessage: CREATE_FAILURE.UNKNOWN });
+}
+
+/**
+ * Creates a user directly, with a password the administrator chooses.
+ *
+ * ADR-014 replaces ADR-008 Decisions 2 and 3: an administrator types the
+ * person's password and they can sign in immediately. The password passes
+ * through this function exactly once — from the validated input to Supabase
+ * Auth, which hashes and stores it — and goes nowhere else: not into
+ * public.users, not into the audit entry, not into a log line, not into the
+ * value returned to the browser.
+ *
+ * Two writes in two systems, which cannot share a transaction: the auth identity
+ * in Supabase, then the public.users row that authorizes it. The order is fixed
+ * by the foreign key from public.users.id to auth.users.id. If the second write
+ * fails, the first is undone — the identity this call just created, named by
+ * the id Supabase returned for it, and nothing else. An existing user is never
+ * touched on any failure path: a duplicate address is refused before anything
+ * is written, and Supabase refusing the address means it created nothing to
+ * undo.
+ */
+async function create(input: unknown, context: AuditContext): Promise<Result<UserRow>> {
+  const permitted = requirePermission(context.actor, PERMISSIONS.MANAGE_USERS, "create users");
 
   if (!permitted.ok) {
     return permitted;
   }
 
-  const parsed = inviteUserSchema.safeParse(input);
+  const actor = permitted.value;
+
+  /* The stored policy, never one the caller supplies. */
+  const security = await configurationService.security();
+  const parsed = buildCreateUserSchema(security.passwordMinLength).safeParse(input);
 
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};
@@ -255,17 +380,31 @@ async function invite(input: unknown, context: AuditContext): Promise<Result<Use
       }
     }
 
-    return fail(new ValidationError("Invitation input failed validation", { fieldErrors }));
+    /* Field names and rule messages only. The input itself is not attached. */
+    return fail(new ValidationError("User creation input failed validation", { fieldErrors }));
   }
 
-  const { email, name, role } = parsed.data;
+  const { email, name, password, role } = parsed.data;
+
+  /*
+   * Server-side, whatever the form offered. A request naming a role the actor
+   * may not grant is refused here, before Supabase is asked for anything.
+   */
+  if (!assignableRoles(actor.role).includes(role)) {
+    return fail(
+      new ForbiddenError(`Role ${actor.role} may not assign role ${role}`, {
+        userMessage: "You do not have permission to assign that role.",
+        context: { actorId: actor.id, role: actor.role, requestedRole: role },
+      }),
+    );
+  }
 
   const existing = await usersRepository.findByEmail(email);
 
   if (existing.ok) {
     return fail(
       new ConflictError(`User already exists: ${email}`, {
-        userMessage: "Someone with that email address is already a user.",
+        userMessage: CREATE_FAILURE.EMAIL_TAKEN,
       }),
     );
   }
@@ -277,77 +416,106 @@ async function invite(input: unknown, context: AuditContext): Promise<Result<Use
   }
 
   /*
-   * Supabase sends the invitation and creates the auth identity. The returned
-   * id becomes the public.users primary key, per ADR-005 Decision 3 — one
-   * identity, nothing to synchronise.
-   */
-  /*
-   * inviteUserByEmail, never createUser.
+   * `email_confirm: true` is what makes the account usable at once. Without it
+   * Supabase holds the identity unconfirmed and refuses the first sign-in until
+   * somebody follows an email link — the invitation flow this replaces.
    *
-   * createUser requires a password, which would mean the CRM choosing or
-   * handling one — forbidden by ADR-008 Decision 2. The invite path has
-   * Supabase email a link and the person set their own password, so no password
-   * ever passes through this codebase.
+   * No role, name or anything else goes into Supabase's metadata. public.users
+   * is the authority on role (ADR-005 Decision 3), and a second copy in a
+   * user-editable metadata field is a second answer that could disagree.
    */
-  /*
-   * redirectTo is not optional in practice.
-   *
-   * Without it Supabase sends the invited person to the project's dashboard
-   * Site URL, which was `http://localhost:3000` — a server on THEIR machine,
-   * not ours. Every invitation ended on a browser error page. Naming the
-   * callback here makes the application, not a dashboard field somebody set
-   * during setup, the authority on where its own invitations land.
-   *
-   * The destination must also be listed under Supabase's Redirect URLs, which
-   * is what stops this parameter being an open redirect.
-   */
-  const invited = await admin.value.auth.admin.inviteUserByEmail(email, {
-    redirectTo: absoluteUrl(ROUTES.AUTH_CALLBACK),
+  const created = await admin.value.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
   });
 
-  if (invited.error || !invited.data.user) {
+  if (created.error || !created.data.user) {
+    const failure = safeAuthFailure(created.error, password);
+
+    /*
+     * Machine fields only. Supabase's message goes into the returned error,
+     * already scrubbed, and never into the log line.
+     */
+    logger.error("Supabase refused to create a user", undefined, {
+      code: failure.code,
+      status: failure.status,
+    });
+
+    return fail(createFailureError(failure));
+  }
+
+  const authUserId = created.data.user.id;
+
+  let profile: Result<UserRow>;
+
+  try {
+    profile = await usersRepository.create({
+      id: authUserId,
+      name,
+      email,
+      role,
+      status: USER_STATUSES.ACTIVE,
+    });
+  } catch {
+    /* Caught so compensation still runs; the thrown value is not carried. */
+    profile = fail(new ExternalServiceError("public.users insert threw"));
+  }
+
+  if (!profile.ok) {
+    /*
+     * Compensation. The identity was created by THIS call a moment ago and has
+     * never been used, so removing it loses nothing and prevents an auth user
+     * with no CRM record — one getCurrentUser would refuse forever, holding an
+     * address nobody could reuse.
+     */
+    const rollback = await admin.value.auth.admin.deleteUser(authUserId);
+
+    if (rollback.error) {
+      logger.error("User creation left an orphaned auth identity", undefined, {
+        authUserId,
+        code: rollback.error.code,
+        status: rollback.error.status,
+        profileError: profile.error.code,
+      });
+
+      return fail(
+        new ExternalServiceError("Compensating deleteUser failed after profile insert failed", {
+          context: { authUserId, profileError: profile.error.code },
+          userMessage: CREATE_FAILURE.ROLLBACK_FAILED,
+        }),
+      );
+    }
+
+    logger.warn("User creation rolled back: public.users insert failed", {
+      authUserId,
+      profileError: profile.error.code,
+    });
+
     return fail(
-      new ExternalServiceError(
-        `Supabase invitation failed: ${invited.error?.message ?? "no user"}`,
-        {
-          cause: invited.error,
-          userMessage: "The invitation could not be sent. Check the email address and try again.",
-        },
-      ),
+      new ExternalServiceError("public.users insert failed; auth identity removed", {
+        context: { profileError: profile.error.code },
+        userMessage: CREATE_FAILURE.PROFILE_FAILED,
+      }),
     );
   }
 
-  const created = await usersRepository.create({
-    id: invited.data.user.id,
-    name,
-    email,
-    role,
-    status: USER_STATUSES.ACTIVE,
-  });
-
-  if (!created.ok) {
-    /*
-     * The auth identity now exists without a CRM record. Deliberately not
-     * rolled back: deleting an auth user is destructive, and the recoverable
-     * state is a pending invite that can be re-sent. The failure is surfaced so
-     * it is not silent.
-     */
-    return created;
-  }
-
+  /*
+   * The row as stored — it has no password column — plus what happened. The
+   * audit sanitizer's allow-list and deep redaction apply on top, so even a
+   * mistake here could not write a credential.
+   */
   await auditService.recordOrWarn(
-    { entity: "user", entityId: created.value.id, action: "create", after: created.value },
+    {
+      entity: "user",
+      entityId: profile.value.id,
+      action: "create",
+      after: { ...profile.value, event: "user_created" },
+    },
     context,
   );
 
-  await activityRepository.recordAuthEvent({
-    userId: created.value.id,
-    email,
-    eventType: "invitation_sent",
-    ...(context.ipAddress ? { ipAddress: context.ipAddress } : {}),
-  });
-
-  return created;
+  return profile;
 }
 
 /**
@@ -601,11 +769,11 @@ async function guardLastSuperAdmin(
 /**
  * Sends a fresh invitation to somebody who never accepted their last one.
  *
- * NOT a second invitation implementation. It calls the same
- * `inviteUserByEmail` with the same `absoluteUrl(ROUTES.AUTH_CALLBACK)` that
- * `invite` uses, so a resent link enters the identical flow — Supabase, then
- * /auth/callback, then /auth/set-password, then the dashboard. What it does NOT
- * do is anything `invite` does around that call: no schema parse, no email
+ * Kept for people invited before ADR-014 — new users are created directly with
+ * a password and are never in this state. It calls `inviteUserByEmail` with
+ * `absoluteUrl(ROUTES.AUTH_CALLBACK)`, so a resent link enters the same flow the
+ * original invitation did — Supabase, then /auth/callback, then
+ * /auth/set-password, then the dashboard. There is no schema parse, no email
  * uniqueness check, and above all no `usersRepository.create`, because the
  * public.users row already exists and creating a second one is the failure mode
  * this method has to avoid.
@@ -689,9 +857,9 @@ function resendFailureError(
 
 async function resendInvite(id: string, context: AuditContext): Promise<Result<UserRow>> {
   /*
-   * Same permission as sending the first invitation. A resend puts a working
+   * Same permission as creating a user. A resend puts a working
    * credential-setting link into somebody's inbox, so it is exactly as
-   * privileged as inviting them, and must not be reachable by a worker who
+   * privileged as creating them, and must not be reachable by a worker who
    * happens to know the Server Action's name.
    */
   const permitted = requirePermission(
@@ -795,9 +963,10 @@ async function resendInvite(id: string, context: AuditContext): Promise<Result<U
   );
 
   /*
-   * The same auth event `invite` records. A resend IS an invitation being sent,
-   * so it belongs in the same series rather than a new event type — the user's
-   * timeline then reads as the sequence of invitations it actually was.
+   * The same auth event the original invitation recorded. A resend IS an
+   * invitation being sent, so it belongs in the same series rather than a new
+   * event type — the user's timeline then reads as the sequence of invitations
+   * it actually was.
    */
   await activityRepository.recordAuthEvent({
     userId: target.id,
@@ -813,7 +982,7 @@ export const usersService = {
   list,
   onlineNow,
   getDetail,
-  invite,
+  create,
   resendInvite,
   changeRole,
   changeStatus,

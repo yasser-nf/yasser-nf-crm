@@ -219,13 +219,20 @@ describe("the invitation carries a redirect", () => {
     expect(source).not.toContain("inviteUserByEmail(email)");
   });
 
-  it("still invites rather than creating a user with a password", async () => {
-    /* ADR-008 Decision 2: no password ever passes through this codebase. */
+  it("keeps the resend for earlier invitations, and creates new users directly", async () => {
+    /*
+     * ADR-014 superseded ADR-008 Decisions 2 and 3: new users are created with
+     * `createUser` and a confirmed email. The invitation send survives only in
+     * `resendInvite`, for people invited before the change — which is why the
+     * callback and set-password routes stay.
+     */
     const { readFile } = await import("node:fs/promises");
     const source = await readFile("src/modules/users/services/users.service.ts", "utf8");
 
-    expect(source).toContain("inviteUserByEmail");
-    expect(source).not.toContain("auth.admin.createUser");
+    expect(source.split("inviteUserByEmail(").length - 1).toBe(1);
+    expect(source).toContain("inviteUserByEmail(target.email");
+    expect(source).toContain("auth.admin.createUser({");
+    expect(source).toContain("email_confirm: true");
   });
 });
 

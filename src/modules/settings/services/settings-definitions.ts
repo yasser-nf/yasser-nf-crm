@@ -248,9 +248,13 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     min: 8,
     max: 128,
     /*
-     * ADR-008 Decision 2: the CRM never sees a password. Complexity is enforced
-     * by Supabase Auth, which owns the credential store. Recording the intent
-     * here without saying so would be the most dangerous kind of inert setting.
+     * Supabase Auth owns the credential store and its own password policy.
+     * Since ADR-014 the CRM also applies this minimum on the server when an
+     * administrator creates a user, and the set/change-password forms apply it
+     * in the browser — but a person changing their own password talks to
+     * Supabase directly, so the policy of record is still Supabase's. Recording
+     * the intent here without saying so would be the most dangerous kind of
+     * inert setting.
      */
     enforcement: { state: "external", by: "Supabase Auth password policy" },
     permission: PERMISSIONS.ACCESS_SETTINGS,

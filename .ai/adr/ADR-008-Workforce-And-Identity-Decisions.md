@@ -1,7 +1,7 @@
 # ADR-008
 # Workforce And Identity Decisions
 
-Status: ACCEPTED
+Status: ACCEPTED — Decisions 2 (in part) and 3 superseded by ADR-014 (2026-09-24)
 
 Date: 2026-08-09
 
@@ -74,6 +74,10 @@ customer status works. A stored `archived` could disagree with the tombstone.
 
 # Decision 2 — The CRM Never Owns A Password
 
+> **Superseded in part by ADR-014.** Administrators now create users with a
+> password, which passes through to Supabase Auth once. The CRM still stores,
+> logs and audits no password.
+
 ## Decision
 
 No password is ever accepted, generated, stored, logged or transmitted by this
@@ -102,6 +106,10 @@ derived from one.
 ---
 
 # Decision 3 — Invitation Is The Only Way A User Is Created
+
+> **Superseded by ADR-014.** Users are created directly with
+> `auth.admin.createUser`, and a failed CRM row now rolls the new auth
+> identity back.
 
 ## Decision
 

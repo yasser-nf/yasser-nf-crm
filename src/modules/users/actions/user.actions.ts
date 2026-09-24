@@ -89,8 +89,17 @@ async function run<T>(
   }
 }
 
-export async function inviteUserAction(input: unknown) {
-  return run(async (context) => usersService.invite(input, context), [ROUTES.USERS]);
+/**
+ * Creates a user with a password the administrator chose.
+ *
+ * The input carries that password, so this wrapper does nothing with it but
+ * pass it on: no logging, no echo. What returns to the browser is the stored
+ * public.users row, which has no password column — the password goes in and
+ * never comes back out. Authorization, including which roles may be assigned,
+ * is the service's.
+ */
+export async function createUserAction(input: unknown) {
+  return run(async (context) => usersService.create(input, context), [ROUTES.USERS]);
 }
 
 /**
