@@ -351,10 +351,13 @@ async function activeForAccount(accountId: string): Promise<Result<readonly Issu
   return problemsRepository.activeForAccount(accountId);
 }
 
-/** Accounts that currently have a blocking problem. One query for a whole page. */
+/**
+ * Accounts that currently have a blocking problem, with the types of those
+ * problems. One query for a whole page.
+ */
 async function accountsWithActiveProblems(
   accountIds: readonly string[],
-): Promise<Result<ReadonlySet<string>>> {
+): Promise<Result<ReadonlyMap<string, readonly IssueRow["issueType"][]>>> {
   return problemsRepository.accountsWithActiveProblems(accountIds);
 }
 

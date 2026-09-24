@@ -359,6 +359,7 @@ export function AccountsTable({
                       <AccountStatusBadge
                         status={row.account.status}
                         hasActiveProblem={row.hasActiveProblem}
+                        activeProblemTypes={row.activeProblemTypes}
                       />
                     </TableCell>
 
@@ -502,6 +503,7 @@ export function AccountsTable({
               <AccountStatusBadge
                 status={row.account.status}
                 hasActiveProblem={row.hasActiveProblem}
+                activeProblemTypes={row.activeProblemTypes}
               />
             </div>
 

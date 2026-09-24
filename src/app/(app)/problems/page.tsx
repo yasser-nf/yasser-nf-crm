@@ -50,6 +50,8 @@ function parseSearchParams(params: Record<string, string | string[] | undefined>
   return {
     search: read("search"),
     status: STATUSES.find((status) => status === read("status")),
+    /* "Blocking now": every status that stops an account selling. */
+    blocking: read("status") === "blocking",
     severity: SEVERITIES.find((severity) => severity === read("severity")),
     issueType: TYPES.find((type) => type === read("type")),
     assignedTo: read("assignedTo"),

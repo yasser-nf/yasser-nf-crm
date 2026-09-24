@@ -64,6 +64,7 @@ export function AccountHeader({
   account,
   remainingValidityDays,
   hasActiveProblem = false,
+  activeProblemTypes = [],
 }: {
   account: AccountView;
   /**
@@ -74,6 +75,8 @@ export function AccountHeader({
    * non-empty. Same rule and same override as the accounts list. M13 §7.
    */
   hasActiveProblem?: boolean;
+  /** The types of those problems, so a single kind is named on the badge. */
+  activeProblemTypes?: readonly string[];
   /**
    * Computed by the service through `accountRemainingDays`, never here.
    *
@@ -99,7 +102,11 @@ export function AccountHeader({
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-page-title break-all text-foreground">{account.email}</h1>
-            <AccountStatusBadge status={account.status} hasActiveProblem={hasActiveProblem} />
+            <AccountStatusBadge
+              status={account.status}
+              hasActiveProblem={hasActiveProblem}
+              activeProblemTypes={activeProblemTypes}
+            />
           </div>
 
           <p className="text-caption text-foreground-subtle">

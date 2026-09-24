@@ -2,7 +2,8 @@ import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
 
-import { PERMISSIONS, roleHasPermission } from "@/config/roles";
+import { PERMISSIONS, roleHasPermission, type Permission } from "@/config/roles";
+import type { AppUser } from "@/lib/auth";
 import { databaseAdapter } from "@/lib/database";
 import { accounts, profiles, type ProfileEventRow, type ProfileRow } from "@/lib/drizzle/schema";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
@@ -11,7 +12,7 @@ import { customersService } from "@/modules/customers";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
 import { profilesRepository } from "../repositories/profiles.repository";
-import { profileEditSchema } from "../validation/profile.schema";
+import { profileEditSchema, type ProfileEdit } from "../validation/profile.schema";
 import { allocationFitsAccount, isSellableSlot } from "./account-validity";
 import { resolveExpirationDate } from "./profile-dates";
 
@@ -109,6 +110,85 @@ export interface ProfileUpdateResult {
   readonly events: readonly ProfileEventRow[];
 }
 
+/**
+ * The permission each editable field requires. Existing permissions only.
+ *
+ * `updateProfile` checked nothing until M03 — any signed-in session could post
+ * any field to it. Both roles hold all three permissions today, so this changes
+ * nothing for a real user; it makes the service refuse a caller without them,
+ * as every other mutation does, instead of relying on who can see the button.
+ *
+ *   name, notes          EDIT_PROFILE_NAMES — the profile's own descriptive
+ *                        text. There is no separate notes permission, and a
+ *                        note is no more privileged than the name beside it.
+ *   pin                  EDIT_PROFILE_PINS
+ *   customer and dates   PREPARE_SUBSCRIPTIONS — writing them makes or changes
+ *                        an allocation, which is what Quick Prepare does.
+ */
+const FIELD_PERMISSIONS: Record<keyof ProfileEdit, Permission> = {
+  profileName: PERMISSIONS.EDIT_PROFILE_NAMES,
+  notes: PERMISSIONS.EDIT_PROFILE_NAMES,
+  pin: PERMISSIONS.EDIT_PROFILE_PINS,
+  customerPhone: PERMISSIONS.PREPARE_SUBSCRIPTIONS,
+  saleDate: PERMISSIONS.PREPARE_SUBSCRIPTIONS,
+  expirationDate: PERMISSIONS.PREPARE_SUBSCRIPTIONS,
+  durationDays: PERMISSIONS.PREPARE_SUBSCRIPTIONS,
+};
+
+function assertMayEditFields(actor: AppUser | null, changes: ProfileEdit): Result<true> {
+  if (!actor) {
+    return fail(new ForbiddenError("No signed-in user for a profile edit"));
+  }
+
+  for (const field of Object.keys(changes) as (keyof ProfileEdit)[]) {
+    const permission = FIELD_PERMISSIONS[field];
+
+    if (changes[field] !== undefined && !roleHasPermission(actor.role, permission)) {
+      return fail(
+        new ForbiddenError(`Role ${actor.role} may not edit profile field ${field}`, {
+          userMessage: "You do not have permission to make that change to a profile.",
+          context: { actorId: actor.id, role: actor.role, field, permission },
+        }),
+      );
+    }
+  }
+
+  return ok(true);
+}
+
+/**
+ * The note as it will be stored: trimmed, and null when empty.
+ *
+ * An empty note is a cleared note. Storing "" would leave a value that every
+ * screen treats as absent and every query treats as present.
+ */
+function normalizeNote(note: string | undefined, previous: string | null): string | null {
+  if (note === undefined) {
+    return previous;
+  }
+
+  const trimmed = note.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Whether a note contains this profile's PIN as a number of its own.
+ *
+ * A note is free text that is shown on every account view and copied into the
+ * audit trail — the PIN is not, anywhere (M01.5). A note quoting it would put
+ * it back in both, so such a note is refused rather than stored. Whole digit
+ * runs, so a PIN of 2026 refuses "pin is 2026" but not "renewed 20261".
+ */
+function noteRevealsPin(note: string | null, pins: readonly (string | null)[]): boolean {
+  if (note === null) {
+    return false;
+  }
+
+  /* Every run of digits in the note, compared whole: no pattern built from data. */
+  const runs: readonly string[] = note.match(/\d+/g) ?? [];
+  return pins.some((pin) => pin !== null && runs.includes(pin));
+}
+
 /** A field-level failure, shaped so the dialog can render it beside the input. */
 function invalid(field: string, message: string, userMessage?: string): ValidationError {
   return new ValidationError(message, {
@@ -149,6 +229,12 @@ async function updateProfile(
   }
 
   const changes = parsed.data;
+
+  const permitted = assertMayEditFields(context.actor, changes);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
 
   /*
    * Resolved BEFORE the transaction opens, exactly as Quick Prepare does it:
@@ -238,18 +324,35 @@ async function updateProfile(
     const next = {
       profileName: changes.profileName ?? previous.profileName,
       pin: changes.pin ?? previous.pin,
-      notes: changes.notes ?? previous.notes,
+      notes: normalizeNote(changes.notes, previous.notes),
       customerId: resolvedCustomerId ?? previous.customerId,
       saleDate,
       expirationDate: derivedExpiration,
       durationDays,
     };
 
+    if (changes.notes !== undefined && noteRevealsPin(next.notes, [next.pin, previous.pin])) {
+      throw invalid(
+        "notes",
+        "Notes cannot contain the profile's PIN",
+        "Remove the PIN from the note. The PIN has its own field and is never copied elsewhere.",
+      );
+    }
+
+    /*
+     * An expiration that is about to change is judged like any other
+     * allocation change, even when the operator only edited a note. Derivation
+     * above can correct a row whose stored expiration disagreed with its own
+     * sale date and duration, and a corrected date must still fit the account —
+     * otherwise a note edit would be a way to write an allocation Quick Prepare
+     * would refuse.
+     */
     const touchesAllocation =
       changes.customerPhone !== undefined ||
       changes.saleDate !== undefined ||
       changes.expirationDate !== undefined ||
-      changes.durationDays !== undefined;
+      changes.durationDays !== undefined ||
+      next.expirationDate !== previous.expirationDate;
 
     if (touchesAllocation) {
       /*

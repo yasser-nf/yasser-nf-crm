@@ -13,7 +13,6 @@ import { ActionError } from "@/lib/errors";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
-import { Textarea } from "@/shared/ui/textarea";
 import { reportProblemAction, type ActionResult } from "../actions/problem.actions";
 import { PROBLEM_TYPE_LABELS } from "./problem-shared";
 
@@ -28,6 +27,11 @@ import { PROBLEM_TYPE_LABELS } from "./problem-shared";
  *
  * Reporting from a profile passes that profile's account: problems are account
  * grain, per 03_DATABASE.md and ADR-010 Decision 2.
+ *
+ * M03: the account and the problem type, and nothing else. Severity and "What
+ * happened" were asked for on every report and acted on by nothing — the type
+ * is what decides the fix. The service still accepts both and stores defaults
+ * when they are absent, so every earlier problem keeps its history.
  */
 
 const formSchema = z.object({
@@ -38,8 +42,6 @@ const formSchema = z.object({
     "something_went_wrong",
     "other",
   ]),
-  severity: z.enum(["low", "medium", "high", "critical"]),
-  description: z.string().trim().min(10, "Describe what went wrong").max(2000),
   assignToMe: z.boolean(),
 });
 
@@ -67,20 +69,11 @@ export function ReportProblemDialog({
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    control,
-    reset,
-    formState: { errors },
-  } = useForm<FormValues>({
+  const { handleSubmit, setValue, control, reset } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     mode: "onTouched",
     defaultValues: {
       issueType: "something_went_wrong",
-      severity: "medium",
-      description: "",
       assignToMe: false,
     },
   });
@@ -102,7 +95,6 @@ export function ReportProblemDialog({
 
   /* useWatch, not watch(): watch() returns a new function each render and stops React Compiler. */
   const issueType = useWatch({ control, name: "issueType" });
-  const severity = useWatch({ control, name: "severity" });
   const assignToMe = useWatch({ control, name: "assignToMe" });
 
   if (!open) {
@@ -151,46 +143,6 @@ export function ReportProblemDialog({
             ))}
           </SelectContent>
         </Select>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="problem-severity" className="text-description font-medium text-foreground">
-          Severity
-        </Label>
-        <Select
-          value={severity}
-          onValueChange={(value) => setValue("severity", value as FormValues["severity"])}
-          disabled={report.isPending}
-        >
-          <SelectTrigger id="problem-severity" className="h-11 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="low">Low</SelectItem>
-            <SelectItem value="medium">Medium</SelectItem>
-            <SelectItem value="high">High</SelectItem>
-            <SelectItem value="critical">Critical</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label
-          htmlFor="problem-description"
-          className="text-description font-medium text-foreground"
-        >
-          What happened
-        </Label>
-        <Textarea
-          id="problem-description"
-          rows={4}
-          placeholder="What you saw, and what you were doing at the time."
-          disabled={report.isPending}
-          {...register("description")}
-        />
-        {errors.description ? (
-          <p className="text-caption text-danger">{errors.description.message}</p>
-        ) : null}
       </div>
 
       <label className="flex items-center gap-2 text-caption text-foreground-muted">

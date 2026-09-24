@@ -33,11 +33,10 @@ import {
   type ActionResult,
 } from "../actions/problem.actions";
 import type { ProblemListEntry } from "../repositories/problems.repository";
-import { allowedTransitions, type ProblemStatus } from "../services/problem-lifecycle";
+import { allowedTransitions, isBlocking, type ProblemStatus } from "../services/problem-lifecycle";
 import type { TimelineEntry } from "../services/problem-timeline.service";
 import {
   PROBLEM_TYPE_LABELS,
-  ProblemSeverityBadge,
   ProblemStatusBadge,
   formatDateTime,
   problemAge,
@@ -182,7 +181,6 @@ export function ProblemDetailView({
             {PROBLEM_TYPE_LABELS[problem.issueType] ?? problem.issueType}
           </h1>
           <ProblemStatusBadge status={problem.status} />
-          <ProblemSeverityBadge severity={problem.severity} />
           {problem.reopenCount > 0 ? (
             <span className="inline-flex items-center gap-1.5 rounded-md bg-warning-subtle px-2 py-1 text-caption text-warning">
               <RotateCcw className="size-3" aria-hidden="true" />
@@ -191,11 +189,32 @@ export function ProblemDetailView({
           ) : null}
         </div>
 
-        <p className="max-w-3xl text-description text-foreground">{problem.description}</p>
+        {/*
+          M03: the account and the problem. Severity and the free-text
+          description are still stored and still in the timeline below; they are
+          no longer what this screen leads with.
 
+          "Account status" used to print the stored column, which reads
+          "healthy" beside an open problem that is blocking that very account.
+          Whether the account can sell is what an operator needs, and for this
+          problem that is `isBlocking` — the same rule allocation applies.
+        */}
         <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Account" value={entry.accountEmail} />
-          <Field label="Account status" value={entry.accountStatus.replace(/_/g, " ")} />
+          <div className="flex flex-col gap-1">
+            <dt className="text-caption text-foreground-subtle">Account</dt>
+            <dd className="text-description">
+              <Link
+                href={`${ROUTES.ACCOUNTS}/${problem.accountId}`}
+                className="break-all text-foreground hover:text-primary"
+              >
+                {entry.accountEmail}
+              </Link>
+            </dd>
+          </div>
+          <Field
+            label="Blocking"
+            value={isBlocking(problem.status) ? "Yes — the account cannot sell" : "No"}
+          />
           <Field label="Assigned to" value={entry.assignedToName ?? "Unassigned"} />
           <Field label="Reported by" value={entry.reportedByName ?? "—"} />
           <Field label="Created" value={formatDateTime(problem.createdAt)} />
@@ -211,11 +230,18 @@ export function ProblemDetailView({
           Affected profiles are derived, never stored: an unhealthy account makes
           all five unavailable, which is already the documented business rule.
         */}
-        <p className="flex items-start gap-2 rounded-md bg-background-secondary p-3 text-caption text-foreground-muted">
-          <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          While this problem is open, all five profiles on this account are blocked from allocation.
-          Quick Prepare will not offer them.
-        </p>
+        {isBlocking(problem.status) ? (
+          <p className="flex items-start gap-2 rounded-md bg-danger-subtle p-3 text-caption text-danger">
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            While this problem is {problem.status.replace(/_/g, " ")}, all five profiles on this
+            account are blocked from allocation. Quick Prepare will not offer them.
+          </p>
+        ) : (
+          <p className="flex items-start gap-2 rounded-md bg-background-secondary p-3 text-caption text-foreground-muted">
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            This problem no longer blocks the account. Any other open problem on it still would.
+          </p>
+        )}
 
         {problem.resolutionNote ? (
           <div className="flex flex-col gap-1 rounded-md border border-success/30 bg-success-subtle p-4">

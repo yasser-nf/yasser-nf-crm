@@ -66,7 +66,7 @@ export function accountToCsvRow(row: AccountListRow): readonly unknown[] {
   return [
     row.account.email,
     /* The badge's own rule, so an account with an open problem never exports "Healthy". */
-    accountBadgeStyle(row.account.status, row.hasActiveProblem).label,
+    accountBadgeStyle(row.account.status, row.hasActiveProblem, row.activeProblemTypes).label,
     row.account.country ?? "",
     isoDate(row.account.createdAt),
     ...profileCells(row),

@@ -79,9 +79,34 @@ Enforced in `problem-lifecycle.ts` and nowhere else. The detail screen builds it
 buttons from the same `allowedTransitions` the service checks, so the UI cannot
 offer a move the server rejects.
 
-### Severity
+### Severity and description — stored, no longer asked for (M03)
 
 `low` · `medium` · `high` · `critical`. Workers may not change it.
+
+Since M03 neither severity nor a free-text description is asked for when a
+problem is reported, and neither is shown on the Problems list, the problem
+detail, the account page, Quick Replace or the customer page. The workflow acts
+on the **account** and the **problem type**; nothing acted on the other two.
+
+Both columns stay. Every earlier problem carries them and the timeline reads
+them. A report without them is stored with the column default `medium` and an
+empty description (`issues.description` is NOT NULL; an empty string says
+truthfully that nobody described it). A caller that still sends either is still
+validated. The dashboard's severity chart is unchanged (M03 does not touch the
+dashboard).
+
+### Blocking, on screen
+
+Every list row and the detail screen say whether a problem is **blocking**,
+from `isBlocking` — never restated. The list has a **Blocking now** filter
+(`open`, `in_progress`, `waiting`) and links each row to its account. The
+detail screen's notice that all five profiles are blocked appears only while
+the problem is blocking; the stored account status, which reads `healthy`
+beside an open problem, is no longer shown as if it were the account's state.
+
+An account whose blocking problems are all of one type shows that type on its
+badge (e.g. **Payment Problem**), matching the Payment Problem filter
+(`accountMatchesStatusSql`); several types show **Problem**.
 
 ### Problem types
 

@@ -37,7 +37,12 @@ export type { ProblemFilter, ProblemListEntry } from "./repositories/problems.re
 export { ProblemsTable, ProblemsFilters } from "./components/problems-table";
 export { ProblemDetailView } from "./components/problem-detail";
 export { ReportProblemDialog } from "./components/report-problem-dialog";
-export { ProblemSeverityBadge, ProblemStatusBadge, problemAge } from "./components/problem-shared";
+export {
+  PROBLEM_TYPE_LABELS,
+  ProblemSeverityBadge,
+  ProblemStatusBadge,
+  problemAge,
+} from "./components/problem-shared";
 
 export {
   addNoteSchema,

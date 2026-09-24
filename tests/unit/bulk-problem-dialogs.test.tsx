@@ -169,17 +169,14 @@ describe("the mandatory note survives being in bulk", () => {
     });
   });
 
-  it("refuses to declare a problem with no description", async () => {
+  it("asks for the problem type only — no severity, no description (M03)", async () => {
     render(<BulkDeclareProblemDialog accountIds={["a"]} onDone={vi.fn()} />);
 
     fireEvent.click(button("Declare problem"));
-    fireEvent.click(button("Declare problem"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Describe what went wrong")).toBeTruthy();
-    });
-
-    expect(declareMutate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Problem type")).toBeTruthy();
+    expect(screen.queryByLabelText("What happened")).toBeNull();
+    expect(screen.queryByLabelText("Severity")).toBeNull();
   });
 });
 
@@ -218,23 +215,19 @@ describe("submitting", () => {
     });
   });
 
-  it("declares the problem the operator described", async () => {
+  it("declares the chosen problem type on exactly the accounts it was given", async () => {
     render(<BulkDeclareProblemDialog accountIds={["a", "b"]} onDone={vi.fn()} />);
 
     fireEvent.click(button("Declare problem"));
-    fireEvent.change(screen.getByLabelText("What happened"), {
-      target: { value: "Netflix rejects the password on every profile." },
-    });
     fireEvent.click(button("Declare problem"));
 
     await waitFor(() => {
       expect(declareMutate).toHaveBeenCalledTimes(1);
     });
 
-    expect(declareMutate.mock.calls[0]?.[0]).toMatchObject({
-      ids: ["a", "b"],
-      input: { description: "Netflix rejects the password on every profile." },
-    });
+    const sent = declareMutate.mock.calls[0]?.[0] as { ids: string[]; input: object };
+    expect(sent.ids).toEqual(["a", "b"]);
+    expect(sent.input).toEqual({ issueType: "something_went_wrong", assignToMe: false });
   });
 });
 

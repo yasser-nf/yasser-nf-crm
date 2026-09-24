@@ -7,7 +7,7 @@ import { USER_ROLES } from "@/config/roles";
 import { getCurrentUser } from "@/lib/auth/session";
 import { NotFoundError } from "@/lib/errors";
 import { CustomerDetailView, customersService } from "@/modules/customers";
-import { ProblemSeverityBadge, ProblemStatusBadge, problemsService } from "@/modules/problems";
+import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, problemsService } from "@/modules/problems";
 import { ErrorState } from "@/shared/feedback/error-state";
 
 export const metadata: Metadata = { title: "Customer" };
@@ -63,7 +63,7 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
                   className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-4 py-3 transition-colors hover:bg-surface-raised"
                 >
                   <span className="flex flex-wrap items-center gap-2 text-description text-foreground">
-                    <ProblemSeverityBadge severity={entry.problem.severity} />
+                    {PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType}
                     <span className="text-caption text-foreground-muted">{entry.accountEmail}</span>
                   </span>
                   <ProblemStatusBadge status={entry.problem.status} />

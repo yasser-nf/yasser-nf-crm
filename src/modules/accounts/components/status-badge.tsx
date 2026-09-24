@@ -1,4 +1,9 @@
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
+import {
+  PROFILE_STATE_LABELS,
+  PROFILE_STATE_STYLES,
+  type ProfileSlotState,
+} from "@/shared/ui/profile-state";
 import { cn } from "@/utils/cn";
 
 /**
@@ -144,15 +149,43 @@ export const ACTIVE_PROBLEM_STYLE: BadgeStyle = {
 export function accountBadgeStyle(
   status: AccountRow["status"],
   hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
 ): BadgeStyle {
-  return hasActiveProblem && status === "healthy"
-    ? ACTIVE_PROBLEM_STYLE
-    : ACCOUNT_STATUS_STYLES[status];
+  if (!hasActiveProblem || status !== "healthy") {
+    return ACCOUNT_STATUS_STYLES[status];
+  }
+
+  return problemTypeStyle(activeProblemTypes);
+}
+
+/**
+ * The badge for a healthy-stored account carrying blocking problems.
+ *
+ * Names the problem when there is exactly one kind of it. A payment problem
+ * raised through the Problems module used to read as a bare "Problem" while the
+ * Payment Problem filter — `accountMatchesStatusSql` — already counted it as
+ * one: the list said the same thing two ways. The four fault types share their
+ * values with `account_status` by design (03_DATABASE), so the label is the
+ * one that status already has.
+ *
+ * Several different kinds, `other`, or types not supplied: the generic
+ * "Problem". Red either way — every blocking problem blocks allocation.
+ */
+function problemTypeStyle(types: readonly string[]): BadgeStyle {
+  const distinct = [...new Set(types)];
+  const only = distinct.length === 1 ? distinct[0] : undefined;
+
+  if (only !== undefined && only in ACCOUNT_STATUS_STYLES && only !== "healthy") {
+    return ACCOUNT_STATUS_STYLES[only as AccountRow["status"]];
+  }
+
+  return ACTIVE_PROBLEM_STYLE;
 }
 
 export function AccountStatusBadge({
   status,
   hasActiveProblem = false,
+  activeProblemTypes = [],
   className,
 }: {
   status: AccountRow["status"];
@@ -168,9 +201,16 @@ export function AccountStatusBadge({
    * the more specific reason is the one a worker can act on directly.
    */
   hasActiveProblem?: boolean;
+  /** The types of those blocking problems, so a single kind can be named. */
+  activeProblemTypes?: readonly string[];
   className?: string;
 }) {
-  return <Badge style={accountBadgeStyle(status, hasActiveProblem)} className={className} />;
+  return (
+    <Badge
+      style={accountBadgeStyle(status, hasActiveProblem, activeProblemTypes)}
+      className={className}
+    />
+  );
 }
 
 export function ProfileStatusBadge({
@@ -211,6 +251,32 @@ export function ProfileStatusBadge({
       }
       className={className}
     />
+  );
+}
+
+/**
+ * A profile's badge, from its DERIVED state — `profileCellState`.
+ *
+ * `ProfileStatusBadge` reads the stored status column, which cannot know that a
+ * sale has lapsed (nothing writes `expired`) or that the account cannot sell
+ * (problems never write to a profile). On the account page it therefore said
+ * "Available" on a slot the indicator strip above it called blocked, and "Sold"
+ * on one it called expired. This reads the same state the strip, the inline
+ * panel and Quick Replace read, in the same colours.
+ */
+export function ProfileStateBadge({
+  state,
+  className,
+}: {
+  state: ProfileSlotState;
+  className?: string;
+}) {
+  const label = PROFILE_STATE_LABELS[state];
+
+  return (
+    <span className={cn(BADGE_BASE, "border", PROFILE_STATE_STYLES[state], className)}>
+      {label.charAt(0).toUpperCase() + label.slice(1)}
+    </span>
   );
 }
 

@@ -24,8 +24,8 @@ import { useDeclareProblems, useResolveProblems } from "../hooks/use-bulk-proble
  * Declaring and resolving problems for a selection of accounts.
  *
  * Presentation only. Every rule these dialogs appear to enforce — that a
- * description is required, that a resolution note is required, who may resolve
- * what — belongs to the problems module and is enforced there. The form asks
+ * resolution note is required, who may resolve what — belongs to the problems
+ * module and is enforced there. The form asks
  * for the same fields the single-account screens ask for so the operator is not
  * offered a cheaper way in: acting on ten accounts is not a reason to accept a
  * blank note that would leave ten rows claiming a resolution nobody explained.
@@ -44,10 +44,12 @@ interface BulkProblemProps {
 
 /* ------------------------------------------------------------------ declare */
 
+/*
+ * The account and the problem type, as the single-account report asks (M03).
+ * Severity and description are left to the service's defaults.
+ */
 interface DeclareValues {
   issueType: string;
-  severity: string;
-  description: string;
   assignToMe: boolean;
 }
 
@@ -55,19 +57,16 @@ export function BulkDeclareProblemDialog({ accountIds, onDone }: BulkProblemProp
   const [open, setOpen] = useState(false);
   const declare = useDeclareProblems();
 
-  const { register, handleSubmit, setValue, control, reset, formState } = useForm<DeclareValues>({
+  const { handleSubmit, setValue, control, reset } = useForm<DeclareValues>({
     mode: "onTouched",
     defaultValues: {
       issueType: "something_went_wrong",
-      severity: "medium",
-      description: "",
       assignToMe: false,
     },
   });
 
   /* useWatch, not watch(): watch() returns a new function each render and stops React Compiler. */
   const issueType = useWatch({ control, name: "issueType" });
-  const severity = useWatch({ control, name: "severity" });
   const assignToMe = useWatch({ control, name: "assignToMe" });
 
   const count = accountIds.length;
@@ -150,42 +149,6 @@ export function BulkDeclareProblemDialog({ accountIds, onDone }: BulkProblemProp
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="bulk-problem-severity">Severity</Label>
-              <Select
-                value={severity}
-                onValueChange={(value) => setValue("severity", value)}
-                disabled={declare.isPending}
-              >
-                <SelectTrigger id="bulk-problem-severity" className="h-11 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="critical">Critical</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="bulk-problem-description">What happened</Label>
-              <Textarea
-                id="bulk-problem-description"
-                rows={4}
-                placeholder="What you saw, and what you were doing at the time."
-                disabled={declare.isPending}
-                {...register("description", {
-                  required: "Describe what went wrong",
-                  minLength: { value: 10, message: "Describe what went wrong in a few more words" },
-                })}
-              />
-              {formState.errors.description ? (
-                <p className="text-caption text-danger">{formState.errors.description.message}</p>
-              ) : null}
             </div>
 
             <label className="flex items-center gap-2 text-caption text-foreground-muted">

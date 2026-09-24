@@ -37,6 +37,11 @@ import { ACTIVE_STATUSES, type ProblemStatus } from "../services/problem-lifecyc
 export interface ProblemFilter extends PaginationInput {
   readonly search?: string | undefined;
   readonly status?: ProblemStatus | undefined;
+  /**
+   * Only problems in a blocking status — the ones stopping an account from
+   * selling right now. Ignored when `status` names one status exactly.
+   */
+  readonly blocking?: boolean | undefined;
   readonly severity?: IssueRow["severity"] | undefined;
   readonly issueType?: IssueRow["issueType"] | undefined;
   readonly assignedTo?: string | undefined;
@@ -71,7 +76,13 @@ export interface ProblemsRepository {
   remove(id: string): Promise<Result<IssueRow>>;
 
   /** Accounts with at least one blocking problem. Powers the allocation rule. */
-  accountsWithActiveProblems(accountIds: readonly string[]): Promise<Result<ReadonlySet<string>>>;
+  /**
+   * The accounts, among these, with at least one blocking problem — and which
+   * types those problems are. An account absent from the map has none.
+   */
+  accountsWithActiveProblems(
+    accountIds: readonly string[],
+  ): Promise<Result<ReadonlyMap<string, readonly IssueRow["issueType"][]>>>;
   activeForAccount(accountId: string): Promise<Result<readonly IssueRow[]>>;
   /** Active problems across every account a customer currently holds a profile on. */
   activeForCustomer(customerId: string): Promise<Result<readonly ProblemListEntry[]>>;
@@ -114,6 +125,7 @@ const reporter = alias(users, "reporter");
 function buildWhere(filter: ProblemFilter): SQL | undefined {
   const conditions: (SQL | undefined)[] = [
     filter.status ? eq(issues.status, filter.status) : undefined,
+    !filter.status && filter.blocking ? inArray(issues.status, [...ACTIVE_STATUSES]) : undefined,
     filter.severity ? eq(issues.severity, filter.severity) : undefined,
     filter.issueType ? eq(issues.issueType, filter.issueType) : undefined,
     filter.assignedTo ? eq(issues.assignedTo, filter.assignedTo) : undefined,
@@ -273,7 +285,7 @@ export const problemsRepository: ProblemsRepository = {
 
   async accountsWithActiveProblems(accountIds) {
     if (accountIds.length === 0) {
-      return ok(new Set<string>());
+      return ok(new Map<string, IssueRow["issueType"][]>());
     }
 
     /*
@@ -284,7 +296,7 @@ export const problemsRepository: ProblemsRepository = {
       "problems.accountsWithActiveProblems",
       async (executor) => {
         const rows = await executor
-          .selectDistinct({ accountId: issues.accountId })
+          .selectDistinct({ accountId: issues.accountId, issueType: issues.issueType })
           .from(issues)
           .where(
             and(
@@ -293,7 +305,7 @@ export const problemsRepository: ProblemsRepository = {
             ),
           );
 
-        return rows.map((row) => row.accountId);
+        return rows;
       },
     );
 
@@ -301,7 +313,19 @@ export const problemsRepository: ProblemsRepository = {
       return result;
     }
 
-    return ok(new Set(result.value));
+    /*
+     * Grouped here rather than in SQL: a page holds at most a few dozen
+     * accounts, and `array_agg` would hand back a driver-shaped array to parse.
+     */
+    const byAccount = new Map<string, IssueRow["issueType"][]>();
+
+    for (const { accountId, issueType } of result.value) {
+      const types = byAccount.get(accountId) ?? [];
+      types.push(issueType);
+      byAccount.set(accountId, types);
+    }
+
+    return ok(byAccount);
   },
 
   async activeForAccount(accountId) {

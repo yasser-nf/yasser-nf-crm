@@ -168,6 +168,17 @@ which can only happen if rows arrived from an import.
 An edit that changes nothing writes no event. A timeline full of empty edits is
 worse than no timeline.
 
+**M03 additions.**
+
+| Concern | Rule |
+| ------- | ---- |
+| Authorization | `profilesService.updateProfile` checks permissions per field, server-side: name and notes `EDIT_PROFILE_NAMES`, PIN `EDIT_PROFILE_PINS`, customer and dates `PREPARE_SUBSCRIPTIONS`. It checked nothing before; both roles hold all three, so real users see no change |
+| Profile notes | Belong to the profile (`profiles.notes`, no migration). Optional; an empty note clears it (stored as null). A note containing the profile's own PIN is refused. Changes are audited (`notes` + `changedFields`), never with the PIN |
+| Expiration | Derived by `resolveExpirationDate` on the server. The editor previews it with `previewExpirationDate`, which applies the same function to what the server will receive, so the date shown is the date written |
+| What the editor sends | Only fields that changed (`buildProfileEditPayload`). A note edit is not an allocation change; saving with nothing changed writes nothing |
+| An expiration the server corrects | Validated against the account like any allocation change, even on a note-only edit |
+| Profile card badge | From the derived state (`profileCellState`), like the indicator strip — a free slot on a problem account reads *Blocked by account*, a lapsed sale *Expired allocation* |
+
 ### Lifecycle
 
 ```

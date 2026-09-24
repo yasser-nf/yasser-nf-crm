@@ -10,7 +10,8 @@ import { z } from "zod";
 import { DURATION, EASING } from "@/config/theme";
 import { ActionError } from "@/lib/errors";
 import type { ProfileRow } from "@/lib/drizzle/schema";
-import { deriveExpirationForInput } from "../services/profile-dates";
+import { buildProfileEditPayload } from "../services/profile-edit-payload";
+import { previewExpirationDate } from "../services/profile-dates";
 import type { ProfileAllocationWithCustomer } from "../services/accounts.service";
 import { ProfileCustomerLine } from "./profile-customer-line";
 import type { ProfileCustomerLink } from "../services/profile-customer";
@@ -35,7 +36,7 @@ import {
 } from "@/shared/ui/dialog";
 import { Textarea } from "@/shared/ui/textarea";
 import { useUnassignSale, useUpdateProfile } from "../hooks/use-account-mutations";
-import { ProfileStatusBadge } from "./status-badge";
+import { ProfileStateBadge } from "./status-badge";
 
 /**
  * One of the five profile cards.
@@ -80,6 +81,24 @@ function formatDate(value: string | null): string {
   return value ? new Date(value).toLocaleDateString(undefined, { dateStyle: "medium" }) : "—";
 }
 
+/**
+ * Why a slot cannot be sold when the reason is the ACCOUNT, not the slot.
+ *
+ * Only the status case used to be explained, so a slot on a healthy-stored
+ * account with an open payment problem showed no reason at all. Every
+ * account-level reason `evaluateAllocation` can return is named here; the
+ * profile-level ones are already said by the badge.
+ */
+const ACCOUNT_BLOCK_REASONS: Partial<
+  Record<NonNullable<ProfileAllocationWithCustomer["blockedReason"]>, string>
+> = {
+  account_not_healthy:
+    "Blocked by the account's status. Not available for allocation until the account is healthy.",
+  account_has_problem:
+    "Blocked by an open problem on this account. Not available for allocation until it is resolved.",
+  account_expired: "Blocked because the account's own validity has ended.",
+};
+
 /** Statuses that mean a customer is holding this slot. Mirrors the repository. */
 const HELD_STATUSES: readonly ProfileRow["status"][] = ["sold", "reserved", "expiring_soon"];
 
@@ -109,7 +128,7 @@ export function ProfileCard({
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmingUnassign, setConfirmingUnassign] = useState(false);
-  const { profile, isAllocatable, blockedReason } = allocation;
+  const { profile, blockedReason } = allocation;
   const unassign = useUnassignSale(accountId, profile.id);
 
   /* Only a slot somebody is actually holding can have its sale removed. */
@@ -145,18 +164,12 @@ export function ProfileCard({
         </div>
 
         {/*
-          The badge must agree with the indicator strip above the cards.
-
-          Reading `profile.status` alone renders a green "Available" on a slot
-          the allocator will never sell — the column says available because
-          sellability is derived, not stored. `blockedReason` is the derived
-          answer, from the same `evaluateAllocation` the strip uses.
+          The badge must agree with the indicator strip above the cards, so it
+          reads the same derived `state` — `profileCellState` via
+          `evaluateAllocation`. The stored status column said "Available" on a
+          free slot the account could not sell, and "Sold" on a lapsed sale.
         */}
-        <ProfileStatusBadge
-          status={profile.status}
-          notForSale={blockedReason === "profile_not_for_sale"}
-          expiringSoon={allocation.state === "expiring_soon"}
-        />
+        <ProfileStateBadge state={allocation.state} />
       </header>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-caption">
@@ -180,11 +193,29 @@ export function ProfileCard({
         </div>
       </dl>
 
-      {!isAllocatable && blockedReason === "account_not_healthy" ? (
+      {profile.notes ? (
+        /*
+          The profile's own note, not the account's and not a problem's. Shown
+          in full on the card; the inline panel truncates it.
+        */
+        <div className="flex flex-col gap-0.5 rounded-md bg-background-secondary p-3 text-caption">
+          <span className="text-foreground-subtle">Profile note</span>
+          <p className="break-words whitespace-pre-line text-foreground">{profile.notes}</p>
+        </div>
+      ) : null}
+
+      {/*
+        Only on a slot whose derived state is "blocked" — free, but unsellable
+        because of the account. A sold slot on the same account keeps its
+        customer and reads "sold"; profileCellState never repaints a held
+        allocation, and this notice does not contradict it.
+      */}
+      {allocation.state === "blocked" &&
+      blockedReason !== null &&
+      ACCOUNT_BLOCK_REASONS[blockedReason] ? (
         <p className="flex items-start gap-2 rounded-md bg-warning-subtle p-3 text-caption text-warning">
           <Ban className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          Blocked by the account&apos;s status. Not available for allocation regardless of the badge
-          above.
+          {ACCOUNT_BLOCK_REASONS[blockedReason]}
         </p>
       ) : null}
 
@@ -317,6 +348,25 @@ export function EditProfileDialog({
   const initialCustomerPhone = customer.kind === "linked" ? customer.customer.label : "";
   const update = useUpdateProfile(accountId, profile.id);
 
+  /*
+   * What the form opens with, kept so submit sends only what the operator
+   * changed — see buildProfileEditPayload.
+   */
+  const initialValues: ProfileEditFormValues = {
+    profileName: profile.profileName ?? "",
+    pin: profile.pin ?? "",
+    notes: profile.notes ?? "",
+    customerPhone: initialCustomerPhone,
+    saleDate: profile.saleDate ?? "",
+    durationDays: profile.durationDays ? String(profile.durationDays) : "",
+  };
+
+  const stored = {
+    saleDate: profile.saleDate,
+    durationDays: profile.durationDays,
+    expirationDate: profile.expirationDate,
+  };
+
   const {
     register,
     handleSubmit,
@@ -326,11 +376,7 @@ export function EditProfileDialog({
     resolver: zodResolver(profileEditFormSchema),
     mode: "onTouched",
     defaultValues: {
-      profileName: profile.profileName ?? "",
-      pin: profile.pin ?? "",
-      notes: profile.notes ?? "",
-      customerPhone: initialCustomerPhone,
-      saleDate: profile.saleDate ?? "",
+      ...initialValues,
       /*
        * Derived on load, not read from the row.
        *
@@ -339,11 +385,7 @@ export function EditProfileDialog({
        * number would present the disagreement as fact; recomputing it shows
        * what the record actually means, and the next save writes it back.
        */
-      expirationDate: deriveExpirationForInput(
-        profile.saleDate ?? "",
-        profile.durationDays ? String(profile.durationDays) : "",
-      ),
-      durationDays: profile.durationDays ? String(profile.durationDays) : "",
+      expirationDate: previewExpirationDate(initialValues, stored),
     },
   });
 
@@ -354,7 +396,14 @@ export function EditProfileDialog({
   const watchedSaleDate = useWatch({ control, name: "saleDate" });
   const watchedDuration = useWatch({ control, name: "durationDays" });
 
-  const derivedExpiration = deriveExpirationForInput(watchedSaleDate, watchedDuration);
+  /*
+   * The server's own rule, applied to what the server will actually receive:
+   * blank means unchanged, and a profile with no duration keeps its stored date.
+   */
+  const derivedExpiration = previewExpirationDate(
+    { saleDate: watchedSaleDate, durationDays: watchedDuration },
+    stored,
+  );
 
   const serverFieldErrors =
     update.error instanceof ActionError ? (update.error.fieldErrors ?? {}) : {};
@@ -380,33 +429,13 @@ export function EditProfileDialog({
   const unmapped = Object.entries(serverFieldErrors).filter(([field]) => !RENDERED.includes(field));
 
   const submit = handleSubmit((values) => {
-    const payload: Record<string, unknown> = {};
+    /* Only what changed. See buildProfileEditPayload for why this matters. */
+    const payload = buildProfileEditPayload(values, initialValues, canAllocate);
 
-    /* Only what the operator actually filled in. Blank means "unchanged". */
-    if (values.profileName) payload["profileName"] = values.profileName;
-    if (values.pin) payload["pin"] = values.pin;
-    if (values.notes) payload["notes"] = values.notes;
-
-    if (canAllocate) {
-      /*
-       * Only when it actually changed.
-       *
-       * The field is prefilled now, so "non-empty" no longer means "the
-       * operator wants a reassignment". Sending it unchanged would put
-       * `customerPhone` in every payload, and the service treats its presence
-       * as touching the allocation — a PIN correction would re-resolve the
-       * customer and record an allocation change that nobody made.
-       */
-      if (values.customerPhone && values.customerPhone !== initialCustomerPhone) {
-        payload["customerPhone"] = values.customerPhone;
-      }
-      if (values.saleDate) payload["saleDate"] = values.saleDate;
-      if (values.durationDays) payload["durationDays"] = Number(values.durationDays);
-      /*
-       * expirationDate is deliberately absent. The service derives it from the
-       * two fields above, so sending a copy would only create something for it
-       * to disagree with — and a client is not the authority on it anyway.
-       */
+    /* Nothing changed: nothing to write, and nothing to audit. */
+    if (Object.keys(payload).length === 0) {
+      onOpenChange(false);
+      return;
     }
 
     update.mutate(payload, { onSuccess: () => onOpenChange(false) });

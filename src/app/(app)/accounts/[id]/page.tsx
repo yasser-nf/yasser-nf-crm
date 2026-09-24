@@ -17,7 +17,7 @@ import {
 } from "@/modules/accounts";
 import type { AccountRow } from "@/lib/drizzle/schema";
 import { profileCustomerLabel, type ProfileAllocationWithCustomer } from "@/modules/accounts";
-import { ProblemSeverityBadge, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
+import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
 import { ReplaceAccountButton } from "@/modules/quick-prepare";
 import { ErrorState } from "@/shared/feedback/error-state";
 
@@ -166,6 +166,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         account={account}
         remainingValidityDays={remainingValidityDays}
         hasActiveProblem={activeProblems.length > 0}
+        activeProblemTypes={activeProblems.map((problem) => problem.issueType)}
       />
 
       {!accountAllowsAllocation ? (
@@ -208,12 +209,20 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
                   href={`${ROUTES.PROBLEMS}/${problem.id}`}
                   className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-4 py-3 transition-colors hover:bg-surface-raised"
                 >
-                  <span className="flex items-center gap-2 text-description text-foreground">
-                    <ProblemSeverityBadge severity={problem.severity} />
-                    {problem.description.slice(0, 80)}
-                    {problem.description.length > 80 ? "…" : ""}
+                  {/*
+                    The account and the problem, nothing else (M03). Severity and
+                    the free-text description are still stored — they are history
+                    — but the workflow acts on the type, and every problem listed
+                    here is blocking by construction: activeProblems holds only
+                    blocking statuses.
+                  */}
+                  <span className="text-description font-medium text-foreground">
+                    {PROBLEM_TYPE_LABELS[problem.issueType] ?? problem.issueType}
                   </span>
-                  <ProblemStatusBadge status={problem.status} />
+                  <span className="flex items-center gap-2">
+                    <span className="text-caption text-danger">Blocks allocation</span>
+                    <ProblemStatusBadge status={problem.status} />
+                  </span>
                 </Link>
               </li>
             ))}

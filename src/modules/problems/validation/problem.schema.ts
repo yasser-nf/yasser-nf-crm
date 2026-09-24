@@ -22,15 +22,20 @@ export const problemTypeSchema = z.enum([
 export const problemSeveritySchema = z.enum(PROBLEM_SEVERITIES);
 export const problemStatusSchema = z.enum(PROBLEM_STATUSES);
 
+/*
+ * Severity and description are no longer asked for (M03): the workflow names
+ * an account and a problem type, and nothing downstream acted on either field.
+ * Both columns stay — every earlier problem carries them, the timeline reads
+ * them, and dropping them would destroy history — so a report without them is
+ * stored with the column's own `medium` default and an empty description.
+ * `issues.description` is NOT NULL, and an empty string says truthfully that
+ * nobody described it. A caller that still sends either is still validated.
+ */
 export const createProblemSchema = z.object({
   accountId: z.string().uuid("An account is required"),
   issueType: problemTypeSchema,
   severity: problemSeveritySchema.default("medium"),
-  description: z
-    .string()
-    .trim()
-    .min(10, "Describe what went wrong in at least a few words")
-    .max(2000),
+  description: z.string().trim().max(2000).default(""),
   /** Opt-in, so reporting never silently makes somebody the owner. */
   assignToMe: z.boolean().default(false),
 });

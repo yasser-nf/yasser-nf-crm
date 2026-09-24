@@ -13,9 +13,9 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
 import type { ProblemListEntry } from "../repositories/problems.repository";
+import { isBlocking } from "../services/problem-lifecycle";
 import {
   PROBLEM_TYPE_LABELS,
-  ProblemSeverityBadge,
   ProblemStatusBadge,
   formatDateTime,
   problemAge,
@@ -27,7 +27,23 @@ import {
  * Table on desktop, cards on mobile. Filter, sort and search state lives in the
  * URL so a view is shareable and survives a refresh — the same pattern as the
  * accounts, customers and users lists.
+ *
+ * M03: each row answers the workflow's questions — which account, which
+ * problem, is it still blocking — and links to both. Severity is gone from the
+ * screen (filter, column and sort); the column is kept in the database.
  */
+
+/** Whether a problem stops its account selling. `isBlocking`, never restated. */
+function BlockingMark({ status }: { status: ProblemListEntry["problem"]["status"] }) {
+  return isBlocking(status) ? (
+    <span className="inline-flex items-center gap-1.5 text-caption font-medium text-danger">
+      <span className="size-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />
+      Blocking
+    </span>
+  ) : (
+    <span className="text-caption text-foreground-subtle">Not blocking</span>
+  );
+}
 
 interface Props {
   readonly items: readonly ProblemListEntry[];
@@ -76,16 +92,10 @@ export function ProblemsFilters({ workers }: { workers: readonly { id: string; n
   }
 
   const status = searchParams.get("status");
-  const severity = searchParams.get("severity");
   const assignedTo = searchParams.get("assignedTo");
   const issueType = searchParams.get("type");
 
-  const hasFilters =
-    current !== "" ||
-    status !== null ||
-    severity !== null ||
-    assignedTo !== null ||
-    issueType !== null;
+  const hasFilters = current !== "" || status !== null || assignedTo !== null || issueType !== null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -111,25 +121,14 @@ export function ProblemsFilters({ workers }: { workers: readonly { id: string; n
           className="h-11 rounded-md border border-border bg-surface px-3 text-description text-foreground"
         >
           <option value="">All statuses</option>
+          {/* Every problem still stopping its account selling: open, in progress, waiting. */}
+          <option value="blocking">Blocking now</option>
           <option value="open">Open</option>
           <option value="in_progress">In progress</option>
           <option value="waiting">Waiting</option>
           <option value="resolved">Resolved</option>
           <option value="closed">Closed</option>
           <option value="cancelled">Cancelled</option>
-        </select>
-
-        <select
-          value={severity ?? ""}
-          onChange={(event) => setParam("severity", event.target.value || null)}
-          aria-label="Filter by severity"
-          className="h-11 rounded-md border border-border bg-surface px-3 text-description text-foreground"
-        >
-          <option value="">All severities</option>
-          <option value="critical">Critical</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
         </select>
       </div>
 
@@ -227,16 +226,9 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-caption text-foreground-muted">Type</TableHead>
-              <TableHead className="text-caption text-foreground-muted">
-                <button
-                  type="button"
-                  onClick={() => sortBy("severity")}
-                  className="hover:text-foreground"
-                >
-                  Severity
-                </button>
-              </TableHead>
+              <TableHead className="text-caption text-foreground-muted">Account</TableHead>
+              <TableHead className="text-caption text-foreground-muted">Problem</TableHead>
+              <TableHead className="text-caption text-foreground-muted">Blocking</TableHead>
               <TableHead className="text-caption text-foreground-muted">
                 <button
                   type="button"
@@ -246,8 +238,6 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
                   Status
                 </button>
               </TableHead>
-              <TableHead className="text-caption text-foreground-muted">Account</TableHead>
-              <TableHead className="text-caption text-foreground-muted">Profiles</TableHead>
               <TableHead className="text-caption text-foreground-muted">Assigned</TableHead>
               <TableHead className="text-caption text-foreground-muted">Reported by</TableHead>
               <TableHead className="text-caption text-foreground-muted">
@@ -276,6 +266,14 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
                 }}
                 className="border-b border-border transition-colors last:border-0 hover:bg-surface-raised"
               >
+                <TableCell className="text-caption">
+                  <Link
+                    href={`${ROUTES.ACCOUNTS}/${entry.problem.accountId}`}
+                    className="text-foreground-muted hover:text-primary"
+                  >
+                    {entry.accountEmail}
+                  </Link>
+                </TableCell>
                 <TableCell className="font-medium">
                   <Link
                     href={`${ROUTES.PROBLEMS}/${entry.problem.id}`}
@@ -285,17 +283,11 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
                   </Link>
                 </TableCell>
                 <TableCell>
-                  <ProblemSeverityBadge severity={entry.problem.severity} />
+                  {/* A blocking problem stops all five profiles. ADR-010 D2. */}
+                  <BlockingMark status={entry.problem.status} />
                 </TableCell>
                 <TableCell>
                   <ProblemStatusBadge status={entry.problem.status} />
-                </TableCell>
-                <TableCell className="text-caption text-foreground-muted">
-                  {entry.accountEmail}
-                </TableCell>
-                <TableCell className="text-caption text-foreground-subtle">
-                  {/* Derived: an unhealthy account blocks all five. ADR-010 D2. */}
-                  All 5
                 </TableCell>
                 <TableCell className="text-caption text-foreground-muted">
                   {entry.assignedToName ?? "Unassigned"}
@@ -333,7 +325,7 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
               {entry.accountEmail}
             </span>
             <div className="flex flex-wrap items-center gap-2">
-              <ProblemSeverityBadge severity={entry.problem.severity} />
+              <BlockingMark status={entry.problem.status} />
               <span className="text-caption text-foreground-subtle">
                 {entry.assignedToName ?? "Unassigned"} ·{" "}
                 {problemAge(entry.problem.createdAt, entry.problem.resolvedAt, now)}

@@ -104,7 +104,7 @@ beforeEach(() => {
   listWithCounts.mockReset();
   accountsWithActiveProblems.mockReset();
   listWithCounts.mockResolvedValue(ok({ items: [ROW], total: 1, limit: 25, offset: 0 }));
-  accountsWithActiveProblems.mockResolvedValue(ok(new Set<string>()));
+  accountsWithActiveProblems.mockResolvedValue(ok(new Map<string, string[]>()));
 });
 
 describe("the panel costs no extra query", () => {
@@ -204,7 +204,7 @@ describe("what the panel receives", () => {
   });
 
   it("blocks every slot when the account carries an open problem", async () => {
-    accountsWithActiveProblems.mockResolvedValue(ok(new Set(["acc-1"])));
+    accountsWithActiveProblems.mockResolvedValue(ok(new Map([["acc-1", ["payment_problem"]]])));
 
     const result = await accountsService.listAccounts({ limit: 25, offset: 0 });
 

@@ -77,3 +77,30 @@ export function resolveExpirationDate(
 ): DateString | null {
   return deriveExpirationDate(saleDate, durationDays) ?? fallback;
 }
+
+/**
+ * The expiration the profile editor shows, as the server will compute it.
+ *
+ * The form sends a field only when the operator changed it, and a blank field
+ * means "leave it alone" — so the server works from the submitted value where
+ * there is one and the stored value otherwise, then calls
+ * `resolveExpirationDate`. This does exactly that, with the same function, so
+ * the date on screen before Save is the date the column holds after it.
+ *
+ * `deriveExpirationForInput` alone showed an empty box for a profile with a
+ * stored expiration but no recorded duration, while the server kept that date.
+ */
+export function previewExpirationDate(
+  form: { readonly saleDate?: string | undefined; readonly durationDays?: string | undefined },
+  stored: {
+    readonly saleDate: DateString | null;
+    readonly durationDays: number | null;
+    readonly expirationDate: DateString | null;
+  },
+): string {
+  const saleDate = form.saleDate ? form.saleDate : stored.saleDate;
+  const typed = form.durationDays ? Number(form.durationDays) : null;
+  const durationDays = typed === null || Number.isNaN(typed) ? stored.durationDays : typed;
+
+  return resolveExpirationDate(saleDate, durationDays, stored.expirationDate) ?? "";
+}

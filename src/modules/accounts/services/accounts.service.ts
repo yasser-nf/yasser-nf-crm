@@ -410,6 +410,12 @@ export interface AccountListRow extends Omit<AccountWithCounts, "account" | "pro
    */
   readonly hasActiveProblem: boolean;
   /**
+   * The types of those blocking problems, so the badge can say "Payment
+   * Problem" rather than a bare "Problem". Empty when `hasActiveProblem` is
+   * false. From the same single query as the flag.
+   */
+  readonly activeProblemTypes: readonly IssueRow["issueType"][];
+  /**
    * The account's five profiles, evaluated exactly as the detail page
    * evaluates them.
    *
@@ -471,7 +477,9 @@ async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountL
   const flagged = await problemsService.accountsWithActiveProblems(
     page.value.items.map((row) => row.account.id),
   );
-  const withProblems = flagged.ok ? flagged.value : new Set<string>();
+  const withProblems: ReadonlyMap<string, readonly IssueRow["issueType"][]> = flagged.ok
+    ? flagged.value
+    : new Map();
 
   return ok({
     ...page.value,
@@ -486,6 +494,7 @@ async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountL
         ...rest,
         account: toAccountView(row.account),
         hasActiveProblem: rowHasProblem,
+        activeProblemTypes: withProblems.get(row.account.id) ?? [],
         /*
          * The same call the detail page makes, so a slot cannot read one way in
          * the inline panel and another after clicking through. Sorted by number
@@ -577,8 +586,12 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
       /* Same resolver as the list, so both screens name one customer. */
       customer: resolveProfileCustomer(profile.customerId, customer),
     })),
-    accountAllowsAllocation:
-      account.status === "healthy" && !hasActiveProblem && !isAccountExpired(account, today),
+    /*
+     * The shared rule, not a restatement of it. This used to spell out three of
+     * accountCanAllocate's four conditions inline and left out `deletedAt`, so
+     * the banner and the cards below it were judged by different rules.
+     */
+    accountAllowsAllocation: accountCanAllocate(account, hasActiveProblem, today),
     remainingValidityDays: accountRemainingDays(account, today),
     /*
      * Surfaced rather than thrown. A count other than five means data arrived

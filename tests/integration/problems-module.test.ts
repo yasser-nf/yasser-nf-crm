@@ -233,11 +233,34 @@ describe.skipIf(!configured)("reporting", () => {
     }
   });
 
-  it("refuses a description that says nothing", async () => {
+  /*
+   * M03 replaced "refuses a description that says nothing": a report now needs
+   * only the account and the type. Severity and description are defaulted,
+   * not required — and still validated when sent.
+   */
+  it("accepts a report with no severity or description, storing the defaults", async () => {
     const { problemsService } = await services();
 
     const result = await problemsService.report(
-      { accountId, issueType: "other", severity: "low", description: "bad" },
+      { accountId, issueType: "other" },
+      { actor: superAdmin },
+    );
+
+    expect(result.ok, result.ok ? "" : String(result.error)).toBe(true);
+
+    if (result.ok) {
+      /* Resolved with the rest in "unblocks the account once every problem is finished". */
+      createdProblemIds.push(result.value.id);
+      expect(result.value.severity).toBe("medium");
+      expect(result.value.description).toBe("");
+    }
+  });
+
+  it("still refuses a severity that is not one of the four", async () => {
+    const { problemsService } = await services();
+
+    const result = await problemsService.report(
+      { accountId, issueType: "other", severity: "urgent" },
       { actor: superAdmin },
     );
 

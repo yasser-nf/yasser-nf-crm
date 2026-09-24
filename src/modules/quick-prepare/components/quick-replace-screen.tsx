@@ -10,11 +10,7 @@ import { ActionError } from "@/lib/errors";
 import { formatPhoneForDisplay } from "@/lib/phone";
 import { FormField } from "@/shared/forms/form-field";
 import { Button } from "@/shared/ui/button";
-import {
-  PROBLEM_TYPE_LABELS,
-  ProblemSeverityBadgeBase,
-  ProblemStatusBadgeBase,
-} from "@/shared/ui/problem-badges";
+import { PROBLEM_TYPE_LABELS, ProblemStatusBadgeBase } from "@/shared/ui/problem-badges";
 import {
   PROFILE_STATE_LABELS,
   PROFILE_STATE_STYLES,
@@ -300,15 +296,13 @@ function ProblemsPanel({ problems }: { problems: ReplacementPreview["problems"] 
             key={problem.id}
             className="flex flex-col gap-2 rounded-md bg-background-secondary p-3"
           >
+            {/* The problem and its status (M03). Severity and description stay stored, unshown. */}
             <span className="flex flex-wrap items-center gap-2">
-              <ProblemStatusBadgeBase status={problem.status} />
-              <ProblemSeverityBadgeBase severity={problem.severity} />
-              <span className="text-caption text-foreground-muted">
+              <span className="text-caption font-medium text-foreground">
                 {PROBLEM_TYPE_LABELS[problem.issueType] ?? problem.issueType}
               </span>
+              <ProblemStatusBadgeBase status={problem.status} />
             </span>
-
-            <p className="text-caption text-foreground">{problem.description}</p>
           </li>
         ))}
       </ul>
