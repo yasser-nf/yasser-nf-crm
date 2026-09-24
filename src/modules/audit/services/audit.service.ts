@@ -6,6 +6,7 @@ import type { AuditLogRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 import { auditRepository } from "../repositories/audit.repository";
 import type { AuditLogInsert } from "../validation/audit-log.schema";
+import { sanitizeAuditSnapshot } from "./audit-redaction";
 
 /**
  * Audit service.
@@ -15,38 +16,17 @@ import type { AuditLogInsert } from "../validation/audit-log.schema";
  *
  * The one thing this service exists to guarantee is that a secret never reaches
  * an audit row. Callers pass whole entity snapshots — the natural thing to do —
- * and a snapshot of an account row carries password_encrypted. Stripping is done
- * here rather than at each call site, because a rule applied in eight places is
- * a rule that will be missed in the ninth.
- */
-
-/**
- * Columns that must never appear in an audit snapshot.
+ * and a snapshot of an account row carries password_encrypted, a profile row
+ * carries the customer's PIN. Stripping is done here rather than at each call
+ * site, because a rule applied in eight places is a rule that will be missed in
+ * the ninth.
  *
- * password_encrypted is ciphertext rather than plaintext, but storing it in a
- * table that history views read freely would spread the secret to a second
- * place and defeat the point of encrypting it in the first.
+ * It was missed. The previous guard was a three-name deny-list applied to top-
+ * level keys only; `pin` was not on it, and M01 found 243 audit rows holding a
+ * live customer PIN. `sanitizeAuditSnapshot` replaces it: a per-entity
+ * allow-list, then redaction of sensitive keys at every depth. See
+ * audit-redaction.ts for the rules and the reasoning behind each.
  */
-const REDACTED_FIELDS: readonly string[] = ["passwordEncrypted", "password_encrypted", "password"];
-
-const REDACTION_MARKER = "[redacted]";
-
-/** Removes forbidden fields from a snapshot before it is written. */
-function redact(
-  snapshot: Readonly<Record<string, unknown>> | null | undefined,
-): Record<string, unknown> | null {
-  if (!snapshot) {
-    return null;
-  }
-
-  const safe: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(snapshot)) {
-    safe[key] = REDACTED_FIELDS.includes(key) ? REDACTION_MARKER : value;
-  }
-
-  return safe;
-}
 
 export interface AuditContext {
   readonly actor: AppUser | null;
@@ -76,8 +56,8 @@ async function record(
     entity: input.entity,
     entityId: input.entityId,
     action: input.action,
-    before: redact(input.before),
-    after: redact(input.after),
+    before: sanitizeAuditSnapshot(input.entity, input.before),
+    after: sanitizeAuditSnapshot(input.entity, input.after),
     userId: context.actor?.id ?? null,
     /* Denormalised so the entry still names someone after the user is deleted. */
     actorEmail: context.actor?.email,

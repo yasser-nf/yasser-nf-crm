@@ -64,6 +64,33 @@ export const IDLE_TIMEOUT_SECONDS = 5;
 /** Seconds to wait for a new connection before giving up. */
 export const CONNECT_TIMEOUT_SECONDS = 10;
 
+/**
+ * The pool ceiling actually used: `MAX_POOL_SIZE`, or LESS if asked.
+ *
+ * Exists for exactly one caller — the isolated test database. That is an
+ * in-process PGlite, single-session underneath, reached through a socket
+ * multiplexer; several concurrent pool connections interleave their bound
+ * parameters on that one session (observed: SQLSTATE 22P02 on a valid query).
+ * The integration run sets DB_POOL_MAX=1 so the application talks to it through
+ * one connection, as it would through any single-session database.
+ *
+ * It can only LOWER the ceiling. Anything missing, non-numeric, below 1 or
+ * above MAX_POOL_SIZE yields MAX_POOL_SIZE, so no environment variable can
+ * push an instance past the pooler budget the constants above protect.
+ * Production never sets it and is unaffected.
+ *
+ * Pure: the caller passes the value in. This module still reads nothing.
+ */
+export function resolvePoolMax(requested: string | undefined): number {
+  const parsed = Number(requested);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_POOL_SIZE) {
+    return MAX_POOL_SIZE;
+  }
+
+  return parsed;
+}
+
 export const poolOptions = {
   /* Supabase's pooler does not support prepared statements in transaction mode. */
   prepare: false,

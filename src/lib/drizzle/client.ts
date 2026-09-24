@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { serverEnv } from "@/config/env.server";
-import { poolOptions } from "./pool-config";
+import { poolOptions, resolvePoolMax } from "./pool-config";
 import * as schema from "./schema";
 
 /**
@@ -25,7 +25,14 @@ const globalForDatabase = globalThis as unknown as {
 };
 
 function createSqlClient(): ReturnType<typeof postgres> {
-  return postgres(serverEnv.DATABASE_URL, poolOptions);
+  /*
+   * DB_POOL_MAX can only lower the ceiling (see resolvePoolMax); the isolated
+   * test database sets it to 1. Unset everywhere else, so this is poolOptions.
+   */
+  return postgres(serverEnv.DATABASE_URL, {
+    ...poolOptions,
+    max: resolvePoolMax(process.env["DB_POOL_MAX"]),
+  });
 }
 
 const sqlClient = globalForDatabase.__ynfCrmSqlClient ?? createSqlClient();

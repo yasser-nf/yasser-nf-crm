@@ -38,6 +38,7 @@ export { profilesService } from "./services/profiles.service";
  * directly rather than coming through here.
  */
 export {
+  accountCanAllocate,
   accountRemainingDays,
   canCoverDuration,
   isAccountExpired,

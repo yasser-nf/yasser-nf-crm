@@ -7,19 +7,21 @@ waiting to be discovered.
 
 ## 1. Security
 
-### RLS is not enabled on any table — HIGH
+### RLS guards the perimeter, not application queries — MEDIUM
 
-`03_DATABASE.md` requires Row Level Security on all business tables. No policy
-exists on any of the eight.
+*Updated in M01.5. This entry previously read "RLS is not enabled on any table —
+HIGH", which stopped being true with migration 0002.*
 
-Today the application connects as `postgres` through the pooler and enforces
-authorization in the service layer, which ADR-002 records as the primary
-mechanism with RLS as defense-in-depth. The defense-in-depth half is missing:
-anything holding the connection string has unrestricted access, and the Supabase
-anon key reaches PostgREST directly, bypassing our service layer entirely.
+Migration 0002 enabled Row Level Security and revoked every privilege from
+`anon` and `authenticated`. Verified against production in M01: all twelve
+tables have `relrowsecurity = true`, and no grant to either role remains. The
+anon key no longer reaches table data through PostgREST.
 
-**Until RLS exists, the anon key must be treated as a database-wide read
-credential.**
+What remains is the half that was always true: the application connects as
+`postgres`, which has `rolbypassrls = true`, so RLS is never consulted for the
+application's own queries. Authorization for those lives entirely in the service
+layer. A service method that forgets its permission check has no database-level
+backstop.
 
 ### Audit immutability is convention, not enforcement — MEDIUM
 
@@ -30,10 +32,20 @@ connects as.
 
 ### Secrets in snapshots rely on one function — MEDIUM
 
-`auditService` strips `passwordEncrypted` centrally and this is verified. But a
-caller writing directly to `auditRepository`, or putting a secret in
-`profile_events.metadata`, would bypass it. Convention, enforced in one place
-rather than by the type system.
+*Updated in M01.5.* The function was not enough: it stripped three field names
+at the top level only, and customer profile PINs were written into
+`audit_logs` in plaintext (M01 finding F8 — 249 rows by M01.5).
+
+`auditService` now applies `sanitizeAuditSnapshot` (audit-redaction.ts): a
+per-entity allow-list of fields, then redaction of sensitive keys at every
+depth. Migration 0013 redacts the historical PINs; **it must be applied to
+production after the code is deployed** (see the M01.5 report).
+
+Still true: a caller writing directly to `auditRepository` bypasses it — it
+remains convention, enforced in one place rather than by the type system.
+`profile_events.metadata` is outside it too; verified safe today (a PIN change
+records only `hadPreviousPin`). Backup artifacts taken before 0013 still contain
+the PINs, and restoring one would write them back.
 
 ### Encryption key rotation is unrecoverable — MEDIUM
 
@@ -77,10 +89,11 @@ Testing it means dropping all eight tables. It has not been run.
 
 ## 3. Functional Gaps
 
-### `users.last_login_at` is never written — LOW
+### ~~`users.last_login_at` is never written~~ — RESOLVED
 
-`usersRepository.recordLogin` is correct and unreachable — nothing calls it. The
-column specified by `03_DATABASE.md` stays null forever.
+*Updated in M01.5.* No longer true: the column is written on sign-in
+(`src/lib/auth/session.ts`) and by `usersRepository.recordLogin`. The Users page
+"Last login" column reflects it.
 
 ### Account deletion is refused for everyone — MEDIUM
 
@@ -93,12 +106,26 @@ unaffected.
 
 Both enum values exist and nothing writes them. They are functions of
 `expiration_date` and today's date, and the scheduled sweep that would apply
-them does not exist. A subscription that has ended still reads as `sold`.
+them does not exist. A subscription that has ended still reads as `sold` in the
+`profiles.status` column.
 
-### `health_score` is always 100 — MEDIUM
+*Updated in M01.5:* still true in the database, but nothing user-visible trusts
+the column any more. Every profile badge derives its state from
+`expiration_date` through `profileCellState`, and since M01.5 so do the
+Dashboard's profile counts, which used to read these never-written values and
+showed 0 expired while six had expired (M01 finding F5). `reserved` is likewise
+never written.
 
-The Smart Stock Engine ranks by health, and every account has the default. Until
-problem history feeds the score, ranking is effectively by account age.
+### `health_score` column is orphaned — LOW
+
+*Updated in M01.5. This entry previously read "`health_score` is always 100 —
+MEDIUM".* The Health system has since been removed from the application; nothing
+reads or writes the score.
+
+The physical column and its `accounts_health_score_range` check still exist in
+the database (verified in M01.5) — dropping them is a deliberate, destructive
+decision that has not been taken. The TypeScript schema no longer declares the
+column, so `drizzle-kit generate` will not propose dropping it on its own.
 
 ### No orders table — MEDIUM
 
@@ -137,9 +164,14 @@ pooler on 6543; `lib/drizzle/client.ts` already sets `prepare: false` for it.
 upstream fix; `npm audit fix --force` would downgrade drizzle-kit to 0.18.1.
 Production audit is clean.
 
-### No automated test suite — MEDIUM
+### ~~No automated test suite~~ — RESOLVED, with one caveat
 
-The 55 checks ran through a temporary harness that has been removed. They are
-not a permanent gate, and nothing prevents BUG-01 from recurring. **This is the
-single highest-value thing to add next** — that bug survived three milestones of
-green builds.
+*Updated in M01.5.* No longer true: a Vitest suite of unit tests (`npm test`) and
+24 integration files runs on every change.
+
+The caveat was serious and M01.5 addressed it: until then the integration files
+ran against the PRODUCTION database — 21 of 24 write rows — and their results
+depended on live stock. They now run only through `npm run test:integration`,
+against an in-process PostgreSQL with every migration applied and a fixed seed.
+`npm test` skips them. A guard refuses any target that is the production
+project.

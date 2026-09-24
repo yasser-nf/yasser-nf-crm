@@ -16,6 +16,54 @@ import { allocationFitsAccount, isSellableSlot } from "./account-validity";
 import { resolveExpirationDate } from "./profile-dates";
 
 /**
+ * The fields of a profile an audit entry records — and, by omission, the one it
+ * never does.
+ *
+ * These call sites used to hand the whole ProfileRow to the audit service, PIN
+ * included, and M01 found 243 audit rows holding a live customer PIN as a
+ * result. The audit service now refuses a PIN centrally whatever it is given;
+ * this is the second layer, so the intent is stated where the data is chosen
+ * rather than left to a filter downstream.
+ *
+ * What changed about the PIN is still recorded — as a field NAME in
+ * `changedFields` — because "the PIN was changed at 14:02 by Amina" is exactly
+ * what an audit reader needs. The value is what they must never get.
+ */
+function profileAuditSnapshot(row: ProfileRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    profileNumber: row.profileNumber,
+    profileName: row.profileName,
+    status: row.status,
+    customerId: row.customerId,
+    workerId: row.workerId,
+    saleDate: row.saleDate,
+    expirationDate: row.expirationDate,
+    durationDays: row.durationDays,
+    notes: row.notes,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Names of the columns that differ between two versions of a profile. */
+function changedProfileFields(previous: ProfileRow, next: ProfileRow): string[] {
+  const keys: readonly (keyof ProfileRow)[] = [
+    "profileName",
+    "pin",
+    "status",
+    "customerId",
+    "workerId",
+    "saleDate",
+    "expirationDate",
+    "durationDays",
+    "notes",
+  ];
+
+  return keys.filter((key) => previous[key] !== next[key]);
+}
+
+/**
  * Profiles service.
  *
  * M03 permitted editing only the profile name and PIN. M13 §5 adds the
@@ -311,7 +359,13 @@ async function updateProfile(
   const events = await recordChanges(previous, next, context);
 
   await auditService.recordOrWarn(
-    { entity: "profile", entityId: id, action: "update", before: previous, after: next },
+    {
+      entity: "profile",
+      entityId: id,
+      action: "update",
+      before: profileAuditSnapshot(previous),
+      after: { ...profileAuditSnapshot(next), changedFields: changedProfileFields(previous, next) },
+    },
     context,
   );
 
@@ -482,7 +536,17 @@ async function unassignSale(profileId: string, context: AuditContext): Promise<R
    * here: a failed audit write must not roll back a completed release.
    */
   await auditService.recordOrWarn(
-    { entity: "profile", entityId: profileId, action: "update", before, after },
+    {
+      entity: "profile",
+      entityId: profileId,
+      action: "update",
+      before: profileAuditSnapshot(before),
+      after: {
+        ...profileAuditSnapshot(after),
+        event: "sale_unassigned",
+        changedFields: changedProfileFields(before, after),
+      },
+    },
     context,
   );
 

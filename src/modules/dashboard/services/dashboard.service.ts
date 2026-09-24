@@ -17,6 +17,7 @@ import {
   type LabelledCount,
   type SeriesPoint,
 } from "../repositories/dashboard.repository";
+import { tallyProfileStates } from "./profile-state-counts";
 import { assessHealth, type HealthReport } from "./system-health";
 
 /**
@@ -98,6 +99,7 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     customersOverTime,
     problemsBySeverity,
     backupsOverTime,
+    profileStates,
   ] = await Promise.all([
     dashboardRepository.counts(),
     isAdmin ? dashboardRepository.backupSummary() : Promise.resolve(null),
@@ -117,11 +119,42 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     dashboardRepository.customersCreatedByDay(30),
     dashboardRepository.problemsBySeverity(),
     isAdmin ? dashboardRepository.backupsByDay(30) : Promise.resolve(null),
+    dashboardRepository.profileStateInputs(),
   ]);
 
   if (!counts.ok) {
     return counts;
   }
+
+  /*
+   * Fails the page rather than degrading, like counts above: these are the
+   * Profiles widget's headline figures, and a silently empty tally would show
+   * zeros that look like real stock levels.
+   */
+  if (!profileStates.ok) {
+    return profileStates;
+  }
+
+  /*
+   * Every profile classified by profileCellState — the rule behind each profile
+   * badge in the application — so the widget reports what the Accounts page
+   * shows, bucket for bucket. M01 finding F5.
+   */
+  const tally = tallyProfileStates(profileStates.value, new Date());
+
+  const dashboardCounts: DashboardCounts = {
+    ...counts.value,
+    profiles: {
+      total: counts.value.profiles.total,
+      reserved: counts.value.profiles.reserved,
+      available: tally.available,
+      sold: tally.sold,
+      expiringSoon: tally.expiring_soon,
+      expired: tally.expired,
+      notForSale: tally.not_for_sale,
+      blocked: tally.blocked,
+    },
+  };
 
   const backupSummary = backups && backups.ok ? backups.value : null;
 
@@ -147,7 +180,7 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     result.ok ? result.value.items : [];
 
   return ok({
-    counts: counts.value,
+    counts: dashboardCounts,
     backups: backupSummary,
     health,
     onlineUsers: onlineUsers && onlineUsers.ok ? onlineUsers.value : null,

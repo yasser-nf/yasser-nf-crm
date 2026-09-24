@@ -92,6 +92,13 @@
       "when": 1786896000000,
       "tag": "0012_customer_identifier",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790249047175,
+      "tag": "0013_redact_audit_pins",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import "server-only";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import {
+  accountCanAllocate,
   profileCellState,
   remainingCustomerDays,
   toAccountView,
@@ -209,13 +210,31 @@ async function preview(input: unknown): Promise<Result<ReplacementPreview>> {
   const now = new Date();
 
   /*
+   * Loaded BEFORE the states are derived, because the states depend on it.
+   *
+   * It used to be read further down, after `profileCellState` had already run
+   * with its fourth argument left to default — and the default is `true`,
+   * "this account may allocate". Quick Replace only ever shows a FAILING
+   * account, so the default was wrong in exactly the case this screen exists
+   * for: a FREE slot the Accounts page showed as blocked showed here as
+   * available — stock on offer from an account that cannot sell it. Same
+   * profile, same moment, two answers. (M01 finding F6.) Sold slots were never
+   * affected: profileCellState keeps a held allocation "sold" either way.
+   */
+  const problemsResult = await problemsService.activeForAccount(oldAccount.id);
+  const problems = problemsResult.ok ? problemsResult.value : [];
+
+  /* The same conjunction the Accounts list and detail page pass. */
+  const canAllocate = accountCanAllocate(oldAccount, problems.length > 0, now);
+
+  /*
    * State derived from the FULL row, then the row projected. Doing it in this
    * order keeps `profileCellState` on its existing signature — the derivation is
    * shared, not re-implemented against a narrower shape.
    */
   const accountProfiles: readonly AccountProfileSlot[] = allRows.value.map((row) => ({
     profile: toProfileView(row.profile),
-    state: profileCellState(row.profile, oldAccount, now),
+    state: profileCellState(row.profile, oldAccount, now, canAllocate),
     customerName: row.customerName,
   }));
 
@@ -251,9 +270,6 @@ async function preview(input: unknown): Promise<Result<ReplacementPreview>> {
       ),
     };
   });
-
-  const problemsResult = await problemsService.activeForAccount(oldAccount.id);
-  const problems = problemsResult.ok ? problemsResult.value : [];
 
   /*
    * Ambiguity is reported, never resolved by guessing. Replacing the wrong

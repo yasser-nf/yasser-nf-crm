@@ -1,8 +1,19 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { databaseAdapter } from "@/lib/database";
-import { rawAccountCanAllocate, rawAccountIsLive, rawSellableSlot } from "@/lib/drizzle/predicates";
-import type { AccountRow, IssueRow, ProfileRow } from "@/lib/drizzle/schema";
+import {
+  accountHasNoBlockingProblemSql,
+  accountIsLiveSql,
+  accountMatchesStatusSql,
+  rawAccountIsLive,
+} from "@/lib/drizzle/predicates";
+import {
+  accounts,
+  profiles,
+  type AccountRow,
+  type IssueRow,
+  type ProfileRow,
+} from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
 
 /**
@@ -39,6 +50,44 @@ export interface ProfileCounts {
   readonly expired: number;
   /** Profile rows above their account's profile_slots. Not stock. M13. */
   readonly notForSale: number;
+  /**
+   * Free slots on an account that cannot sell them — an open problem, a
+   * non-healthy status or expired coverage. Not rendered by the widget; carried
+   * so the display-state buckets account for every profile.
+   */
+  readonly blocked: number;
+}
+
+/**
+ * The profile figures SQL can state truthfully on its own.
+ *
+ * `available`, `sold`, `expiringSoon`, `expired` and `blocked` are NOT here.
+ * They are display states, and the only correct definition of a display state
+ * is `profileCellState`, which lives in TypeScript. The dashboard service
+ * computes them from `profileStateInputs` (below) through that function. SQL
+ * used to compute them from `profiles.status`, whose `expiring_soon` and
+ * `expired` values nothing writes — M01 finding F5.
+ */
+export interface StoredProfileCounts {
+  readonly total: number;
+  /**
+   * A literal count of `status = 'reserved'`. Truthful but vestigial: nothing
+   * in the application writes 'reserved', so it is 0, and `profileCellState`
+   * folds a reserved row into the held states (sold / expiring soon) anyway.
+   */
+  readonly reserved: number;
+}
+
+/** What `counts()` returns: everything except the display-state profile figures. */
+export interface RepositoryCounts extends Omit<DashboardCounts, "profiles"> {
+  readonly profiles: StoredProfileCounts;
+}
+
+/** One profile, with exactly the account facts `profileCellState` needs. */
+export interface ProfileStateRow {
+  readonly profile: ProfileRow;
+  readonly account: Pick<AccountRow, "profileSlots" | "validUntil" | "status" | "deletedAt">;
+  readonly hasBlockingProblem: boolean;
 }
 
 export interface CustomerCounts {
@@ -113,8 +162,14 @@ function readDate(row: Record<string, unknown>, key: string): Date | null {
 }
 
 export interface DashboardRepository {
-  /** Every KPI on the page, in one round trip per domain group. */
-  counts(): Promise<Result<DashboardCounts>>;
+  /** Every KPI SQL can state on its own, in one round trip per domain group. */
+  counts(): Promise<Result<RepositoryCounts>>;
+  /**
+   * Every profile on a live account, with the account facts the display rule
+   * reads. The service turns these into the Profiles widget's figures through
+   * `profileCellState` — the one definition of what a profile is showing.
+   */
+  profileStateInputs(): Promise<Result<readonly ProfileStateRow[]>>;
   backupSummary(): Promise<Result<BackupSummary>>;
   /** Newest first, merged across the three history sources. */
   recentActivity(limit: number, offset: number): Promise<Result<readonly ActivityRow[]>>;
@@ -190,7 +245,18 @@ export const dashboardRepository: DashboardRepository = {
       const accountRows = await executor.execute(sql`
         select
           count(*)::int as total,
-          count(*) filter (where status = 'healthy')::int as healthy,
+          /*
+           * Healthy means what the Accounts page means by it: stored healthy
+           * AND no blocking problem. Problems never write accounts.status
+           * (ADR-010 D4), so status = 'healthy' alone counted accounts the
+           * Accounts page badges as Problem — the same accounts then counted
+           * again under with_problems, and Healthy + With problems exceeded
+           * Total (M01 finding F4).
+           *
+           * accountMatchesStatusSql is the predicate the Accounts status
+           * filter uses, so the widget and the filter cannot disagree.
+           */
+          count(*) filter (where ${accountMatchesStatusSql("healthy")})::int as healthy,
           count(*) filter (where status = 'archived')::int as archived,
           (
             select count(distinct i.account_id)::int
@@ -204,37 +270,20 @@ export const dashboardRepository: DashboardRepository = {
       `);
 
       /*
-       * Joined to accounts since M13. `available` must exclude profile rows
-       * above the account's profile_slots, and that fact lives on the account —
-       * the rule is derived rather than stored, precisely so it cannot drift
-       * away from profile_slots. The join is the cost of that guarantee.
+       * Joined to accounts since M13, for not_for_sale, which reads the
+       * account's profile_slots.
        *
-       * The predicate itself comes from lib/drizzle/predicates so this aggregate
-       * and the allocation path cannot disagree about what "available" means.
+       * What this statement no longer does is classify profiles into display
+       * states. It used to count available / sold / expiring_soon / expired
+       * here, the last two from `profiles.status` values nothing writes. Those
+       * figures now come from `profileStateInputs` through `profileCellState`,
+       * so the widget and a profile's badge are one rule, not two.
        */
       const profileRows = await executor.execute(sql`
         select
           count(*)::int as total,
-          /*
-           * Stock the allocation engine would actually hand out.
-           *
-           * The account half — healthy, live, still covered, no open problem.
-           * Without it this counted profiles on an account Quick Prepare refuses
-           * to touch: the reported defect showed four available profiles on an
-           * account carrying an open payment problem, none of which could ever
-           * be sold.
-           */
-          count(*) filter (
-            where p.status = 'available'
-              and ${rawSellableSlot("p", "a")}
-              and ${rawAccountCanAllocate("a")}
-          )::int as available,
+          /* Literal and vestigial — see StoredProfileCounts.reserved. */
           count(*) filter (where p.status = 'reserved')::int as reserved,
-          count(*) filter (where p.status = 'sold')::int as sold,
-          count(*) filter (where p.status = 'expiring_soon')::int as expiring_soon,
-          count(*) filter (where p.status = 'expired')::int as expired,
-          /* Slots the account does not sell. Never stock, never will be. */
-          count(*) filter (where not ${rawSellableSlot("p", "a")})::int as not_for_sale,
           /*
            * Expiry buckets read expiration_date directly rather than the status
            * column. 03_DATABASE.md warns those enum values are not written by
@@ -333,12 +382,7 @@ export const dashboardRepository: DashboardRepository = {
         },
         profiles: {
           total: readNumber(profile, "total"),
-          available: readNumber(profile, "available"),
           reserved: readNumber(profile, "reserved"),
-          sold: readNumber(profile, "sold"),
-          expiringSoon: readNumber(profile, "expiring_soon"),
-          expired: readNumber(profile, "expired"),
-          notForSale: readNumber(profile, "not_for_sale"),
         },
         expirations: {
           today: readNumber(profile, "expiring_today"),
@@ -372,6 +416,48 @@ export const dashboardRepository: DashboardRepository = {
           thisMonth: readNumber(prepared, "this_month"),
         },
       };
+    });
+  },
+
+  async profileStateInputs() {
+    return databaseAdapter.query("dashboard.profileStateInputs", async (executor) => {
+      /*
+       * One query for every profile, account facts joined. The has-blocking-
+       * problem flag is the negation of the same predicate `accountCanAllocate`
+       * leans on in SQL, so the input matches what the Accounts list receives
+       * from problemsService.
+       */
+      const rows = await executor
+        .select({
+          profile: profiles,
+          profileSlots: accounts.profileSlots,
+          validUntil: accounts.validUntil,
+          status: accounts.status,
+          deletedAt: accounts.deletedAt,
+          /*
+           * mapWith: a raw sql fragment carries no column type, so without it
+           * Drizzle applies no mapper and the driver's value comes back as
+           * decoded — the defect that once broke the Users page. Coerced here
+           * so the declared boolean is true.
+           */
+          hasBlockingProblem: sql<boolean>`not ${accountHasNoBlockingProblemSql}`.mapWith(
+            (value) => value === true || value === "t" || value === "true",
+          ),
+        })
+        .from(profiles)
+        .innerJoin(accounts, eq(accounts.id, profiles.accountId))
+        .where(accountIsLiveSql);
+
+      return rows.map((row) => ({
+        profile: row.profile,
+        account: {
+          profileSlots: row.profileSlots,
+          validUntil: row.validUntil,
+          status: row.status,
+          deletedAt: row.deletedAt,
+        },
+        hasBlockingProblem: row.hasBlockingProblem,
+      }));
     });
   },
 
