@@ -11,55 +11,17 @@
  * dialog turns that Set into a request.
  */
 
-/** Selected account ids. A Set: membership is the only question ever asked. */
-export type Selection = ReadonlySet<string>;
+export {
+  EMPTY_SELECTION,
+  actionableIds,
+  allSelected,
+  someSelected,
+  toggleAll,
+  toggleSelected,
+  type Selection,
+} from "@/utils/selection";
 
-export const EMPTY_SELECTION: Selection = new Set<string>();
-
-/** Adds or removes one id, leaving the rest untouched. */
-export function toggleSelected(selection: Selection, id: string): Selection {
-  const next = new Set(selection);
-
-  if (!next.delete(id)) {
-    next.add(id);
-  }
-
-  return next;
-}
-
-/**
- * Selects every id on screen, or clears them.
- *
- * `visibleIds` is one page, never the whole result set. Selecting rows the
- * operator has not seen — the other 400 matches behind a filter — would make
- * "Select all" a far bigger promise than it looks, and the delete that follows
- * would be unrecoverable.
- */
-export function toggleAll(selection: Selection, visibleIds: readonly string[]): Selection {
-  return allSelected(selection, visibleIds) ? EMPTY_SELECTION : new Set(visibleIds);
-}
-
-/** True when every visible row is selected, and there is at least one. */
-export function allSelected(selection: Selection, visibleIds: readonly string[]): boolean {
-  return visibleIds.length > 0 && visibleIds.every((id) => selection.has(id));
-}
-
-/** True when some but not all visible rows are selected — the header's third state. */
-export function someSelected(selection: Selection, visibleIds: readonly string[]): boolean {
-  return visibleIds.some((id) => selection.has(id)) && !allSelected(selection, visibleIds);
-}
-
-/**
- * The ids a bulk action may actually touch.
- *
- * The intersection of what is selected and what is on screen, in the order the
- * rows appear. This is the safety net: if selection ever outlived a filter
- * change through some future refactor, the stale ids would be dropped here
- * rather than deleted. Callers must use this rather than the raw Set.
- */
-export function actionableIds(selection: Selection, visibleIds: readonly string[]): string[] {
-  return visibleIds.filter((id) => selection.has(id));
-}
+import type { Selection } from "@/utils/selection";
 
 /**
  * Identity of the current result set.

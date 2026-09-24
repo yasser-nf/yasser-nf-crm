@@ -284,3 +284,27 @@ Nothing pre-existing is modified.
 | "Affected Profiles" shows "All 5" rather than a list | Correct per the derived rule, but flat — a per-profile breakdown would need the profile rows in the list query |
 | No bulk operations | Assigning twenty problems means twenty actions |
 | Severity is never derived from problem type | A `critical` payment problem and a `low` one are equally possible; nothing suggests a default beyond `medium` |
+
+---
+
+## M03 — Problems page bulk actions
+
+Selection works like the Accounts list: by **problem id** (an account can carry
+several problems), current page only, and cleared by any change to the query
+string — page, search, status, type, assignee, date or sort. The shared helpers
+live in `utils/selection.ts`; the toolbar frame is `shared/ui/bulk-action-bar.tsx`,
+used by both pages.
+
+| Action | Server-side rule (`bulkProblemsService`) |
+| ------ | ---------------------------------------- |
+| Resolve | `resolveProblems` re-reads each problem. Not blocking any more (resolved, closed, cancelled) → **skipped**, never reopened. Blocking → `problemResolutionService.resolve` (ownership rule, transition graph, required note, audit). Gone → failed. Offered disabled when nothing selected is blocking |
+| Assign | `assignProblems` → `problemAssignmentService.assign` per problem (Super Admin assigns anyone; a Worker only claims/releases; closed and cancelled refused). Already assigned to that person → skipped. Offered to Super Admins |
+| Delete | `deleteProblems` — MANAGE_PROBLEMS checked once, then `problemsService.remove` per problem (audited). Removes the problem and its problem notes only; accounts, profiles and customers are untouched. Requires an "I understand" tick |
+| Clear selection | — |
+
+Each action is per problem, like the existing bulk actions: a refusal on one
+does not undo the others, and every outcome is reported as succeeded, skipped
+or failed ("3 resolved, 1 skipped (Already closed.)"). Nothing writes
+`accounts.status`: an account whose last blocking problem is resolved or deleted
+returns to the Accounts list, Quick Prepare and Quick Replace by derivation.
+

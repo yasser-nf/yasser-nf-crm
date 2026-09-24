@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { PAGINATION } from "@/config/constants";
+import { PERMISSIONS, USER_ROLES, roleHasPermission } from "@/config/roles";
 import { getCurrentUser } from "@/lib/auth/session";
 import { ForbiddenError } from "@/lib/errors";
 import {
@@ -129,12 +130,32 @@ async function ProblemsList({ filter }: { filter: ProblemFilter }) {
     return <ErrorState error={result.error} title="Could not load problems" />;
   }
 
+  /*
+   * What the bulk toolbar offers. Assigning a problem to somebody else is a
+   * Super Admin act in problemAssignmentService, and deleting is
+   * MANAGE_PROBLEMS; both services check again, problem by problem.
+   */
+  const canAssign = actor?.role === USER_ROLES.SUPER_ADMIN;
+  const canDelete = actor !== null && roleHasPermission(actor.role, PERMISSIONS.MANAGE_PROBLEMS);
+
+  /* Active people only: a problem is not handed to a suspended or disabled user. */
+  const people = canAssign
+    ? await usersService.list({ status: "active", limit: 100, offset: 0 }, actor)
+    : null;
+  const assignees =
+    people && people.ok
+      ? people.value.items.map((entry) => ({ id: entry.user.id, name: entry.user.name }))
+      : [];
+
   return (
     <ProblemsTable
       items={result.value.items}
       total={result.value.total}
       limit={result.value.limit}
       offset={result.value.offset}
+      assignees={assignees}
+      canAssign={canAssign}
+      canDelete={canDelete}
     />
   );
 }

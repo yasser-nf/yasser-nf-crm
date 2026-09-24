@@ -11,6 +11,7 @@ import { problemAssignmentService } from "../services/problem-assignment.service
 import { problemResolutionService } from "../services/problem-resolution.service";
 import { problemTimelineService, type TimelineEntry } from "../services/problem-timeline.service";
 import { problemsService } from "../services/problems.service";
+import { bulkProblemsService, type ProblemBulkOutcome } from "../services/bulk-problems.service";
 
 /**
  * Problem Server Actions. ADR-006 Decision 3: the network boundary.
@@ -211,4 +212,65 @@ export async function deleteProblemAction(id: string): Promise<ActionResult<{ id
   revalidatePath(ROUTES.ACCOUNTS);
 
   return { ok: true, data: { id } };
+}
+
+/*
+ * Bulk actions for the Problems page toolbar (M03).
+ *
+ * Each hands the selected ids to bulkProblemsService, which re-reads every
+ * problem and applies the SAME per-problem service a single action uses —
+ * resolution, assignment, deletion — so the permission rules, transitions and
+ * audit entries are identical. Ids are `unknown`: a POST body is untrusted.
+ *
+ * Accounts, Quick Prepare and Quick Replace are revalidated too: resolving or
+ * deleting a problem can return its account to the operational list.
+ */
+function revalidateAfterBulk(): void {
+  revalidateProblem();
+  revalidatePath(ROUTES.ACCOUNTS);
+  revalidatePath(ROUTES.DASHBOARD);
+}
+
+export async function resolveProblemsAction(
+  ids: unknown,
+  input: unknown,
+): Promise<ActionResult<ProblemBulkOutcome>> {
+  const context = await auditContext();
+  const result = await bulkProblemsService.resolveProblems(ids, input, context);
+
+  if (!result.ok) {
+    return toFailure(result.error);
+  }
+
+  revalidateAfterBulk();
+  return { ok: true, data: result.value };
+}
+
+export async function assignProblemsAction(
+  ids: unknown,
+  input: unknown,
+): Promise<ActionResult<ProblemBulkOutcome>> {
+  const context = await auditContext();
+  const result = await bulkProblemsService.assignProblems(ids, input, context);
+
+  if (!result.ok) {
+    return toFailure(result.error);
+  }
+
+  revalidateProblem();
+  return { ok: true, data: result.value };
+}
+
+export async function deleteProblemsAction(
+  ids: unknown,
+): Promise<ActionResult<ProblemBulkOutcome>> {
+  const context = await auditContext();
+  const result = await bulkProblemsService.deleteProblems(ids, context);
+
+  if (!result.ok) {
+    return toFailure(result.error);
+  }
+
+  revalidateAfterBulk();
+  return { ok: true, data: result.value };
 }

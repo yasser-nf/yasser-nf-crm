@@ -10,9 +10,20 @@ import { ROUTES } from "@/config/constants";
 import { DURATION, EASING } from "@/config/theme";
 import { EmptyState } from "@/shared/feedback/empty-state";
 import { Button } from "@/shared/ui/button";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table";
+import {
+  EMPTY_SELECTION,
+  actionableIds,
+  allSelected,
+  someSelected,
+  toggleAll,
+  toggleSelected,
+  type Selection,
+} from "@/utils/selection";
 import type { ProblemListEntry } from "../repositories/problems.repository";
+import { ProblemsBulkBar, type Assignee } from "./problems-bulk-bar";
 import { isBlocking } from "../services/problem-lifecycle";
 import {
   PROBLEM_TYPE_LABELS,
@@ -50,6 +61,11 @@ interface Props {
   readonly total: number;
   readonly limit: number;
   readonly offset: number;
+  /** People a problem may be assigned to, for the bulk Assign. */
+  readonly assignees?: readonly Assignee[];
+  /** Offered to a Super Admin; the services decide what is permitted. */
+  readonly canAssign?: boolean;
+  readonly canDelete?: boolean;
 }
 
 export function ProblemsFilters({ workers }: { workers: readonly { id: string; name: string }[] }) {
@@ -185,11 +201,44 @@ export function ProblemsFilters({ workers }: { workers: readonly { id: string; n
   );
 }
 
-export function ProblemsTable({ items, total, limit, offset }: Props) {
+export function ProblemsTable({
+  items,
+  total,
+  limit,
+  offset,
+  assignees = [],
+  canAssign = false,
+  canDelete = false,
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const now = new Date();
+
+  /*
+   * Selection, by problem id — never by account, which can carry several.
+   *
+   * Cleared whenever the query string changes: page, search, status, type,
+   * assignee, date and sort all live there, so any of them starts a new,
+   * empty selection. Resetting state during render is the documented pattern
+   * and the one the accounts table uses.
+   */
+  const resultKey = searchParams.toString();
+  const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  const [syncedKey, setSyncedKey] = useState(resultKey);
+
+  if (resultKey !== syncedKey) {
+    setSyncedKey(resultKey);
+    setSelection(EMPTY_SELECTION);
+  }
+
+  const visibleIds = items.map((entry) => entry.problem.id);
+  /* Only ids both selected and on screen, in display order. */
+  const selectedIds = actionableIds(selection, visibleIds);
+  const selectedProblems = items
+    .filter((entry) => selectedIds.includes(entry.problem.id))
+    .map((entry) => ({ id: entry.problem.id, status: entry.problem.status }));
+  const clearSelection = () => setSelection(EMPTY_SELECTION);
 
   function pageHref(nextOffset: number): string {
     const params = new URLSearchParams(searchParams.toString());
@@ -222,10 +271,31 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
+      <ProblemsBulkBar
+        problems={selectedProblems}
+        assignees={assignees}
+        canAssign={canAssign}
+        canDelete={canDelete}
+        onClear={clearSelection}
+      />
+
       <div className="hidden overflow-x-auto rounded-lg border border-border lg:block">
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={
+                    allSelected(selection, visibleIds)
+                      ? true
+                      : someSelected(selection, visibleIds)
+                        ? "indeterminate"
+                        : false
+                  }
+                  onCheckedChange={() => setSelection(toggleAll(selection, visibleIds))}
+                  aria-label="Select all problems on this page"
+                />
+              </TableHead>
               <TableHead className="text-caption text-foreground-muted">Account</TableHead>
               <TableHead className="text-caption text-foreground-muted">Problem</TableHead>
               <TableHead className="text-caption text-foreground-muted">Blocking</TableHead>
@@ -266,6 +336,15 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
                 }}
                 className="border-b border-border transition-colors last:border-0 hover:bg-surface-raised"
               >
+                <TableCell>
+                  <Checkbox
+                    checked={selection.has(entry.problem.id)}
+                    onCheckedChange={() =>
+                      setSelection(toggleSelected(selection, entry.problem.id))
+                    }
+                    aria-label={`Select ${PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType} on ${entry.accountEmail}`}
+                  />
+                </TableCell>
                 <TableCell className="text-caption">
                   <Link
                     href={`${ROUTES.ACCOUNTS}/${entry.problem.accountId}`}
@@ -310,28 +389,39 @@ export function ProblemsTable({ items, total, limit, offset }: Props) {
       {/* Mobile — cards, per 04_UI_GUIDELINES.md */}
       <div className="flex flex-col gap-3 lg:hidden">
         {items.map((entry) => (
-          <Link
-            key={entry.problem.id}
-            href={`${ROUTES.PROBLEMS}/${entry.problem.id}`}
-            className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <span className="truncate text-card-title text-foreground">
-                {PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType}
+          /*
+            The checkbox sits beside the card link, not inside it, so ticking
+            a card never opens the problem.
+          */
+          <div key={entry.problem.id} className="flex items-start gap-3">
+            <Checkbox
+              className="mt-4"
+              checked={selection.has(entry.problem.id)}
+              onCheckedChange={() => setSelection(toggleSelected(selection, entry.problem.id))}
+              aria-label={`Select ${PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType} on ${entry.accountEmail}`}
+            />
+            <Link
+              href={`${ROUTES.PROBLEMS}/${entry.problem.id}`}
+              className="flex min-w-0 flex-1 flex-col gap-3 rounded-lg border border-border bg-surface p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="truncate text-card-title text-foreground">
+                  {PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType}
+                </span>
+                <ProblemStatusBadge status={entry.problem.status} />
+              </div>
+              <span className="truncate text-caption text-foreground-subtle">
+                {entry.accountEmail}
               </span>
-              <ProblemStatusBadge status={entry.problem.status} />
-            </div>
-            <span className="truncate text-caption text-foreground-subtle">
-              {entry.accountEmail}
-            </span>
-            <div className="flex flex-wrap items-center gap-2">
-              <BlockingMark status={entry.problem.status} />
-              <span className="text-caption text-foreground-subtle">
-                {entry.assignedToName ?? "Unassigned"} ·{" "}
-                {problemAge(entry.problem.createdAt, entry.problem.resolvedAt, now)}
-              </span>
-            </div>
-          </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <BlockingMark status={entry.problem.status} />
+                <span className="text-caption text-foreground-subtle">
+                  {entry.assignedToName ?? "Unassigned"} ·{" "}
+                  {problemAge(entry.problem.createdAt, entry.problem.resolvedAt, now)}
+                </span>
+              </div>
+            </Link>
+          </div>
         ))}
       </div>
 

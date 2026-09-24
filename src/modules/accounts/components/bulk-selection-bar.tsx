@@ -1,10 +1,11 @@
 "use client";
 
-import { CircleCheck, Trash2, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, Trash2, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
 import { ROUTES } from "@/config/constants";
+import { BulkActionBar } from "@/shared/ui/bulk-action-bar";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -90,70 +91,48 @@ export function BulkSelectionBar({
 
   return (
     <>
-      <div
-        /*
-         * A status region, so a screen reader hears the count change as rows
-         * are ticked, without the toolbar stealing focus.
-         */
-        role="status"
-        className="flex flex-col gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 lg:flex-row lg:items-center lg:justify-between"
-      >
-        <div className="flex flex-col">
-          <p className="text-caption font-medium text-foreground">{selectionLabel(ids.length)}</p>
-          <p className="text-caption text-foreground-subtle">
-            On this page only. Changing page, search, filter or sort clears it.
-          </p>
-        </div>
+      <BulkActionBar count={ids.length} label={selectionLabel(ids.length)} onClear={onClear}>
+        <CopyEmailsButton accounts={accounts} />
+        <CopyCredentialsButton accounts={accounts} />
+        {canEditNotes ? <BulkNoteButton accounts={accounts} /> : null}
 
-        {/* Wraps rather than scrolls, so every action stays reachable on a phone. */}
-        <div className="flex flex-wrap items-center gap-1">
-          <CopyEmailsButton accounts={accounts} />
-          <CopyCredentialsButton accounts={accounts} />
-          {canEditNotes ? <BulkNoteButton accounts={accounts} /> : null}
-
-          {/*
-            Resolve acts only on selected accounts that carry a blocking problem.
-            The Accounts list no longer shows those (they are under Problems), so
-            normally there are none and the control says where to go instead of
-            pretending to do something.
-          */}
-          {withProblem.length > 0 ? (
-            <BulkResolveProblemsDialog accountIds={withProblem} onDone={onClear} />
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled
-              title="No selected account has a blocking problem. Resolve problems from the Problems page."
-              className="gap-2"
-            >
-              <CircleCheck className="size-4" aria-hidden="true" />
-              Resolve
-            </Button>
-          )}
-
-          <BulkDeclareProblemDialog accountIds={withoutProblem} onDone={onClear} />
-
-          {canDelete ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={openConfirm}
-              loading={remove.isPending}
-              loadingLabel="Deleting"
-              className="gap-2 text-danger hover:bg-danger-subtle hover:text-danger"
-            >
-              <Trash2 className="size-4" aria-hidden="true" />
-              Delete
-            </Button>
-          ) : null}
-
-          <Button variant="outline" size="sm" onClick={onClear} className="gap-2">
-            <X className="size-4" aria-hidden="true" />
-            Clear selection
+        {/*
+          Resolve acts only on selected accounts that carry a blocking problem.
+          The Accounts list no longer shows those (they are under Problems), so
+          normally there are none and the control says where to go instead of
+          pretending to do something.
+        */}
+        {withProblem.length > 0 ? (
+          <BulkResolveProblemsDialog accountIds={withProblem} onDone={onClear} />
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled
+            title="No selected account has a blocking problem. Resolve problems from the Problems page."
+            className="gap-2"
+          >
+            <CircleCheck className="size-4" aria-hidden="true" />
+            Resolve
           </Button>
-        </div>
-      </div>
+        )}
+
+        <BulkDeclareProblemDialog accountIds={withoutProblem} onDone={onClear} />
+
+        {canDelete ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openConfirm}
+            loading={remove.isPending}
+            loadingLabel="Deleting"
+            className="gap-2 text-danger hover:bg-danger-subtle hover:text-danger"
+          >
+            <Trash2 className="size-4" aria-hidden="true" />
+            Delete
+          </Button>
+        ) : null}
+      </BulkActionBar>
 
       {withProblem.length === 0 ? (
         <p className="-mt-2 text-caption text-foreground-subtle">
