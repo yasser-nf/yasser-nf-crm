@@ -35,6 +35,7 @@ import {
 import { AccountNoteCell } from "./account-note-cell";
 import { EditAccountDialog } from "./account-dialogs";
 import { CopyCredentials } from "./copy-credentials";
+import type { AccountEffectiveStatus } from "../services/account-validity";
 import { AccountStatusBadge } from "./status-badge";
 
 /**
@@ -63,20 +64,15 @@ function formatDateTime(value: Date | string): string {
 export function AccountHeader({
   account,
   remainingValidityDays,
-  hasActiveProblem = false,
-  activeProblemTypes = [],
+  effectiveStatus,
 }: {
   account: AccountView;
   /**
-   * True when a problem in a blocking status is open against this account.
-   *
-   * The problems list sits further down this page, but the badge is what a
-   * worker reads first — and it cannot say "Healthy" while that list is
-   * non-empty. Same rule and same override as the accounts list. M13 §7.
+   * `accountEffectiveStatus`, from the service — the same derivation the
+   * accounts list uses. It cannot say "Healthy" for an account allocation
+   * would refuse.
    */
-  hasActiveProblem?: boolean;
-  /** The types of those problems, so a single kind is named on the badge. */
-  activeProblemTypes?: readonly string[];
+  effectiveStatus: AccountEffectiveStatus;
   /**
    * Computed by the service through `accountRemainingDays`, never here.
    *
@@ -102,11 +98,7 @@ export function AccountHeader({
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-page-title break-all text-foreground">{account.email}</h1>
-            <AccountStatusBadge
-              status={account.status}
-              hasActiveProblem={hasActiveProblem}
-              activeProblemTypes={activeProblemTypes}
-            />
+            <AccountStatusBadge effectiveStatus={effectiveStatus} />
           </div>
 
           <p className="text-caption text-foreground-subtle">

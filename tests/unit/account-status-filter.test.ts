@@ -4,8 +4,35 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { accountMatchesStatusSql } from "@/lib/drizzle/predicates";
 import { ACCOUNT_STATUS_OPTIONS } from "@/modules/accounts/components/status-badge";
 import { accountBadgeStyle } from "@/modules/accounts/components/status-badge";
+import { accountEffectiveStatus } from "@/modules/accounts/services/account-validity";
+import type { AccountRow } from "@/lib/drizzle/schema";
 import { ACCOUNT_STATUSES, parseAccountFilter } from "@/modules/accounts/services/account-filters";
 import { BLOCKING_STATUSES } from "@/modules/problems";
+
+/**
+ * The badge the application would show: `accountEffectiveStatus` (the one
+ * derivation, M03) rendered by `accountBadgeStyle`. An open account with no
+ * validity boundary, so only status and problems are in play.
+ */
+function badgeOf(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
+) {
+  const types = hasActiveProblem
+    ? activeProblemTypes.length > 0
+      ? activeProblemTypes
+      : ["other"]
+    : [];
+
+  return accountBadgeStyle(
+    accountEffectiveStatus(
+      { status, validUntil: null, deletedAt: null },
+      types,
+      new Date("2026-09-24T12:00:00Z"),
+    ),
+  );
+}
 
 /**
  * Filtering the accounts list by status.
@@ -139,9 +166,9 @@ describe("one definition of Problem", () => {
 
   it("agrees with the badge about which account reads Problem", () => {
     /* Stored healthy + an open problem is the case the filter used to miss. */
-    expect(accountBadgeStyle("healthy", true).label).toBe("Problem");
-    expect(accountBadgeStyle("healthy", false).label).toBe("Healthy");
-    expect(accountBadgeStyle("payment_problem", false).label).toBe("Payment Problem");
+    expect(badgeOf("healthy", true).label).toBe("Problem");
+    expect(badgeOf("healthy", false).label).toBe("Healthy");
+    expect(badgeOf("payment_problem", false).label).toBe("Payment Problem");
   });
 });
 

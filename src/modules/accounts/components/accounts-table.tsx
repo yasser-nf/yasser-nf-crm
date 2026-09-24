@@ -369,11 +369,7 @@ export function AccountsTable({
                       </Link>
                     </TableCell>
                     <TableCell>
-                      <AccountStatusBadge
-                        status={row.account.status}
-                        hasActiveProblem={row.hasActiveProblem}
-                        activeProblemTypes={row.activeProblemTypes}
-                      />
+                      <AccountStatusBadge effectiveStatus={row.effectiveStatus} />
                     </TableCell>
 
                     <TableCell className="text-foreground-muted">
@@ -513,11 +509,7 @@ export function AccountsTable({
               >
                 {row.account.email}
               </Link>
-              <AccountStatusBadge
-                status={row.account.status}
-                hasActiveProblem={row.hasActiveProblem}
-                activeProblemTypes={row.activeProblemTypes}
-              />
+              <AccountStatusBadge effectiveStatus={row.effectiveStatus} />
             </div>
 
             <ProfileIndicators indicators={row.indicators} />

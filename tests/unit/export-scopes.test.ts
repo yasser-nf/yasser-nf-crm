@@ -57,6 +57,7 @@ function accountRow(id: string, email: string) {
     expiredProfiles: 0,
     remainingValidityDays: null,
     hasActiveProblem: false,
+    effectiveStatus: "healthy",
   };
 }
 

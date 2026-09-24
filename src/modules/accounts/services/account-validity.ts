@@ -119,6 +119,72 @@ export function accountCanAllocate(
 }
 
 /**
+ * What an account IS right now, for its badge, its filter and its export.
+ *
+ * The stored `accounts.status` values, plus two DERIVED ones the column cannot
+ * hold: "problem" (a blocking problem of mixed or `other` type — a single fault
+ * type is shown as that type) and "expired" (its own valid_until has passed).
+ * Nothing stores either; there is no new status field.
+ */
+export type AccountEffectiveStatus = AccountRow["status"] | "problem" | "expired";
+
+/** The four fault types that are also account statuses (03_DATABASE). */
+const FAULT_STATUSES: readonly string[] = [
+  "payment_problem",
+  "incorrect_password",
+  "invalid_email",
+  "something_went_wrong",
+];
+
+/**
+ * The single derivation of an account's effective status (M03).
+ *
+ * Until M03's final fix the badge said "Healthy" whenever the stored status
+ * was healthy and no problem was open — so resolving the last problem on an
+ * account whose own coverage had run out painted it Healthy, while Quick
+ * Prepare, Quick Replace and the detail page's banner (all `accountCanAllocate`)
+ * correctly refused it. Two definitions of the same word.
+ *
+ * Now "healthy" is returned exactly when `accountCanAllocate` holds — that call
+ * is the last step below — so no screen can call an account Healthy that the
+ * allocation rule would not sell from. Resolving a problem changes nothing here
+ * except the input `activeProblemTypes`; the state is recalculated from all
+ * remaining facts, never set.
+ *
+ * Order is the precedence the badge has always had: a stored non-healthy status
+ * names the most specific cause; then blocking problems; then the account's own
+ * lifecycle and validity.
+ */
+export function accountEffectiveStatus(
+  account: AccountValidity & {
+    readonly status: AccountRow["status"];
+    readonly deletedAt: Date | null;
+  },
+  activeProblemTypes: readonly string[],
+  today: Date,
+): AccountEffectiveStatus {
+  if (account.status !== "healthy") {
+    return account.status;
+  }
+
+  if (activeProblemTypes.length > 0) {
+    const distinct = [...new Set(activeProblemTypes)];
+    const only = distinct.length === 1 ? distinct[0] : undefined;
+
+    return only !== undefined && FAULT_STATUSES.includes(only)
+      ? (only as AccountRow["status"])
+      : "problem";
+  }
+
+  if (account.deletedAt !== null) {
+    return "deleted";
+  }
+
+  /* Healthy means exactly what allocation means. The only condition left is validity. */
+  return accountCanAllocate(account, false, today) ? "healthy" : "expired";
+}
+
+/**
  * The rule from M13 §1: requested_duration_days <= account_remaining_days.
  *
  * An open-ended account covers any duration. A duration of zero or less is not

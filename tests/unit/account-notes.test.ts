@@ -39,6 +39,7 @@ function rowWithNote(notes: string | null) {
     expiredProfiles: 0,
     remainingValidityDays: null,
     hasActiveProblem: false,
+    effectiveStatus: "healthy",
     health: "healthy" as const,
   } as unknown as Parameters<typeof accountToCsvRow>[0];
 }

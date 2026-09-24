@@ -3,8 +3,35 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AppUser } from "@/lib/auth";
 import { accountBadgeStyle } from "@/modules/accounts/components/status-badge";
+import { accountEffectiveStatus } from "@/modules/accounts/services/account-validity";
+import type { AccountRow } from "@/lib/drizzle/schema";
 import { previewExpirationDate } from "@/modules/accounts/services/profile-dates";
 import { describeDatabaseUrl } from "../support/database-target.mjs";
+
+/**
+ * The badge the application would show: `accountEffectiveStatus` (the one
+ * derivation, M03) rendered by `accountBadgeStyle`. An open account with no
+ * validity boundary, so only status and problems are in play.
+ */
+function badgeOf(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
+) {
+  const types = hasActiveProblem
+    ? activeProblemTypes.length > 0
+      ? activeProblemTypes
+      : ["other"]
+    : [];
+
+  return accountBadgeStyle(
+    accountEffectiveStatus(
+      { status, validUntil: null, deletedAt: null },
+      types,
+      new Date("2026-09-24T12:00:00Z"),
+    ),
+  );
+}
 
 /**
  * M03 — Accounts + Problems, against a real database.
@@ -183,7 +210,7 @@ describe.skipIf(!local)("problems and account state", () => {
 
     const row = await listRow(account.id);
     expect(row.hasActiveProblem).toBe(true);
-    expect(accountBadgeStyle(row.account.status, true, row.activeProblemTypes).label).toBe(
+    expect(badgeOf(row.account.status, true, row.activeProblemTypes).label).toBe(
       "Incorrect Password",
     );
     expect((await detail(account.id)).accountAllowsAllocation).toBe(false);
@@ -199,9 +226,7 @@ describe.skipIf(!local)("problems and account state", () => {
 
     const row = await listRow(account.id);
     expect(row.hasActiveProblem).toBe(false);
-    expect(accountBadgeStyle(row.account.status, false, row.activeProblemTypes).label).toBe(
-      "Healthy",
-    );
+    expect(badgeOf(row.account.status, false, row.activeProblemTypes).label).toBe("Healthy");
     expect((await detail(account.id)).accountAllowsAllocation).toBe(true);
     expect(await listIdsForStatus("healthy")).toContain(account.id);
     expect(await quickPrepareAccounts()).toContain(account.id);
@@ -272,9 +297,9 @@ describe.skipIf(!local)("payment problems", () => {
 
     /* Accounts list: named, filtered as Payment Problem, never as Healthy. */
     const row = await listRow(account.id);
-    expect(
-      accountBadgeStyle(row.account.status, row.hasActiveProblem, row.activeProblemTypes).label,
-    ).toBe("Payment Problem");
+    expect(badgeOf(row.account.status, row.hasActiveProblem, row.activeProblemTypes).label).toBe(
+      "Payment Problem",
+    );
     expect(await listIdsForStatus("payment_problem")).toContain(account.id);
     expect(await listIdsForStatus("healthy")).not.toContain(account.id);
 
@@ -307,9 +332,7 @@ describe.skipIf(!local)("payment problems", () => {
     await sql!`update accounts set status = 'payment_problem' where id = ${account.id}::uuid`;
 
     const row = await listRow(account.id);
-    expect(accountBadgeStyle(row.account.status, row.hasActiveProblem).label).toBe(
-      "Payment Problem",
-    );
+    expect(badgeOf(row.account.status, row.hasActiveProblem).label).toBe("Payment Problem");
     expect(await listIdsForStatus("payment_problem")).toContain(account.id);
     expect(await quickPrepareAccounts()).not.toContain(account.id);
     expect((await detail(account.id)).indicators.map((indicator) => indicator.state)).toEqual([

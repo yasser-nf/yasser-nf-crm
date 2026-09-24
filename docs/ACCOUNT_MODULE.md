@@ -292,3 +292,25 @@ current page only and clears on page, search, filter or sort change):
 `revealPassword` (single) now also requires `VIEW_ACCOUNTS`; it checked only the
 session before. Both roles hold it.
 
+### Effective status — "Healthy" means allocatable (M03 final fix)
+
+`accountEffectiveStatus(account, activeProblemTypes, today)` in
+`account-validity.ts` is the one derivation behind the badge (list, detail),
+the CSV export and — through `accountMatchesStatusSql("healthy")` — the Healthy
+filter and the dashboard's healthy count. In order:
+
+1. a stored non-healthy status (fault, archived, deleted) → that status
+2. blocking problems → the single fault type, or `problem` for several / `other`
+3. soft-deleted → `deleted`
+4. `accountCanAllocate` → `healthy`, otherwise `expired` (own `valid_until` passed)
+
+So `healthy` is returned exactly when `accountCanAllocate` holds — the rule Quick
+Prepare, Quick Replace and the detail page's banner already applied. Resolving a
+problem writes nothing to the account; it only removes an input, and the state
+is recalculated. Before this, the badge and the Healthy filter ignored the
+account's own validity, so an expired account read Healthy the moment its last
+problem was resolved while every allocating screen refused it.
+
+`expired` and `problem` are derived labels, not stored statuses: there is no new
+column and no new enum value.
+

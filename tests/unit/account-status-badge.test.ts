@@ -1,7 +1,34 @@
 import { describe, expect, it } from "vitest";
 
 import { accountBadgeStyle } from "@/modules/accounts/components/status-badge";
+import { accountEffectiveStatus } from "@/modules/accounts/services/account-validity";
+import type { AccountRow } from "@/lib/drizzle/schema";
 import { BLOCKING_STATUSES, PROBLEM_STATUSES } from "@/modules/problems/services/problem-lifecycle";
+
+/**
+ * The badge the application would show: `accountEffectiveStatus` (the one
+ * derivation, M03) rendered by `accountBadgeStyle`. An open account with no
+ * validity boundary, so only status and problems are in play.
+ */
+function badgeOf(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
+) {
+  const types = hasActiveProblem
+    ? activeProblemTypes.length > 0
+      ? activeProblemTypes
+      : ["other"]
+    : [];
+
+  return accountBadgeStyle(
+    accountEffectiveStatus(
+      { status, validUntil: null, deletedAt: null },
+      types,
+      new Date("2026-09-24T12:00:00Z"),
+    ),
+  );
+}
 
 /**
  * An account with an open problem must never read "Healthy".
@@ -21,11 +48,11 @@ import { BLOCKING_STATUSES, PROBLEM_STATUSES } from "@/modules/problems/services
  * decision is the part that was wrong and the part that can silently regress.
  */
 
-type AccountStatus = Parameters<typeof accountBadgeStyle>[0];
+type AccountStatus = AccountRow["status"];
 
 /** The label the real component would render. */
 function badgeFor(status: AccountStatus, hasActiveProblem: boolean): string {
-  return accountBadgeStyle(status, hasActiveProblem).label;
+  return badgeOf(status, hasActiveProblem).label;
 }
 
 describe("account status badge — an open problem overrides Healthy", () => {
@@ -75,7 +102,7 @@ describe("account status badge — an open problem overrides Healthy", () => {
       "invalid_email",
       "something_went_wrong",
     ] as const) {
-      expect(badgeFor(status, true)).toBe(accountBadgeStyle(status, false).label);
+      expect(badgeFor(status, true)).toBe(badgeOf(status, false).label);
     }
   });
 
@@ -92,7 +119,7 @@ describe("account status badge — an open problem overrides Healthy", () => {
     for (const status of statuses) {
       for (const flagged of [true, false]) {
         const badge = badgeFor(status, flagged);
-        expect(badge === "Problem" || badge === accountBadgeStyle(status, false).label).toBe(true);
+        expect(badge === "Problem" || badge === badgeOf(status, false).label).toBe(true);
       }
     }
   });

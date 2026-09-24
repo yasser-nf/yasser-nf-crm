@@ -229,9 +229,15 @@ export function accountMatchesStatusSql(status: AccountRow["status"]): SQL {
    * Healthy is the mirror image. An account carrying an open problem shows
    * Problem, not Healthy, so returning it here would reintroduce the same
    * contradiction from the other side.
+   *
+   * And an account whose own coverage has run out shows Expired, not Healthy
+   * (M03): `accountEffectiveStatus` returns "healthy" only when
+   * `accountCanAllocate` holds, so this filter asks the same three questions —
+   * stored status, no blocking problem, still covered. Liveness is applied by
+   * every caller already.
    */
   if (status === "healthy") {
-    return sql`(${eq(accounts.status, status)} and ${accountHasNoBlockingProblemSql})`;
+    return sql`(${eq(accounts.status, status)} and ${accountHasNoBlockingProblemSql} and ${accountStillCoveredSql})`;
   }
 
   /* archived and deleted are lifecycle, not fault. Nothing derives them. */

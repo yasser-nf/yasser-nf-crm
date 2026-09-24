@@ -4,10 +4,36 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { accountMatchesStatusSql } from "@/lib/drizzle/predicates";
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
 import { accountBadgeStyle } from "@/modules/accounts/components/status-badge";
+import { accountEffectiveStatus } from "@/modules/accounts/services/account-validity";
 import {
   tallyProfileStates,
   type ProfileStateInput,
 } from "@/modules/dashboard/services/profile-state-counts";
+
+/**
+ * The badge the application would show: `accountEffectiveStatus` (the one
+ * derivation, M03) rendered by `accountBadgeStyle`. An open account with no
+ * validity boundary, so only status and problems are in play.
+ */
+function badgeOf(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
+) {
+  const types = hasActiveProblem
+    ? activeProblemTypes.length > 0
+      ? activeProblemTypes
+      : ["other"]
+    : [];
+
+  return accountBadgeStyle(
+    accountEffectiveStatus(
+      { status, validUntil: null, deletedAt: null },
+      types,
+      new Date("2026-09-24T12:00:00Z"),
+    ),
+  );
+}
 
 /**
  * Dashboard counts derived from the same rules the Accounts page shows.
@@ -61,12 +87,12 @@ const healthySql = dialect.sqlToQuery(accountMatchesStatusSql("healthy")).sql;
 
 describe("F4 — an account is Healthy or has a problem, never both", () => {
   it("1. a healthy account with no blocking problem is Healthy", () => {
-    expect(accountBadgeStyle("healthy", false).label).toBe("Healthy");
+    expect(badgeOf("healthy", false).label).toBe("Healthy");
   });
 
   it("2. a healthy account WITH a blocking problem is not Healthy", () => {
     /* Stored healthy, open problem: the Accounts page badges it Problem. */
-    expect(accountBadgeStyle("healthy", true).label).toBe("Problem");
+    expect(badgeOf("healthy", true).label).toBe("Problem");
   });
 
   it("3. the dashboard's Healthy predicate excludes an account with a blocking problem", () => {

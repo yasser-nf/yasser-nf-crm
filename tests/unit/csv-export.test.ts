@@ -156,6 +156,7 @@ describe("the account row", () => {
     expiredProfiles: 1,
     remainingValidityDays: null,
     hasActiveProblem: false,
+    effectiveStatus: "healthy",
     health: "healthy" as const,
   } as unknown as Parameters<typeof accountToCsvRow>[0];
 
@@ -203,10 +204,16 @@ describe("the account row", () => {
 
   it("shows Problem instead of Healthy when a problem is open", () => {
     /* The same override the badge applies, so the file cannot say Healthy. */
-    const flagged = { ...row, hasActiveProblem: true } as typeof row;
+    const flagged = { ...row, hasActiveProblem: true, effectiveStatus: "problem" } as typeof row;
 
     expect(accountToCsvRow(flagged)[1]).toBe("Problem");
     expect(accountToCsvRow(row)[1]).toBe("Healthy");
+  });
+
+  it("exports the same derived status the badge shows — Expired is not Healthy", () => {
+    const expired = { ...row, effectiveStatus: "expired" } as typeof row;
+
+    expect(accountToCsvRow(expired)[1]).toBe("Expired");
   });
 
   it("writes the validity in the same words as the table", () => {

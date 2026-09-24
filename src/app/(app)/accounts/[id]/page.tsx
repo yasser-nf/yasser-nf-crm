@@ -138,6 +138,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
     accountAllowsAllocation,
     hasProfileCountAnomaly,
     activeProblems,
+    effectiveStatus,
     remainingValidityDays,
   } = detail.value;
 
@@ -165,8 +166,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
       <AccountHeader
         account={account}
         remainingValidityDays={remainingValidityDays}
-        hasActiveProblem={activeProblems.length > 0}
-        activeProblemTypes={activeProblems.map((problem) => problem.issueType)}
+        effectiveStatus={effectiveStatus}
       />
 
       {!accountAllowsAllocation ? (

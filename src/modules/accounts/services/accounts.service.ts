@@ -35,6 +35,8 @@ import {
   isSellableSlot,
   profileCellState,
   type ProfileCellState,
+  accountEffectiveStatus,
+  type AccountEffectiveStatus,
 } from "./account-validity";
 import { resolveProfileCustomer, type ProfileCustomerLink } from "./profile-customer";
 import { parseBulkAccounts, type BulkRowError } from "./bulk-accounts.service";
@@ -166,6 +168,8 @@ export interface AccountDetail {
   readonly indicators: readonly ProfileIndicator[];
   /** Open problems blocking this account. Empty when nothing is wrong. */
   readonly activeProblems: readonly IssueRow[];
+  /** Same derivation as the list: recalculated from every remaining fact, never stored. */
+  readonly effectiveStatus: AccountEffectiveStatus;
   /**
    * False when the account's status, an open problem, or its own expiry blocks
    * every profile.
@@ -418,6 +422,12 @@ export interface AccountListRow extends Omit<AccountWithCounts, "account" | "pro
    */
   readonly activeProblemTypes: readonly IssueRow["issueType"][];
   /**
+   * What the account IS right now — `accountEffectiveStatus`, the one
+   * derivation behind the badge, the filter and the export. "healthy" only
+   * when `accountCanAllocate` holds.
+   */
+  readonly effectiveStatus: AccountEffectiveStatus;
+  /**
    * The account's five profiles, evaluated exactly as the detail page
    * evaluates them.
    *
@@ -497,6 +507,11 @@ async function listAccounts(filter: AccountFilter): Promise<Result<Page<AccountL
         account: toAccountView(row.account),
         hasActiveProblem: rowHasProblem,
         activeProblemTypes: withProblems.get(row.account.id) ?? [],
+        effectiveStatus: accountEffectiveStatus(
+          row.account,
+          withProblems.get(row.account.id) ?? [],
+          today,
+        ),
         /*
          * The same call the detail page makes, so a slot cannot read one way in
          * the inline panel and another after clicking through. Sorted by number
@@ -563,6 +578,11 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
   return ok({
     account: toAccountView(account),
     activeProblems: problems,
+    effectiveStatus: accountEffectiveStatus(
+      account,
+      problems.map((problem) => problem.issueType),
+      today,
+    ),
     /*
      * Same function as the accounts list, so the cells on this page and the
      * cells on that one can never tell different stories. M13 §7.

@@ -1,12 +1,39 @@
 import { describe, expect, it } from "vitest";
 
 import { accountBadgeStyle } from "@/modules/accounts/components/status-badge";
+import { accountEffectiveStatus } from "@/modules/accounts/services/account-validity";
+import type { AccountRow } from "@/lib/drizzle/schema";
 import { buildProfileEditPayload } from "@/modules/accounts/services/profile-edit-payload";
 import {
   previewExpirationDate,
   resolveExpirationDate,
 } from "@/modules/accounts/services/profile-dates";
 import { createProblemSchema } from "@/modules/problems/validation/problem.schema";
+
+/**
+ * The badge the application would show: `accountEffectiveStatus` (the one
+ * derivation, M03) rendered by `accountBadgeStyle`. An open account with no
+ * validity boundary, so only status and problems are in play.
+ */
+function badgeOf(
+  status: AccountRow["status"],
+  hasActiveProblem: boolean,
+  activeProblemTypes: readonly string[] = [],
+) {
+  const types = hasActiveProblem
+    ? activeProblemTypes.length > 0
+      ? activeProblemTypes
+      : ["other"]
+    : [];
+
+  return accountBadgeStyle(
+    accountEffectiveStatus(
+      { status, validUntil: null, deletedAt: null },
+      types,
+      new Date("2026-09-24T12:00:00Z"),
+    ),
+  );
+}
 
 /**
  * M03 — the pure rules behind the Accounts + Problems changes.
@@ -18,44 +45,36 @@ import { createProblemSchema } from "@/modules/problems/validation/problem.schem
 
 describe("the account badge names a single kind of blocking problem", () => {
   it("says Payment Problem for a healthy-stored account with an open payment problem", () => {
-    expect(accountBadgeStyle("healthy", true, ["payment_problem"]).label).toBe("Payment Problem");
+    expect(badgeOf("healthy", true, ["payment_problem"]).label).toBe("Payment Problem");
   });
 
   it("names each fault type the same way the stored status would", () => {
-    expect(accountBadgeStyle("healthy", true, ["incorrect_password"]).label).toBe(
-      "Incorrect Password",
-    );
-    expect(accountBadgeStyle("healthy", true, ["invalid_email"]).label).toBe("Invalid Email");
-    expect(accountBadgeStyle("healthy", true, ["something_went_wrong"]).label).toBe(
-      "Something Went Wrong",
-    );
+    expect(badgeOf("healthy", true, ["incorrect_password"]).label).toBe("Incorrect Password");
+    expect(badgeOf("healthy", true, ["invalid_email"]).label).toBe("Invalid Email");
+    expect(badgeOf("healthy", true, ["something_went_wrong"]).label).toBe("Something Went Wrong");
   });
 
   it("says Problem for several kinds, for `other`, and when types are not given", () => {
-    expect(accountBadgeStyle("healthy", true, ["payment_problem", "invalid_email"]).label).toBe(
-      "Problem",
-    );
-    expect(accountBadgeStyle("healthy", true, ["other"]).label).toBe("Problem");
-    expect(accountBadgeStyle("healthy", true).label).toBe("Problem");
+    expect(badgeOf("healthy", true, ["payment_problem", "invalid_email"]).label).toBe("Problem");
+    expect(badgeOf("healthy", true, ["other"]).label).toBe("Problem");
+    expect(badgeOf("healthy", true).label).toBe("Problem");
   });
 
   it("repeats of one type are still one type", () => {
-    expect(accountBadgeStyle("healthy", true, ["payment_problem", "payment_problem"]).label).toBe(
+    expect(badgeOf("healthy", true, ["payment_problem", "payment_problem"]).label).toBe(
       "Payment Problem",
     );
   });
 
   it("never says Healthy while a problem blocks, and a stored fault still wins", () => {
-    expect(accountBadgeStyle("healthy", true, ["payment_problem"]).label).not.toBe("Healthy");
-    expect(accountBadgeStyle("invalid_email", true, ["payment_problem"]).label).toBe(
-      "Invalid Email",
-    );
-    expect(accountBadgeStyle("healthy", false, []).label).toBe("Healthy");
+    expect(badgeOf("healthy", true, ["payment_problem"]).label).not.toBe("Healthy");
+    expect(badgeOf("invalid_email", true, ["payment_problem"]).label).toBe("Invalid Email");
+    expect(badgeOf("healthy", false, []).label).toBe("Healthy");
   });
 
   it("paints every blocking problem red, whatever its type", () => {
     for (const types of [["payment_problem"], ["other"], ["a", "b"]]) {
-      expect(accountBadgeStyle("healthy", true, types).className).toContain("text-danger");
+      expect(badgeOf("healthy", true, types).className).toContain("text-danger");
     }
   });
 });

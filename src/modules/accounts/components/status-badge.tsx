@@ -1,4 +1,5 @@
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
+import type { AccountEffectiveStatus } from "../services/account-validity";
 import {
   PROFILE_STATE_LABELS,
   PROFILE_STATE_STYLES,
@@ -140,77 +141,45 @@ export const ACTIVE_PROBLEM_STYLE: BadgeStyle = {
 };
 
 /**
- * Which badge an account shows.
- *
- * Exported so the rule can be asserted directly. Keeping it inside the
- * component would leave the only test of "does an open problem hide Healthy" a
- * render assertion, and the decision is the part that regresses.
+ * The "Expired" badge: a healthy-stored account whose own valid_until has
+ * passed. Derived, never stored — `accountEffectiveStatus` returns it where the
+ * badge used to say "Healthy" for an account allocation would refuse.
  */
-export function accountBadgeStyle(
-  status: AccountRow["status"],
-  hasActiveProblem: boolean,
-  activeProblemTypes: readonly string[] = [],
-): BadgeStyle {
-  if (!hasActiveProblem || status !== "healthy") {
-    return ACCOUNT_STATUS_STYLES[status];
-  }
-
-  return problemTypeStyle(activeProblemTypes);
-}
+export const EXPIRED_ACCOUNT_STYLE: BadgeStyle = {
+  label: "Expired",
+  className: "bg-warning-subtle text-warning",
+  dot: "bg-warning",
+};
 
 /**
- * The badge for a healthy-stored account carrying blocking problems.
+ * The badge for an effective status — `accountEffectiveStatus`'s answer.
  *
- * Names the problem when there is exactly one kind of it. A payment problem
- * raised through the Problems module used to read as a bare "Problem" while the
- * Payment Problem filter — `accountMatchesStatusSql` — already counted it as
- * one: the list said the same thing two ways. The four fault types share their
- * values with `account_status` by design (03_DATABASE), so the label is the
- * one that status already has.
- *
- * Several different kinds, `other`, or types not supplied: the generic
- * "Problem". Red either way — every blocking problem blocks allocation.
+ * Nothing is decided here. The account's state is derived once, on the server,
+ * by the same function for the list, the detail page and the export, and this
+ * only chooses colours. "Healthy" can therefore only appear for an account that
+ * `accountCanAllocate` would sell from.
  */
-function problemTypeStyle(types: readonly string[]): BadgeStyle {
-  const distinct = [...new Set(types)];
-  const only = distinct.length === 1 ? distinct[0] : undefined;
-
-  if (only !== undefined && only in ACCOUNT_STATUS_STYLES && only !== "healthy") {
-    return ACCOUNT_STATUS_STYLES[only as AccountRow["status"]];
+export function accountBadgeStyle(effective: AccountEffectiveStatus): BadgeStyle {
+  if (effective === "problem") {
+    return ACTIVE_PROBLEM_STYLE;
   }
 
-  return ACTIVE_PROBLEM_STYLE;
+  if (effective === "expired") {
+    return EXPIRED_ACCOUNT_STYLE;
+  }
+
+  return ACCOUNT_STATUS_STYLES[effective];
 }
 
 export function AccountStatusBadge({
-  status,
-  hasActiveProblem = false,
-  activeProblemTypes = [],
+  effectiveStatus,
   className,
 }: {
-  status: AccountRow["status"];
-  /**
-   * True when the account has at least one problem in a blocking status.
-   *
-   * Passed in rather than read from `status`, because a problem lives in the
-   * `issues` table and has no column here. It overrides a healthy badge: an
-   * account with an open problem reading "Healthy" is the one thing this badge
-   * must never say.
-   *
-   * A status that is already unhealthy wins, mirroring `evaluateAllocation` —
-   * the more specific reason is the one a worker can act on directly.
-   */
-  hasActiveProblem?: boolean;
-  /** The types of those blocking problems, so a single kind can be named. */
-  activeProblemTypes?: readonly string[];
+  /** From `accountEffectiveStatus`, computed on the server with every fact it needs. */
+  effectiveStatus: AccountEffectiveStatus;
   className?: string;
 }) {
-  return (
-    <Badge
-      style={accountBadgeStyle(status, hasActiveProblem, activeProblemTypes)}
-      className={className}
-    />
-  );
+  return <Badge style={accountBadgeStyle(effectiveStatus)} className={className} />;
 }
 
 export function ProfileStatusBadge({
