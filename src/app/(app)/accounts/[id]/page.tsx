@@ -179,7 +179,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
             <p className="text-card-title text-foreground">All profiles are blocked</p>
             <p className="text-caption text-foreground-muted">
               {activeProblems.length > 0
-                ? `${activeProblems.length} open problem${activeProblems.length === 1 ? "" : "s"} on this account. None of its five profiles can be allocated until they are resolved.`
+                ? `${activeProblems.length} open problem${activeProblems.length === 1 ? "" : "s"} on this account. None of its five profiles can be allocated, and it is listed under Problems rather than Accounts, until they are resolved.`
                 : "This account is not Healthy, so none of its five profiles can be allocated — whatever their individual status says."}
             </p>
           </div>
@@ -222,6 +222,12 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
                   <span className="flex items-center gap-2">
                     <span className="text-caption text-danger">Blocks allocation</span>
                     <ProblemStatusBadge status={problem.status} />
+                    {/*
+                      Resolution lives on the problem, through its lifecycle —
+                      never by editing the account's status. Resolving the last
+                      blocking problem returns this account to the Accounts list.
+                    */}
+                    <span className="text-caption text-primary">Open to resolve &rarr;</span>
                   </span>
                 </Link>
               </li>

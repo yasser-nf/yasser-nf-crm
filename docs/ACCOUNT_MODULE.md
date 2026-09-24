@@ -260,3 +260,35 @@ Refusing is the safe direction. The alternative would be allowing deletion
 because the check cannot run, which is how permission systems fail open.
 
 Archive is unaffected and remains the reversible path.
+
+---
+
+## M03 revision — operational Accounts list and bulk actions
+
+**Accounts = operational accounts. Problems = blocked accounts.** `listAccounts`
+excludes every account with a blocking problem (`open`, `in_progress`,
+`waiting`) using `accountHasNoBlockingProblemSql` in the list query's WHERE
+clause — the same predicate allocation and the dashboard use. Page rows, the
+total, search, status filters, pagination and the CSV export are all over that
+set. Resolving the last blocking problem (through the Problems lifecycle) returns
+the account on its own; nothing writes `accounts.status`. An account whose
+*stored* status is a fault but which has no open problem is not "blocked" in this
+sense and stays listed with its badge — it has no Problems row to be found by.
+`includeBlocked: true` exists for callers that genuinely need every live account;
+no screen uses it.
+
+**Bulk toolbar** (shown only while something is selected; selection is the
+current page only and clears on page, search, filter or sort change):
+
+| Action | Server-side rule |
+| ------ | ---------------- |
+| Copy email(s) | Client only — emails already on screen, one per line |
+| Copy credentials | `accountsService.revealCredentials` — `VIEW_ACCOUNTS`; same `decryptSecret` path as the single reveal; all-or-nothing; one `password_revealed` audit per account, never the password. `formatEmailAndPassword` blocks separated by `---` |
+| Add/Edit note | One account: the existing note editor (`AccountNoteDialog`, `updateAccount`). Several: `setNotesForAccounts` — `EDIT_ACCOUNTS`; one transaction, rows locked; refuses (changing nothing) without explicit confirmation to replace existing notes, or if any note changed since the dialog opened, or if any account is gone |
+| Resolve | Only for selected accounts that carry a blocking problem — normally none, since they are not listed; disabled otherwise with a pointer to Problems. Uses the existing `bulkProblemsService.resolveForAccounts`, which resolves every open problem on the account (its documented behaviour) through the lifecycle |
+| Declare problem | Existing |
+| Delete | Existing soft delete (`softDeleteAccounts`, `DELETE_ACCOUNTS`, per-account audit, failures reported). Now requires an "I understand" tick and states what delete means |
+
+`revealPassword` (single) now also requires `VIEW_ACCOUNTS`; it checked only the
+session before. Both roles hold it.
+

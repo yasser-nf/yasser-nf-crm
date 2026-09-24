@@ -56,40 +56,9 @@ export function AccountNoteCell({
   readonly variant?: "compact" | "full";
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(note ?? "");
-  const update = useUpdateAccount(accountId);
 
   const trimmed = (note ?? "").trim();
   const hasNote = trimmed.length > 0;
-
-  function start() {
-    /*
-     * The draft is seeded when the dialog opens, not held in sync with the row.
-     * Reseeding on every render would discard what the operator was typing the
-     * moment anything else refreshed the list.
-     */
-    setDraft(note ?? "");
-    setOpen(true);
-  }
-
-  function save() {
-    /* The disabled button is the real guard; this catches a keyboard repeat. */
-    if (update.isPending) {
-      return;
-    }
-
-    /*
-     * Trimmed, and an empty note is sent as an empty string rather than being
-     * dropped from the payload — omitting it would mean "unchanged", which is
-     * the opposite of clearing it.
-     */
-    update.mutate(
-      { notes: draft.trim() },
-      {
-        onSuccess: () => setOpen(false),
-      },
-    );
-  }
 
   return (
     <>
@@ -127,8 +96,7 @@ export function AccountNoteCell({
         <Button
           variant="ghost"
           size="icon-xs"
-          onClick={start}
-          loading={update.isPending}
+          onClick={() => setOpen(true)}
           aria-label={hasNote ? `Edit note for ${accountEmail}` : `Add note for ${accountEmail}`}
           /*
            * 24px of button, expanded to the 44px touch target
@@ -147,53 +115,108 @@ export function AccountNoteCell({
         </Button>
       </div>
 
-      <Dialog
-        open={open}
-        /* A save in flight cannot be dismissed: closing would hide it, not stop it. */
-        onOpenChange={(next) => {
-          if (!update.isPending) {
-            setOpen(next);
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Note</DialogTitle>
-            <DialogDescription className="break-all">{accountEmail}</DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="account-note">Internal note</Label>
-            <Textarea
-              id="account-note"
-              rows={3}
-              maxLength={NOTE_MAX}
-              autoFocus
-              placeholder="Profile 1 opened · Don't use profile 3 · PIN changed"
-              value={draft}
-              disabled={update.isPending}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <p className="text-caption text-foreground-subtle">
-              Visible to your team only. Nothing here affects availability, health or allocation.
-            </p>
-          </div>
-
-          <DialogFooter>
-            {/*
-              Cancel simply closes. The draft is local state seeded on open, so
-              nothing typed here has reached the server and discarding it cannot
-              leave a partial write behind.
-            */}
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={update.isPending}>
-              Cancel
-            </Button>
-            <Button onClick={save} loading={update.isPending} loadingLabel="Saving">
-              Save note
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/*
+        Mounted only while open, so the draft is seeded from the note each time
+        the editor opens rather than held in sync with a row that may refresh
+        underneath the operator's typing.
+      */}
+      {open ? (
+        <AccountNoteDialog
+          accountId={accountId}
+          accountEmail={accountEmail}
+          note={note}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </>
+  );
+}
+
+/**
+ * The account note editor, on its own.
+ *
+ * Opened by the pencil in the note cell and by the bulk toolbar's Add/Edit Note
+ * when exactly one account is selected — one editor, not two. Writes through
+ * `useUpdateAccount`, the same hook the edit form uses, so the permission check
+ * (EDIT_ACCOUNTS) and the audit entry happen once, on the server.
+ */
+export function AccountNoteDialog({
+  accountId,
+  accountEmail,
+  note,
+  onClose,
+}: {
+  readonly accountId: string;
+  readonly accountEmail: string;
+  readonly note: string | null;
+  readonly onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(note ?? "");
+  const update = useUpdateAccount(accountId);
+
+  function save() {
+    /* The disabled button is the real guard; this catches a keyboard repeat. */
+    if (update.isPending) {
+      return;
+    }
+
+    /*
+     * Trimmed, and an empty note is sent as an empty string rather than being
+     * dropped from the payload — omitting it would mean "unchanged", which is
+     * the opposite of clearing it.
+     */
+    update.mutate({ notes: draft.trim() }, { onSuccess: onClose });
+  }
+
+  return (
+    <Dialog
+      open
+      /* A save in flight cannot be dismissed: closing would hide it, not stop it. */
+      onOpenChange={(next) => {
+        if (!next && !update.isPending) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Note</DialogTitle>
+          <DialogDescription className="break-all">{accountEmail}</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="account-note">Internal note</Label>
+          <Textarea
+            id="account-note"
+            rows={3}
+            maxLength={NOTE_MAX}
+            autoFocus
+            placeholder="Profile 1 opened · Don't use profile 3"
+            value={draft}
+            disabled={update.isPending}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <p className="text-caption text-foreground-subtle">
+            An account note — not a profile note or a problem note. Visible to your team only.
+            Nothing here affects availability, health or allocation. Never put a password or PIN
+            here.
+          </p>
+        </div>
+
+        <DialogFooter>
+          {/*
+            Cancel simply closes. The draft is local state seeded on open, so
+            nothing typed here has reached the server and discarding it cannot
+            leave a partial write behind.
+          */}
+          <Button variant="outline" onClick={onClose} disabled={update.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={update.isPending} loadingLabel="Saving">
+            Save note
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

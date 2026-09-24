@@ -83,7 +83,13 @@ async function sellProfile(accountId: string, profileNumber: number): Promise<vo
 /** The accounts list's own view of this row. */
 async function listRow(accountId: string) {
   const { accountsService } = await services();
-  const page = await accountsService.listAccounts({ limit: 200 });
+  /*
+   * includeBlocked: since M03 the default Accounts list excludes accounts with a
+   * blocking problem (they are under Problems). What this file checks is how
+   * such a row is DERIVED — badge, flag, slot states — which the service still
+   * computes for any row it returns, so it asks for them explicitly.
+   */
+  const page = await accountsService.listAccounts({ limit: 200, includeBlocked: true });
   if (!page.ok) throw new Error(`list failed: ${page.error.message}`);
   return page.value.items.find((row) => row.account.id === accountId);
 }

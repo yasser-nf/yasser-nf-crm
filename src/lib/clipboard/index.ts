@@ -85,6 +85,29 @@ export function formatEmailAndPassword(email: string, password: string): string 
 }
 
 /**
+ * Several accounts' credentials, for the accounts list's bulk Copy Credentials.
+ *
+ * Each account is exactly `formatEmailAndPassword` — the existing format, not a
+ * second one. Blocks are separated by a line of dashes because each block
+ * already contains a blank line, and a blank line alone would not show where
+ * one account ends and the next begins.
+ */
+export const CREDENTIAL_BLOCK_SEPARATOR = "\n\n---\n\n";
+
+export function formatCredentialBlocks(
+  credentials: readonly { readonly email: string; readonly password: string }[],
+): string {
+  return credentials
+    .map(({ email, password }) => formatEmailAndPassword(email, password))
+    .join(CREDENTIAL_BLOCK_SEPARATOR);
+}
+
+/** Emails only, one per line — the bulk Copy Email. Nothing else is included. */
+export function formatEmailList(emails: readonly string[]): string {
+  return emails.join("\n");
+}
+
+/**
  * One prepared profile, in the exact layout M13 §6 specifies.
  *
  *   Email

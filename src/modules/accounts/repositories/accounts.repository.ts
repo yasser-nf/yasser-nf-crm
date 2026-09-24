@@ -19,14 +19,15 @@ import {
 } from "@/lib/drizzle/schema";
 import {
   accountCanAllocateSql,
+  accountHasNoBlockingProblemSql,
   accountIsLiveSql,
   accountMatchesStatusSql,
   isSellableSlotSql,
   profileIsFreeSql,
 } from "@/lib/drizzle/predicates";
-import { NotFoundError, ValidationError } from "@/lib/errors";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { Result } from "@/types/result";
-import { fail } from "@/utils/result";
+import { fail, ok } from "@/utils/result";
 import { resolveValidity } from "../services/account-validity";
 import type { ProfileWithCustomer } from "./profiles.repository";
 import { PROFILE_NUMBERS } from "../validation/profile.schema";
@@ -72,6 +73,20 @@ export interface AccountFilter extends PaginationInput {
   readonly search?: string | undefined;
   readonly sortBy?: AccountSortField | undefined;
   readonly sortDirection?: "asc" | "desc" | undefined;
+  /**
+   * Include accounts carrying a blocking problem. Off by default (M03).
+   *
+   * The Accounts list is the OPERATIONAL list: an account with an open,
+   * in-progress or waiting problem belongs to Problems, not here. The rule is
+   * `accountHasNoBlockingProblemSql` — the same predicate the allocation engine
+   * and the dashboard use — applied in the WHERE clause, so the page, the total
+   * and every later page are all counted over the same set. Nothing is filtered
+   * after the fact in the browser.
+   *
+   * Opt-in for a caller that genuinely needs every live account; none of the
+   * application's screens do.
+   */
+  readonly includeBlocked?: boolean | undefined;
 }
 
 /**
@@ -147,12 +162,40 @@ export interface AccountsRepository {
   update(id: string, input: AccountUpdate): Promise<Result<AccountRow>>;
   /** Decrypts the stored password. Never expose the result to a client. */
   revealPassword(id: string): Promise<Result<string>>;
+  /**
+   * Email and decrypted password for several live accounts, in the order asked.
+   * All or nothing: if any id is not a live account, nothing is decrypted.
+   */
+  revealCredentials(
+    ids: readonly string[],
+  ): Promise<Result<readonly { id: string; email: string; password: string }[]>>;
+  /**
+   * Sets the same account note on several live accounts, atomically.
+   *
+   * The rows are locked and re-read inside the transaction. Refuses — writing
+   * nothing — when any account no longer exists, or when any carries a
+   * different non-empty note and `allowOverwrite` is false, or when any note
+   * differs from `expectedNotes` — what the operator saw when they confirmed.
+   * Both checks run against the locked rows, so a note someone changed after
+   * the dialog opened is never overwritten on the strength of a stale
+   * confirmation.
+   */
+  setNotes(
+    ids: readonly string[],
+    note: string | null,
+    allowOverwrite: boolean,
+    expectedNotes?: Readonly<Record<string, string | null>>,
+  ): Promise<Result<readonly { before: AccountRow; after: AccountRow }[]>>;
   archive(id: string): Promise<Result<AccountRow>>;
   softDelete(id: string): Promise<Result<AccountRow>>;
 }
 
 function buildFilter(filter: AccountFilter) {
   const conditions = [liveOnly];
+
+  if (filter.includeBlocked !== true) {
+    conditions.push(accountHasNoBlockingProblemSql);
+  }
 
   if (filter.status !== undefined) {
     /*
@@ -660,6 +703,111 @@ export const accountsRepository: AccountsRepository = {
     }
 
     return decryptSecret(row.value.passwordEncrypted);
+  },
+
+  async revealCredentials(ids) {
+    const result = await databaseAdapter.query("accounts.revealCredentials", (executor) =>
+      executor
+        .select({
+          id: accounts.id,
+          email: accounts.email,
+          passwordEncrypted: accounts.passwordEncrypted,
+        })
+        .from(accounts)
+        .where(and(inArray(accounts.id, [...ids]), liveOnly)),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    if (result.value.length !== ids.length) {
+      return fail(
+        new NotFoundError(
+          `${ids.length - result.value.length} of ${ids.length} accounts not live`,
+          {
+            userMessage:
+              "Some selected accounts no longer exist. Refresh the list and select them again.",
+          },
+        ),
+      );
+    }
+
+    const byId = new Map(result.value.map((row) => [row.id, row]));
+    const credentials: { id: string; email: string; password: string }[] = [];
+
+    for (const id of ids) {
+      const row = byId.get(id);
+
+      if (!row) {
+        return fail(new NotFoundError(`Account ${id} not live`));
+      }
+
+      const password = decryptSecret(row.passwordEncrypted);
+
+      if (!password.ok) {
+        /* The decryption error names no secret; nothing already decrypted is returned. */
+        return password;
+      }
+
+      credentials.push({ id, email: row.email, password: password.value });
+    }
+
+    return ok(credentials);
+  },
+
+  async setNotes(ids, note, allowOverwrite, expectedNotes) {
+    return databaseAdapter.transaction("accounts.setNotes", async (executor) => {
+      const locked = await executor
+        .select()
+        .from(accounts)
+        .where(and(inArray(accounts.id, [...ids]), liveOnly))
+        .for("update");
+
+      if (locked.length !== ids.length) {
+        throw new NotFoundError(
+          `${ids.length - locked.length} of ${ids.length} accounts not live`,
+          {
+            userMessage:
+              "Some selected accounts no longer exist. Nothing was changed — refresh and try again.",
+          },
+        );
+      }
+
+      if (expectedNotes !== undefined) {
+        const changed = locked.filter(
+          (row) => (row.notes?.trim() ?? "") !== (expectedNotes[row.id]?.trim() ?? ""),
+        );
+
+        if (changed.length > 0) {
+          throw new ConflictError(`${changed.length} account notes changed since selection`, {
+            userMessage: `The note on ${changed.length} of the selected accounts changed since you opened this. Nothing was changed — refresh and try again.`,
+          });
+        }
+      }
+
+      const wouldOverwrite = locked.filter((row) => {
+        const current = row.notes?.trim() ?? "";
+        return current !== "" && current !== (note ?? "");
+      });
+
+      if (wouldOverwrite.length > 0 && !allowOverwrite) {
+        throw new ConflictError(`${wouldOverwrite.length} accounts already have a note`, {
+          userMessage: `${wouldOverwrite.length} of the selected accounts already have a different note. Nothing was changed — confirm replacing them to continue.`,
+        });
+      }
+
+      const updated = await executor
+        .update(accounts)
+        .set({ notes: note, updatedAt: sql`now()` })
+        .where(and(inArray(accounts.id, [...ids]), liveOnly))
+        .returning();
+
+      const before = new Map(locked.map((row) => [row.id, row]));
+
+      /* Every updated row was locked above, so its "before" is always present. */
+      return updated.map((after) => ({ before: before.get(after.id) ?? after, after }));
+    });
   },
 
   /**

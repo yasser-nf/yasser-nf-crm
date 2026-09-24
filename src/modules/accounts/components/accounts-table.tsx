@@ -55,6 +55,9 @@ interface AccountsTableProps {
   readonly offset: number;
   readonly sortBy: AccountSortField;
   readonly sortDirection: "asc" | "desc";
+  /** Decided on the server from the viewer's role; the services enforce the same. */
+  readonly canDelete?: boolean;
+  readonly canEditNotes?: boolean;
 }
 
 function validityTone(remainingDays: number | null): string {
@@ -86,6 +89,8 @@ export function AccountsTable({
   offset,
   sortBy,
   sortDirection,
+  canDelete = false,
+  canEditNotes = false,
 }: AccountsTableProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -198,8 +203,8 @@ export function AccountsTable({
     return (
       <EmptyState
         icon={Tv}
-        title="No accounts yet"
-        description="Create your first Netflix account. Five profiles are added automatically."
+        title="No operational accounts"
+        description="Nothing matches here. Accounts with a blocking problem are listed under Problems."
       />
     );
   }
@@ -210,9 +215,17 @@ export function AccountsTable({
   return (
     <div className="flex flex-col gap-4">
       <BulkSelectionBar
-        ids={selectedIds}
+        accounts={items
+          .filter((row) => selectedIds.includes(row.account.id))
+          .map((row) => ({
+            id: row.account.id,
+            email: row.account.email,
+            notes: row.account.notes,
+          }))}
         withProblem={withProblem}
         withoutProblem={withoutProblem}
+        canDelete={canDelete}
+        canEditNotes={canEditNotes}
         onClear={clearSelection}
       />
 

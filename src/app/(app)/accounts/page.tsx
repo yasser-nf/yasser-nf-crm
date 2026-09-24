@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
+
+import { ROUTES } from "@/config/constants";
+import { PERMISSIONS, roleHasPermission } from "@/config/roles";
+import { getCurrentUser } from "@/lib/auth/session";
 
 import {
   AccountSelectionProvider,
@@ -43,8 +48,18 @@ export default async function AccountsPage({
         <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">
             <h1 className="text-page-title text-foreground">Accounts</h1>
+            {/*
+              M03: this list is the OPERATIONAL accounts. An account with a
+              blocking problem is excluded by the query itself and managed from
+              Problems until it is resolved, when it returns here on its own.
+            */}
             <p className="text-description text-foreground-muted">
-              Every Netflix account and the state of its five profiles.
+              Accounts in working order, and the state of their five profiles. Accounts with a
+              blocking problem are under{" "}
+              <Link href={`${ROUTES.PROBLEMS}?status=blocking`} className="text-primary underline">
+                Problems
+              </Link>
+              .
             </p>
           </div>
 
@@ -75,6 +90,11 @@ async function AccountsList({ filter }: { filter: ReturnType<typeof parseAccount
     return <ErrorState error={result.error} title="Could not load accounts" />;
   }
 
+  /* Only what to offer. Each bulk action's service checks the same permission. */
+  const actor = await getCurrentUser();
+  const canDelete = actor !== null && roleHasPermission(actor.role, PERMISSIONS.DELETE_ACCOUNTS);
+  const canEditNotes = actor !== null && roleHasPermission(actor.role, PERMISSIONS.EDIT_ACCOUNTS);
+
   return (
     <AccountsTable
       items={result.value.items}
@@ -83,6 +103,8 @@ async function AccountsList({ filter }: { filter: ReturnType<typeof parseAccount
       offset={result.value.offset}
       sortBy={filter.sortBy}
       sortDirection={filter.sortDirection}
+      canDelete={canDelete}
+      canEditNotes={canEditNotes}
     />
   );
 }

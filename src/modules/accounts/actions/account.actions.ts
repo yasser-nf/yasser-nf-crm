@@ -267,6 +267,29 @@ export async function exportAccountsAction(scope: unknown, params: unknown, ids:
  * ADR-006 Decision 4: the only path by which plaintext reaches a browser, and
  * only in response to a deliberate click. The service audits every call.
  */
+/**
+ * Emails and passwords for the selected accounts — the bulk Copy Credentials.
+ *
+ * The response carries plaintext passwords by necessity; nothing else does.
+ * They are not revalidated into any page, not logged, and not audited — the
+ * service records only that each credential was read. `ids` is `unknown`
+ * because this is a POST endpoint; the service validates it.
+ */
+export async function revealAccountCredentialsAction(ids: unknown) {
+  return run(async (context) => accountsService.revealCredentials(ids, context));
+}
+
+/**
+ * Sets one account note on the selected accounts. Refuses — changing nothing —
+ * when an existing different note would be replaced without confirmation.
+ */
+export async function setAccountNotesAction(ids: unknown, input: unknown) {
+  return run(
+    async (context) => accountsService.setNotesForAccounts(ids, input, context),
+    [ROUTES.ACCOUNTS],
+  );
+}
+
 export async function revealAccountPasswordAction(id: string) {
   return run(async (context) => accountsService.revealPassword(id, context));
 }

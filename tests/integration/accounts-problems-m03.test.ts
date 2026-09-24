@@ -94,16 +94,31 @@ async function report(accountId: string, issueType: string) {
   return created.value;
 }
 
+/**
+ * The row the service derives for an account, blocked or not.
+ *
+ * includeBlocked, because since the M03 revision the Accounts list itself
+ * excludes blocked accounts — `inAccountsList` below is what the page shows.
+ * This reads the derivation (badge, flags, slot states) for any account.
+ */
 async function listRow(accountId: string) {
   const { accountsService } = await services();
-  const page = await accountsService.listAccounts({ limit: 200 });
+  const page = await accountsService.listAccounts({ limit: 200, includeBlocked: true });
   if (!page.ok) throw new Error(page.error.message);
   return page.value.items.find((row) => row.account.id === accountId)!;
 }
 
+/** Whether the Accounts page — the default, operational list — shows this account. */
+async function inAccountsList(accountId: string, search?: string): Promise<boolean> {
+  const { accountsService } = await services();
+  const page = await accountsService.listAccounts({ limit: 200, ...(search ? { search } : {}) });
+  if (!page.ok) throw new Error(page.error.message);
+  return page.value.items.some((row) => row.account.id === accountId);
+}
+
 async function listIdsForStatus(status: "healthy" | "payment_problem"): Promise<Set<string>> {
   const { accountsService } = await services();
-  const page = await accountsService.listAccounts({ limit: 200, status });
+  const page = await accountsService.listAccounts({ limit: 200, status, includeBlocked: true });
   if (!page.ok) throw new Error(page.error.message);
   return new Set(page.value.items.map((row) => row.account.id));
 }
@@ -174,6 +189,9 @@ describe.skipIf(!local)("problems and account state", () => {
     expect((await detail(account.id)).accountAllowsAllocation).toBe(false);
     expect(await listIdsForStatus("healthy")).not.toContain(account.id);
     expect(await quickPrepareAccounts()).not.toContain(account.id);
+    /* The Accounts page itself no longer lists it — even searched for by email. */
+    expect(await inAccountsList(account.id)).toBe(false);
+    expect(await inAccountsList(account.id, account.email)).toBe(false);
   });
 
   it("2. an account with no blocking problem stays healthy", async () => {
@@ -216,6 +234,7 @@ describe.skipIf(!local)("problems and account state", () => {
 
     row = await listRow(account.id);
     expect(row.hasActiveProblem).toBe(false);
+    expect(await inAccountsList(account.id)).toBe(true);
     expect((await detail(account.id)).accountAllowsAllocation).toBe(true);
     expect(await listIdsForStatus("healthy")).toContain(account.id);
     expect(await quickPrepareAccounts()).toContain(account.id);

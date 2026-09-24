@@ -66,7 +66,13 @@ async function reportProblem(accountId: string, status: string): Promise<void> {
 
 async function rowFor(accountId: string) {
   const { accountsService } = await services();
-  const page = await accountsService.listAccounts({ limit: 100 });
+  /*
+   * includeBlocked: since M03 the default Accounts list excludes accounts with a
+   * blocking problem (they are under Problems). What this file checks is how
+   * such a row is DERIVED — badge, flag, slot states — which the service still
+   * computes for any row it returns, so it asks for them explicitly.
+   */
+  const page = await accountsService.listAccounts({ limit: 100, includeBlocked: true });
   if (!page.ok) throw new Error(`list failed: ${page.error.message}`);
   return page.value.items.find((row) => row.account.id === accountId);
 }

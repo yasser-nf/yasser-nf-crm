@@ -1,5 +1,7 @@
 import "server-only";
 
+import { z } from "zod";
+
 import type { AppUser } from "@/lib/auth";
 import { PAGINATION } from "@/config/constants";
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
@@ -1130,6 +1132,12 @@ async function softDeleteAccounts(
  * The plaintext must never be logged and must never enter an audit snapshot.
  */
 async function revealPassword(id: string, context: AuditContext): Promise<Result<string>> {
+  const permitted = assertMayViewCredentials(context.actor);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
   const password = await accountsRepository.revealPassword(id);
 
   if (!password.ok) {
@@ -1147,6 +1155,207 @@ async function revealPassword(id: string, context: AuditContext): Promise<Result
   );
 
   return password;
+}
+
+/**
+ * Who may read an account's password.
+ *
+ * VIEW_ACCOUNTS — the permission that already governs seeing accounts, and the
+ * audience the single-account reveal has always served: a Worker hands the
+ * credentials over at the end of Quick Prepare and copies them from the account
+ * page. There is no separate credentials permission in the matrix, and adding
+ * one is not this milestone's decision.
+ *
+ * `revealPassword` checked nothing but the session until M03; both roles hold
+ * VIEW_ACCOUNTS, so this changes nothing for a real user and refuses anyone
+ * else — a future role — by default.
+ */
+function assertMayViewCredentials(actor: AppUser | null): Result<AppUser> {
+  if (!actor) {
+    return fail(new ForbiddenError("No signed-in user for a credential read"));
+  }
+
+  if (!roleHasPermission(actor.role, PERMISSIONS.VIEW_ACCOUNTS)) {
+    return fail(
+      new ForbiddenError(`Role ${actor.role} may not read account credentials`, {
+        userMessage: "You do not have permission to copy account credentials.",
+        context: { actorId: actor.id, role: actor.role },
+      }),
+    );
+  }
+
+  return ok(actor);
+}
+
+/** At most one page of accounts per bulk action — the selection cannot reach further. */
+const MAX_BULK_ACCOUNTS = PAGINATION.MAX_PAGE_SIZE;
+
+/** A bulk action's id list, validated: strings, de-duplicated, 1..MAX_BULK_ACCOUNTS. */
+function readBulkIds(ids: unknown, verb: string): Result<string[]> {
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+    return fail(
+      new ValidationError(`Bulk ${verb} received something other than a list of ids`, {
+        userMessage: "Select at least one account first.",
+      }),
+    );
+  }
+
+  const requested = uniqueIds(ids as string[]);
+
+  if (requested.length === 0) {
+    return fail(
+      new ValidationError(`Bulk ${verb} received no ids`, {
+        userMessage: "Select at least one account first.",
+      }),
+    );
+  }
+
+  if (requested.length > MAX_BULK_ACCOUNTS) {
+    return fail(
+      new ValidationError(`Bulk ${verb} received ${requested.length} ids`, {
+        userMessage: `You can act on at most ${MAX_BULK_ACCOUNTS} accounts at a time.`,
+      }),
+    );
+  }
+
+  return ok(requested);
+}
+
+/**
+ * Emails and passwords of the selected accounts, for Copy Credentials.
+ *
+ * The same trusted source as the single reveal — `decryptSecret` over the
+ * stored ciphertext, one repository read — not a second retrieval path. All or
+ * nothing: if any selected account is no longer live, nothing is decrypted and
+ * nothing is returned, so the operator is never handed a silently shortened
+ * list.
+ *
+ * Audited once per account as `password_revealed`, exactly like the single
+ * reveal. The audit entry records that a credential was read, by whom and when;
+ * the password itself never reaches it, a log line, or an error.
+ */
+async function revealCredentials(
+  ids: unknown,
+  context: AuditContext,
+): Promise<Result<readonly { email: string; password: string }[]>> {
+  const permitted = assertMayViewCredentials(context.actor);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  const requested = readBulkIds(ids, "credential copy");
+
+  if (!requested.ok) {
+    return requested;
+  }
+
+  const credentials = await accountsRepository.revealCredentials(requested.value);
+
+  if (!credentials.ok) {
+    return credentials;
+  }
+
+  for (const { id } of credentials.value) {
+    await auditService.recordOrWarn(
+      {
+        entity: "account",
+        entityId: id,
+        action: "update",
+        after: { event: "password_revealed", count: requested.value.length },
+      },
+      context,
+    );
+  }
+
+  return ok(credentials.value.map(({ email, password }) => ({ email, password })));
+}
+
+const bulkNoteSchema = z.object({
+  /* The account note's own rule (accountUpdateSchema): trimmed, at most 2000. Empty clears. */
+  note: z.string().trim().max(2000, "Notes are limited to 2000 characters"),
+  /** The operator ticked "replace the existing notes". Re-checked against locked rows. */
+  confirmOverwrite: z.boolean().default(false),
+  /**
+   * The notes the operator was looking at when they confirmed, by account id.
+   * Optional; when sent, any account whose note has since changed refuses the
+   * whole batch.
+   */
+  expectedNotes: z.record(z.string(), z.string().max(2000).nullable()).optional(),
+});
+
+/**
+ * Sets one account note on several accounts (M03 bulk "Add/Edit Note").
+ *
+ * The account note is `accounts.notes`, written by `updateAccount` for a single
+ * account and governed by the same EDIT_ACCOUNTS permission. Not a profile note
+ * and not a problem note.
+ *
+ * Atomic: one transaction, rows locked, all or nothing. An account deleted since
+ * the selection was made, or one carrying a different note the operator has not
+ * agreed to replace, refuses the whole batch and changes nothing — see
+ * `accountsRepository.setNotes`. Each changed account is audited with its old
+ * and new note.
+ */
+async function setNotesForAccounts(
+  ids: unknown,
+  input: unknown,
+  context: AuditContext,
+): Promise<Result<{ readonly updated: number }>> {
+  const permitted = assertMayEdit(context.actor);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  const requested = readBulkIds(ids, "note");
+
+  if (!requested.ok) {
+    return requested;
+  }
+
+  const parsed = bulkNoteSchema.safeParse(input);
+
+  if (!parsed.success) {
+    return fail(toValidationError(parsed.error.issues, "Bulk note failed validation"));
+  }
+
+  const note = parsed.data.note === "" ? null : parsed.data.note;
+
+  const written = await accountsRepository.setNotes(
+    requested.value,
+    note,
+    parsed.data.confirmOverwrite,
+    parsed.data.expectedNotes,
+  );
+
+  if (!written.ok) {
+    return written;
+  }
+
+  for (const { before, after } of written.value) {
+    if (before.notes === after.notes) {
+      continue;
+    }
+
+    await auditService.recordOrWarn(
+      {
+        entity: "account",
+        entityId: after.id,
+        action: "update",
+        before: { id: before.id, notes: before.notes },
+        after: {
+          id: after.id,
+          notes: after.notes,
+          changedFields: ["notes"],
+          count: requested.value.length,
+        },
+      },
+      context,
+    );
+  }
+
+  return ok({ updated: written.value.length });
 }
 
 async function getAccountTimeline(id: string, pagination: PaginationInput) {
@@ -1210,5 +1419,7 @@ export const accountsService = {
   softDeleteAccount,
   softDeleteAccounts,
   revealPassword,
+  revealCredentials,
+  setNotesForAccounts,
   getAccountTimeline,
 } as const;
