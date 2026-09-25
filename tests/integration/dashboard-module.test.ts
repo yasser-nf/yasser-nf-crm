@@ -150,7 +150,7 @@ describe.skipIf(!configured)("aggregate queries run against the live schema", ()
       expect(result.value.charts.accountsOverTime).toHaveLength(30);
       expect(result.value.charts.customersOverTime).toHaveLength(30);
 
-      for (const point of result.value.charts.accountsOverTime) {
+      for (const point of result.value.charts.accountsOverTime ?? []) {
         expect(point.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
         expect(point.count).toBeGreaterThanOrEqual(0);
       }
@@ -176,6 +176,9 @@ describe.skipIf(!configured)("aggregate queries run against the live schema", ()
       customersByDay: await dashboardRepository.customersCreatedByDay(30),
       backupsByDay: await dashboardRepository.backupsByDay(30),
       problemsBySeverity: await dashboardRepository.problemsBySeverity(),
+      problemsByType: await dashboardRepository.problemsByType(),
+      accountStateInputs: await dashboardRepository.accountStateInputs(),
+      profileStateInputs: await dashboardRepository.profileStateInputs(),
       recentActivity: await dashboardRepository.recentActivity(10, 0),
       recentProfileActivity: await dashboardRepository.recentProfileActivity(10, 0),
     };

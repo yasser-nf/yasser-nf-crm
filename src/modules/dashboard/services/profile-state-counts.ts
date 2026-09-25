@@ -1,5 +1,12 @@
 import type { AccountRow, ProfileRow } from "@/lib/drizzle/schema";
-import { accountCanAllocate, profileCellState, type ProfileCellState } from "@/modules/accounts";
+import { remainingDays } from "@/lib/dates";
+import {
+  accountCanAllocate,
+  isProfileFree,
+  isSellableSlot,
+  profileCellState,
+  type ProfileCellState,
+} from "@/modules/accounts";
 
 /**
  * Dashboard profile counts, by the SAME rule every profile badge uses.
@@ -67,4 +74,92 @@ export function tallyProfileStates(
   }
 
   return tally;
+}
+
+/**
+ * Upcoming and past expirations, in disjoint buckets (M04).
+ *
+ * Built on the same classification as the tally above, so the two widgets
+ * cannot disagree:
+ *
+ *   expired         exactly the tally's `expired` — a lapsed allocation
+ *   today           a held allocation (sold / expiring soon) ending today
+ *   tomorrow        … ending tomorrow
+ *   inTwoToThree    … ending in 2 or 3 days
+ *   inFourToSeven   … ending in 4 to 7 days
+ *
+ * today + tomorrow + inTwoToThree equals the tally's `expiring_soon`, because
+ * EXPIRING_SOON_DAYS is 3 and `profileCellState` uses the same `remainingDays`.
+ * The buckets used to be cumulative ("within 3" contained "tomorrow") and
+ * counted any profile carrying a date — a free slot included — from the
+ * database's own `current_date`. Days are now counted in UTC, like every other
+ * date rule in the application.
+ */
+export interface ExpirationTally {
+  readonly expired: number;
+  readonly today: number;
+  readonly tomorrow: number;
+  readonly inTwoToThree: number;
+  readonly inFourToSeven: number;
+}
+
+export function expirationBuckets(
+  inputs: readonly ProfileStateInput[],
+  today: Date,
+): ExpirationTally {
+  const buckets = { expired: 0, today: 0, tomorrow: 0, inTwoToThree: 0, inFourToSeven: 0 };
+
+  for (const { profile, account, hasBlockingProblem } of inputs) {
+    const state = profileCellState(
+      profile,
+      account,
+      today,
+      accountCanAllocate(account, hasBlockingProblem, today),
+    );
+
+    if (state === "expired") {
+      buckets.expired += 1;
+      continue;
+    }
+
+    if (state !== "sold" && state !== "expiring_soon") {
+      continue;
+    }
+
+    const days = remainingDays(profile.expirationDate, today);
+
+    if (days === 0) buckets.today += 1;
+    else if (days === 1) buckets.tomorrow += 1;
+    else if (days !== null && days >= 2 && days <= 3) buckets.inTwoToThree += 1;
+    else if (days !== null && days >= 4 && days <= 7) buckets.inFourToSeven += 1;
+  }
+
+  return buckets;
+}
+
+/**
+ * Expired allocations Quick Prepare can resell right now.
+ *
+ * 03_DATABASE.md: "Expired Profile → Automatically Available if account is
+ * Healthy". So stock (what Quick Prepare may sell) is the Profiles widget's
+ * Available PLUS these — the one legitimate place the display buckets and the
+ * stock figure differ. Composed from the shared rules; no arithmetic of its own.
+ */
+export function resellableExpired(inputs: readonly ProfileStateInput[], today: Date): number {
+  let count = 0;
+
+  for (const { profile, account, hasBlockingProblem } of inputs) {
+    const canAllocate = accountCanAllocate(account, hasBlockingProblem, today);
+
+    if (
+      canAllocate &&
+      profileCellState(profile, account, today, canAllocate) === "expired" &&
+      isSellableSlot(profile, account) &&
+      isProfileFree(profile, today)
+    ) {
+      count += 1;
+    }
+  }
+
+  return count;
 }

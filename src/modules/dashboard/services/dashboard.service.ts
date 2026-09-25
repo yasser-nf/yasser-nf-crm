@@ -7,6 +7,7 @@ import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
 import { evaluateAllocation } from "@/modules/accounts";
 import { problemsService, type ProblemListEntry } from "@/modules/problems";
+import { quickPrepareService } from "@/modules/quick-prepare";
 import { usersService, type UserListEntry } from "@/modules/users";
 import type { IssueRow } from "@/lib/drizzle/schema";
 import {
@@ -17,7 +18,8 @@ import {
   type LabelledCount,
   type SeriesPoint,
 } from "../repositories/dashboard.repository";
-import { tallyProfileStates } from "./profile-state-counts";
+import { tallyAccountStates } from "./account-state-counts";
+import { expirationBuckets, resellableExpired, tallyProfileStates } from "./profile-state-counts";
 import { assessHealth, type HealthReport } from "./system-health";
 
 /**
@@ -40,20 +42,30 @@ export interface DashboardData {
   /** Present only for roles that may see administrative metrics. */
   readonly backups: BackupSummary | null;
   readonly health: HealthReport | null;
-  readonly onlineUsers: readonly UserListEntry[] | null;
+  /**
+   * Who is online. `null` for a role that may not see it; "error" when the
+   * read failed — never an empty list standing in for a failure.
+   */
+  readonly onlineUsers: readonly UserListEntry[] | "error" | null;
+  /**
+   * Each list is `null` when its read failed, so the widget can say so instead
+   * of rendering "nothing here" for an outage.
+   */
   readonly problems: {
-    readonly newest: readonly ProblemListEntry[];
-    readonly critical: readonly ProblemListEntry[];
-    readonly waitingLongest: readonly ProblemListEntry[];
-    readonly assignedToMe: readonly ProblemListEntry[];
+    readonly newest: readonly ProblemListEntry[] | null;
+    readonly critical: readonly ProblemListEntry[] | null;
+    readonly waitingLongest: readonly ProblemListEntry[] | null;
+    readonly assignedToMe: readonly ProblemListEntry[] | null;
     /** Raw rows: reopened problems are read straight from the aggregate query. */
-    readonly reopened: readonly IssueRow[];
+    readonly reopened: readonly IssueRow[] | null;
   };
+  /** Each series is `null` when its read failed — not an empty chart. */
   readonly charts: {
-    readonly accountsOverTime: readonly SeriesPoint[];
-    readonly customersOverTime: readonly SeriesPoint[];
-    readonly problemsBySeverity: readonly LabelledCount[];
-    readonly backupsOverTime: readonly SeriesPoint[];
+    readonly accountsOverTime: readonly SeriesPoint[] | null;
+    readonly customersOverTime: readonly SeriesPoint[] | null;
+    readonly problemsByType: readonly LabelledCount[] | null;
+    readonly problemsBySeverity: readonly LabelledCount[] | null;
+    readonly backupsOverTime: readonly SeriesPoint[] | null;
   };
   /** True when the caller may see users, backups and health. */
   readonly canSeeAdminMetrics: boolean;
@@ -68,12 +80,24 @@ function canSeeAdminMetrics(actor: AppUser): boolean {
   return roleHasPermission(actor.role, PERMISSIONS.ACCESS_BACKUPS);
 }
 
+/** A secondary read: its value, or null when it failed. */
+function orNull<T>(result: Result<T>): T | null {
+  return result.ok ? result.value : null;
+}
+
 /**
  * Everything the dashboard renders, in one call.
  *
  * Reads run in parallel. They are independent, and awaiting them in sequence
  * would make the page as slow as their sum rather than as slow as the slowest —
  * the difference between a dashboard that feels instant and one that does not.
+ *
+ * THE HEADLINE FIGURES ARE DERIVED, NOT COUNTED (M04). Accounts go through
+ * `accountEffectiveStatus` and profiles through `profileCellState` — the same
+ * functions behind every badge in the application — so a Healthy on the
+ * dashboard is a Healthy on the Accounts page, and an Available here is an
+ * Available there. If any of those reads fails, the whole overview fails:
+ * zeros that look like real stock levels would be worse than an error.
  */
 async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
   if (!actor) {
@@ -88,6 +112,8 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
 
   const [
     counts,
+    accountStates,
+    profileStates,
     backups,
     onlineUsers,
     newest,
@@ -97,11 +123,13 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     reopened,
     accountsOverTime,
     customersOverTime,
+    problemsByType,
     problemsBySeverity,
     backupsOverTime,
-    profileStates,
   ] = await Promise.all([
     dashboardRepository.counts(),
+    dashboardRepository.accountStateInputs(),
+    dashboardRepository.profileStateInputs(),
     isAdmin ? dashboardRepository.backupSummary() : Promise.resolve(null),
     isAdmin ? usersService.onlineNow(actor) : Promise.resolve(null),
     problemsService.list(
@@ -117,43 +145,63 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     dashboardRepository.reopenedProblems(5),
     dashboardRepository.accountsCreatedByDay(30),
     dashboardRepository.customersCreatedByDay(30),
+    dashboardRepository.problemsByType(),
     dashboardRepository.problemsBySeverity(),
     isAdmin ? dashboardRepository.backupsByDay(30) : Promise.resolve(null),
-    dashboardRepository.profileStateInputs(),
   ]);
 
   if (!counts.ok) {
     return counts;
   }
 
-  /*
-   * Fails the page rather than degrading, like counts above: these are the
-   * Profiles widget's headline figures, and a silently empty tally would show
-   * zeros that look like real stock levels.
-   */
+  if (!accountStates.ok) {
+    return accountStates;
+  }
+
   if (!profileStates.ok) {
     return profileStates;
   }
 
   /*
-   * Every profile classified by profileCellState — the rule behind each profile
-   * badge in the application — so the widget reports what the Accounts page
-   * shows, bucket for bucket. M01 finding F5.
+   * Blocking problem types per account, from the Problems module's public API
+   * — the same call, with the same answer, that the Accounts list makes before
+   * it derives each row's status. One query for every account.
    */
-  const tally = tallyProfileStates(profileStates.value, new Date());
+  const problemTypes = await problemsService.accountsWithActiveProblems(
+    accountStates.value.map((row) => row.id),
+  );
+
+  if (!problemTypes.ok) {
+    return problemTypes;
+  }
+
+  /* One clock for the whole page, so no two figures straddle midnight. */
+  const today = new Date();
+
+  const accountTally = tallyAccountStates(
+    accountStates.value.map((row) => ({
+      account: row,
+      blockingProblemTypes: problemTypes.value.get(row.id) ?? [],
+    })),
+    today,
+  );
+
+  const profileTally = tallyProfileStates(profileStates.value, today);
 
   const dashboardCounts: DashboardCounts = {
     ...counts.value,
+    accounts: accountTally,
     profiles: {
-      total: counts.value.profiles.total,
-      reserved: counts.value.profiles.reserved,
-      available: tally.available,
-      sold: tally.sold,
-      expiringSoon: tally.expiring_soon,
-      expired: tally.expired,
-      notForSale: tally.not_for_sale,
-      blocked: tally.blocked,
+      total: profileStates.value.length,
+      available: profileTally.available,
+      sold: profileTally.sold,
+      expiringSoon: profileTally.expiring_soon,
+      expired: profileTally.expired,
+      blocked: profileTally.blocked,
+      notForSale: profileTally.not_for_sale,
+      resellableExpired: resellableExpired(profileStates.value, today),
     },
+    expirations: expirationBuckets(profileStates.value, today),
   };
 
   const backupSummary = backups && backups.ok ? backups.value : null;
@@ -172,30 +220,31 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
           lastChecksumVerified: backupSummary?.lastChecksumVerified ?? false,
           databaseReachable: true,
         },
-        new Date(),
+        today,
       )
     : null;
 
   const list = (result: Awaited<ReturnType<typeof problemsService.list>>) =>
-    result.ok ? result.value.items : [];
+    result.ok ? result.value.items : null;
 
   return ok({
     counts: dashboardCounts,
     backups: backupSummary,
     health,
-    onlineUsers: onlineUsers && onlineUsers.ok ? onlineUsers.value : null,
+    onlineUsers: onlineUsers === null ? null : onlineUsers.ok ? onlineUsers.value : "error",
     problems: {
       newest: list(newest),
       critical: list(critical),
       waitingLongest: list(waitingLongest),
       assignedToMe: list(assignedToMe),
-      reopened: reopened.ok ? reopened.value : [],
+      reopened: orNull(reopened),
     },
     charts: {
-      accountsOverTime: accountsOverTime.ok ? accountsOverTime.value : [],
-      customersOverTime: customersOverTime.ok ? customersOverTime.value : [],
-      problemsBySeverity: problemsBySeverity.ok ? problemsBySeverity.value : [],
-      backupsOverTime: backupsOverTime && backupsOverTime.ok ? backupsOverTime.value : [],
+      accountsOverTime: orNull(accountsOverTime),
+      customersOverTime: orNull(customersOverTime),
+      problemsByType: orNull(problemsByType),
+      problemsBySeverity: orNull(problemsBySeverity),
+      backupsOverTime: backupsOverTime === null ? [] : orNull(backupsOverTime),
     },
     canSeeAdminMetrics: isAdmin,
   });
@@ -241,10 +290,14 @@ export interface StockEntry {
 export interface StockSummary {
   readonly top: readonly StockEntry[];
   readonly almostFull: readonly StockEntry[];
+  /** Quick Prepare's own count — `quickPrepareService.availableStock`. */
   readonly totalAllocatable: number;
   readonly lowStock: boolean;
   readonly excludedForProblems: number;
 }
+
+/** Accounts the per-account breakdown considers. The total never depends on it. */
+const STOCK_CANDIDATE_LIMIT = 200;
 
 /**
  * Stock summary.
@@ -272,10 +325,23 @@ async function stock(actor: AppUser | null): Promise<Result<StockSummary>> {
     );
   }
 
-  const candidates = await dashboardRepository.stockCandidates(25);
+  /*
+   * The total is Quick Prepare's own figure, not a sum computed here: the
+   * widget's headline is the number the allocator will actually sell from.
+   * The per-account breakdown below still runs evaluateAllocation, the same
+   * rule, over the same accounts.
+   */
+  const [candidates, available] = await Promise.all([
+    dashboardRepository.stockCandidates(STOCK_CANDIDATE_LIMIT),
+    quickPrepareService.availableStock(),
+  ]);
 
   if (!candidates.ok) {
     return candidates;
+  }
+
+  if (!available.ok) {
+    return available;
   }
 
   let excludedForProblems = 0;
@@ -311,7 +377,7 @@ async function stock(actor: AppUser | null): Promise<Result<StockSummary>> {
   });
 
   const withStock = entries.filter((entry) => entry.allocatable > 0);
-  const totalAllocatable = withStock.reduce((sum, entry) => sum + entry.allocatable, 0);
+  const totalAllocatable = available.value;
 
   return ok({
     top: [...withStock].sort((a, b) => b.allocatable - a.allocatable).slice(0, 5),

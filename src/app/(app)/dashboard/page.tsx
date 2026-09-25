@@ -101,7 +101,10 @@ async function Overview() {
         <ExpirationWidget counts={data.counts.expirations} />
 
         {data.canSeeAdminMetrics ? (
-          <UsersCountsWidget counts={data.counts.users} online={data.onlineUsers?.length ?? 0} />
+          <UsersCountsWidget
+            counts={data.counts.users}
+            online={Array.isArray(data.onlineUsers) ? data.onlineUsers.length : null}
+          />
         ) : null}
 
         <RevenueWidget />
@@ -138,6 +141,7 @@ async function Overview() {
         <ChartsWidget
           accounts={data.charts.accountsOverTime}
           customers={data.charts.customersOverTime}
+          types={data.charts.problemsByType}
           severity={data.charts.problemsBySeverity}
           backups={data.charts.backupsOverTime}
           canSeeBackups={data.canSeeAdminMetrics}

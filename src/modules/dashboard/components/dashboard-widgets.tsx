@@ -16,11 +16,7 @@ import Link from "next/link";
 
 import { ROUTES } from "@/config/constants";
 import type { IssueRow } from "@/lib/drizzle/schema";
-import {
-  ProblemSeverityBadge,
-  ProblemStatusBadge,
-  type ProblemListEntry,
-} from "@/modules/problems";
+import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, type ProblemListEntry } from "@/modules/problems";
 import { PresenceDot, type UserListEntry } from "@/modules/users";
 import { cn } from "@/utils/cn";
 import type {
@@ -38,6 +34,7 @@ import {
   MetricGrid,
   Widget,
   WidgetEmpty,
+  WidgetError,
   WidgetForbidden,
 } from "./dashboard-primitives";
 
@@ -65,16 +62,37 @@ function relativeAge(value: Date | null, now: Date): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Shown in place of a list or chart whose read failed. Never an empty state. */
+const LOAD_FAILED = "Could not load this. Refresh to try again.";
+
+/**
+ * Accounts, in four disjoint buckets that sum to Total (M04).
+ *
+ * Each account is counted once, by `accountEffectiveStatus` — the rule behind
+ * every account badge — so Healthy here is exactly what the Accounts page calls
+ * Healthy, which is exactly what Quick Prepare will sell from.
+ */
 export function AccountsWidget({ counts }: { counts: DashboardCounts["accounts"] }) {
   return (
-    <Widget title="Accounts" icon={Layers}>
+    <Widget
+      title="Accounts"
+      icon={Layers}
+      description="Healthy + Problems + Expired + Archived = Total"
+    >
       <MetricGrid>
-        <Metric label="Total" value={counts.total} />
-        <Metric label="Healthy" value={counts.healthy} tone="success" />
+        <Metric label="Total" value={counts.total} hint="not deleted" />
+        <Metric label="Healthy" value={counts.healthy} tone="success" hint="can sell now" />
         <Metric
-          label="With problems"
-          value={counts.withProblems}
-          tone={counts.withProblems > 0 ? "danger" : "muted"}
+          label="Problems"
+          value={counts.problems}
+          tone={counts.problems > 0 ? "danger" : "muted"}
+          hint="blocking problem or fault"
+        />
+        <Metric
+          label="Expired"
+          value={counts.expired}
+          tone={counts.expired > 0 ? "warning" : "muted"}
+          hint="own validity ended"
         />
         <Metric label="Archived" value={counts.archived} tone="muted" />
       </MetricGrid>
@@ -82,16 +100,39 @@ export function AccountsWidget({ counts }: { counts: DashboardCounts["accounts"]
   );
 }
 
+/**
+ * Profiles, in the six `profileCellState` buckets — disjoint, summing to Total.
+ *
+ * Available is what can be sold right now from a working account. Free slots
+ * on an account that cannot sell are Blocked, never Available.
+ */
 export function ProfilesWidget({ counts }: { counts: DashboardCounts["profiles"] }) {
   return (
-    <Widget title="Profiles" icon={Layers}>
+    <Widget
+      title="Profiles"
+      icon={Layers}
+      description="Every profile in exactly one state, as on the Accounts page"
+    >
       <MetricGrid>
         <Metric label="Total" value={counts.total} />
         <Metric label="Available" value={counts.available} tone="success" />
-        <Metric label="Reserved" value={counts.reserved} />
         <Metric label="Sold" value={counts.sold} />
         <Metric label="Expiring soon" value={counts.expiringSoon} tone="warning" />
-        <Metric label="Expired" value={counts.expired} tone="danger" />
+        <Metric
+          label="Expired"
+          value={counts.expired}
+          tone="danger"
+          hint={
+            counts.resellableExpired > 0 ? `${counts.resellableExpired} can be resold` : undefined
+          }
+        />
+        <Metric
+          label="Blocked"
+          value={counts.blocked}
+          tone={counts.blocked > 0 ? "warning" : "muted"}
+          hint="free, account cannot sell"
+        />
+        <Metric label="Not for sale" value={counts.notForSale} tone="muted" />
       </MetricGrid>
     </Widget>
   );
@@ -123,27 +164,41 @@ export function CustomersWidget({ counts }: { counts: DashboardCounts["customers
   );
 }
 
+/**
+ * Problems on live accounts. Records and the accounts they affect are separate
+ * figures: one account with three open problems is 3 blocking, 1 affected.
+ */
 export function ProblemsCountsWidget({ counts }: { counts: DashboardCounts["problems"] }) {
   return (
     <Widget
       title="Problems"
       icon={TriangleAlert}
       action={
-        <Link href={ROUTES.PROBLEMS} className="text-caption text-primary hover:underline">
-          View all
+        <Link
+          href={`${ROUTES.PROBLEMS}?status=blocking`}
+          className="text-caption text-primary hover:underline"
+        >
+          View blocking
         </Link>
       }
     >
       <MetricGrid>
-        <Metric label="Open" value={counts.open} tone={counts.open > 0 ? "danger" : "muted"} />
+        <Metric
+          label="Blocking"
+          value={counts.blocking}
+          tone={counts.blocking > 0 ? "danger" : "muted"}
+          hint={`on ${counts.accountsAffected} account${counts.accountsAffected === 1 ? "" : "s"}`}
+        />
+        <Metric label="Open" value={counts.open} />
         <Metric label="In progress" value={counts.inProgress} />
         <Metric label="Waiting" value={counts.waiting} tone="warning" />
-        <Metric label="Resolved today" value={counts.resolvedToday} tone="success" />
         <Metric
-          label="Critical"
-          value={counts.critical}
-          tone={counts.critical > 0 ? "danger" : "muted"}
+          label="Payment problems"
+          value={counts.paymentProblems}
+          tone={counts.paymentProblems > 0 ? "danger" : "muted"}
+          hint={`on ${counts.paymentProblemAccounts} account${counts.paymentProblemAccounts === 1 ? "" : "s"}`}
         />
+        <Metric label="Resolved today" value={counts.resolvedToday} tone="success" />
       </MetricGrid>
     </Widget>
   );
@@ -162,14 +217,22 @@ export function QuickPrepareWidget({ counts }: { counts: DashboardCounts["prepar
   );
 }
 
+/**
+ * Held allocations by days left, in disjoint UTC-day buckets (M04).
+ *
+ * Today + Tomorrow + In 2–3 days is the Profiles widget's "Expiring soon"
+ * (EXPIRING_SOON_DAYS = 3); Already expired is its "Expired".
+ */
 export function ExpirationWidget({ counts }: { counts: DashboardCounts["expirations"] }) {
-  const nothing = counts.today + counts.tomorrow + counts.withinSevenDays + counts.expired === 0;
+  const nothing =
+    counts.today + counts.tomorrow + counts.inTwoToThree + counts.inFourToSeven + counts.expired ===
+    0;
 
   return (
     <Widget
       title="Expirations"
       icon={CalendarClock}
-      description="Read from expiration_date, never from a stored status"
+      description="Held allocations, by days left (UTC). Each profile counted once."
     >
       {nothing ? (
         <WidgetEmpty message="No profiles are approaching expiry." />
@@ -177,8 +240,8 @@ export function ExpirationWidget({ counts }: { counts: DashboardCounts["expirati
         <MetricGrid>
           <Metric label="Today" value={counts.today} tone="danger" />
           <Metric label="Tomorrow" value={counts.tomorrow} tone="warning" />
-          <Metric label="Within 3 days" value={counts.withinThreeDays} tone="warning" />
-          <Metric label="Within 7 days" value={counts.withinSevenDays} />
+          <Metric label="In 2–3 days" value={counts.inTwoToThree} tone="warning" />
+          <Metric label="In 4–7 days" value={counts.inFourToSeven} />
           <Metric label="Already expired" value={counts.expired} tone="danger" />
         </MetricGrid>
       )}
@@ -283,7 +346,7 @@ export function StockWidget({ stock }: { stock: StockSummary | null }) {
     <Widget
       title="Smart stock"
       icon={Layers}
-      description="Availability computed with evaluateAllocation — problem accounts excluded"
+      description="The stock Quick Prepare sells from — blocked, expired and archived accounts excluded"
     >
       {stock.lowStock ? (
         <div
@@ -329,11 +392,20 @@ export function StockWidget({ stock }: { stock: StockSummary | null }) {
   );
 }
 
-export function OnlineUsersWidget({ users }: { users: readonly UserListEntry[] | null }) {
+export function OnlineUsersWidget({ users }: { users: readonly UserListEntry[] | "error" | null }) {
   if (!users) {
     return (
       <Widget title="Who's online" icon={UsersIcon}>
         <WidgetForbidden />
+      </Widget>
+    );
+  }
+
+  /* A failed read is an error, not a permission refusal and not "nobody". */
+  if (users === "error") {
+    return (
+      <Widget title="Who's online" icon={UsersIcon}>
+        <WidgetError message={LOAD_FAILED} />
       </Widget>
     );
   }
@@ -390,7 +462,8 @@ export function UsersCountsWidget({
     <Widget title="Users" icon={UsersIcon}>
       <MetricGrid>
         <Metric label="Active" value={counts.active} tone="success" />
-        <Metric label="Online" value={online ?? 0} />
+        {/* Null when presence could not be read: a dash, never a zero that looks real. */}
+        <Metric label="Online" value={online ?? "—"} />
         <Metric label="Suspended" value={counts.suspended} tone="warning" />
         <Metric label="Disabled" value={counts.disabled} tone="danger" />
       </MetricGrid>
@@ -465,12 +538,15 @@ export function ProblemsListWidget({
 }: {
   title: string;
   description?: string;
-  items: readonly ProblemListEntry[];
+  /** Null when the read failed. */
+  items: readonly ProblemListEntry[] | null;
   emptyMessage: string;
 }) {
   return (
     <Widget title={title} description={description} icon={TriangleAlert}>
-      {items.length === 0 ? (
+      {items === null ? (
+        <WidgetError message={LOAD_FAILED} />
+      ) : items.length === 0 ? (
         <WidgetEmpty message={emptyMessage} />
       ) : (
         <ul className="flex flex-col gap-1.5">
@@ -481,8 +557,11 @@ export function ProblemsListWidget({
                 className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background-secondary px-3 py-2 transition-colors hover:bg-surface-raised"
               >
                 <span className="truncate text-caption text-foreground">{entry.accountEmail}</span>
+                {/* The problem type, as on the Problems page since M03 — not the severity. */}
                 <span className="flex items-center gap-2">
-                  <ProblemSeverityBadge severity={entry.problem.severity} />
+                  <span className="text-caption text-foreground-muted">
+                    {PROBLEM_TYPE_LABELS[entry.problem.issueType] ?? entry.problem.issueType}
+                  </span>
                   <ProblemStatusBadge status={entry.problem.status} />
                 </span>
               </Link>
@@ -494,10 +573,12 @@ export function ProblemsListWidget({
   );
 }
 
-export function ReopenedWidget({ items }: { items: readonly IssueRow[] }) {
+export function ReopenedWidget({ items }: { items: readonly IssueRow[] | null }) {
   return (
     <Widget title="Reopened problems" icon={TriangleAlert} description="Faults that came back">
-      {items.length === 0 ? (
+      {items === null ? (
+        <WidgetError message={LOAD_FAILED} />
+      ) : items.length === 0 ? (
         <WidgetEmpty message="Nothing has been reopened." />
       ) : (
         <ul className="flex flex-col gap-1.5">
@@ -527,36 +608,80 @@ const SEVERITY_TONE: Record<string, string> = {
   low: "bg-neutral",
 };
 
+/** A chart's body: its error, or the chart. Never an empty chart for a failed read. */
+function ChartBody({ points, label }: { points: readonly SeriesPoint[] | null; label: string }) {
+  return points === null ? (
+    <WidgetError message={LOAD_FAILED} />
+  ) : (
+    <BarChart points={points} label={label} />
+  );
+}
+
 export function ChartsWidget({
   accounts,
   customers,
+  types,
   severity,
   backups,
   canSeeBackups,
 }: {
-  accounts: readonly SeriesPoint[];
-  customers: readonly SeriesPoint[];
-  severity: readonly LabelledCount[];
-  backups: readonly SeriesPoint[];
+  accounts: readonly SeriesPoint[] | null;
+  customers: readonly SeriesPoint[] | null;
+  types: readonly LabelledCount[] | null;
+  severity: readonly LabelledCount[] | null;
+  backups: readonly SeriesPoint[] | null;
   canSeeBackups: boolean;
 }) {
   return (
     <>
-      <Widget title="Accounts created" icon={ChartColumn} description="Last 30 days">
-        <BarChart points={accounts} label="Accounts created per day over the last 30 days" />
+      <Widget title="Accounts created" icon={ChartColumn} description="Last 30 days (UTC)">
+        <ChartBody points={accounts} label="Accounts created per day over the last 30 days" />
       </Widget>
 
-      <Widget title="Customers added" icon={ChartColumn} description="Last 30 days">
-        <BarChart points={customers} label="Customers added per day over the last 30 days" />
+      <Widget title="Customers added" icon={ChartColumn} description="Last 30 days (UTC)">
+        <ChartBody points={customers} label="Customers added per day over the last 30 days" />
       </Widget>
 
-      <Widget title="Open problems by severity" icon={ChartColumn}>
-        <BreakdownBars items={severity} toneFor={(label) => SEVERITY_TONE[label] ?? "bg-primary"} />
+      {/*
+        The same blocking problems the Problems widget counts, by type — the
+        attribute the workflow reports and resolves by (M03).
+      */}
+      <Widget title="Blocking problems by type" icon={ChartColumn}>
+        {types === null ? (
+          <WidgetError message={LOAD_FAILED} />
+        ) : (
+          <BreakdownBars
+            items={types.map((item) => ({
+              label: PROBLEM_TYPE_LABELS[item.label] ?? item.label,
+              count: item.count,
+            }))}
+          />
+        )}
+      </Widget>
+
+      {/*
+        Kept, and labelled for what it now is. Since M03 severity is no longer
+        asked for and new problems are stored as medium, so this shows the
+        stored values — mostly those of older problems.
+      */}
+      <Widget
+        title="Blocking problems by stored severity"
+        icon={ChartColumn}
+        description="Severity is no longer asked for; new problems are stored as medium"
+      >
+        {severity === null ? (
+          <WidgetError message={LOAD_FAILED} />
+        ) : (
+          <BreakdownBars
+            items={severity}
+            toneFor={(label) => SEVERITY_TONE[label] ?? "bg-primary"}
+          />
+        )}
       </Widget>
 
       {canSeeBackups ? (
-        <Widget title="Backups taken" icon={ChartColumn} description="Last 30 days">
-          <BarChart points={backups} label="Backups taken per day over the last 30 days" />
+        <Widget title="Backups taken" icon={ChartColumn} description="Last 30 days (UTC)">
+          <ChartBody points={backups} label="Backups taken per day over the last 30 days" />
         </Widget>
       ) : null}
     </>

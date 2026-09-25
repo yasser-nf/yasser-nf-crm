@@ -108,17 +108,22 @@ describe("F4 — an account is Healthy or has a problem, never both", () => {
     }
   });
 
-  it("uses that predicate, not the bare status column", async () => {
+  it("counts Healthy through the badge's own derivation, not the status column (M04)", async () => {
+    /*
+     * Since M04 the dashboard does not count Healthy in SQL at all: every live
+     * account goes through accountEffectiveStatus, the function behind each
+     * account badge, and is bucketed from that.
+     */
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile(
+    const repository = await readFile(
       "src/modules/dashboard/repositories/dashboard.repository.ts",
       "utf8",
     );
+    const counts = await readFile("src/modules/dashboard/services/account-state-counts.ts", "utf8");
 
-    expect(source).toContain(
-      'count(*) filter (where ${accountMatchesStatusSql("healthy")})::int as healthy',
-    );
-    expect(source).not.toContain("count(*) filter (where status = 'healthy')::int as healthy");
+    expect(counts).toContain("accountEffectiveStatus(account, blockingProblemTypes, today)");
+    expect(repository).not.toContain("status = 'healthy'");
+    expect(repository).not.toMatch(/as healthy/);
   });
 });
 

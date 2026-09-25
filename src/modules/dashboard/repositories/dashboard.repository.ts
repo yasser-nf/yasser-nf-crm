@@ -1,14 +1,14 @@
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 
 import { databaseAdapter } from "@/lib/database";
 import {
   accountHasNoBlockingProblemSql,
   accountIsLiveSql,
-  accountMatchesStatusSql,
   rawAccountIsLive,
 } from "@/lib/drizzle/predicates";
 import {
   accounts,
+  issues,
   profiles,
   type AccountRow,
   type IssueRow,
@@ -35,52 +35,53 @@ import type { Result } from "@/types/result";
  */
 
 export interface AccountCounts {
+  /** Live accounts (not soft-deleted). Equals healthy + problems + expired + archived. */
   readonly total: number;
   readonly healthy: number;
-  readonly withProblems: number;
+  readonly problems: number;
+  readonly expired: number;
   readonly archived: number;
 }
 
+/**
+ * Profile figures, every one a `profileCellState` bucket (M01.5, M04).
+ *
+ * available + sold + expiringSoon + expired + blocked + notForSale = total —
+ * disjoint by construction. There is no `reserved`: nothing writes it, and
+ * `profileCellState` already counts a reserved row as held (sold / expiring
+ * soon), so showing it separately would have counted one profile twice.
+ */
 export interface ProfileCounts {
   readonly total: number;
   readonly available: number;
-  readonly reserved: number;
   readonly sold: number;
   readonly expiringSoon: number;
   readonly expired: number;
-  /** Profile rows above their account's profile_slots. Not stock. M13. */
+  /** Free, but the account cannot sell it: a problem, a fault or expired validity. */
+  readonly blocked: number;
+  /** Above the account's profile_slots. Not stock. M13. */
   readonly notForSale: number;
   /**
-   * Free slots on an account that cannot sell them — an open problem, a
-   * non-healthy status or expired coverage. Not rendered by the widget; carried
-   * so the display-state buckets account for every profile.
+   * Expired allocations Quick Prepare may resell now (the recycling rule).
+   * Already inside `expired`; carried so the stock figure can be explained.
    */
-  readonly blocked: number;
+  readonly resellableExpired: number;
 }
 
-/**
- * The profile figures SQL can state truthfully on its own.
- *
- * `available`, `sold`, `expiringSoon`, `expired` and `blocked` are NOT here.
- * They are display states, and the only correct definition of a display state
- * is `profileCellState`, which lives in TypeScript. The dashboard service
- * computes them from `profileStateInputs` (below) through that function. SQL
- * used to compute them from `profiles.status`, whose `expiring_soon` and
- * `expired` values nothing writes — M01 finding F5.
- */
-export interface StoredProfileCounts {
-  readonly total: number;
-  /**
-   * A literal count of `status = 'reserved'`. Truthful but vestigial: nothing
-   * in the application writes 'reserved', so it is 0, and `profileCellState`
-   * folds a reserved row into the held states (sold / expiring soon) anyway.
-   */
-  readonly reserved: number;
+/** What `counts()` returns: the figures SQL states on its own. */
+export interface RepositoryCounts {
+  readonly customers: CustomerCounts;
+  readonly problems: ProblemCounts;
+  readonly users: UserCounts;
+  readonly prepared: PreparedCounts;
 }
 
-/** What `counts()` returns: everything except the display-state profile figures. */
-export interface RepositoryCounts extends Omit<DashboardCounts, "profiles"> {
-  readonly profiles: StoredProfileCounts;
+/** A live account with exactly the facts `accountEffectiveStatus` reads. */
+export interface AccountStateRow {
+  readonly id: string;
+  readonly status: AccountRow["status"];
+  readonly validUntil: AccountRow["validUntil"];
+  readonly deletedAt: AccountRow["deletedAt"];
 }
 
 /** One profile, with exactly the account facts `profileCellState` needs. */
@@ -97,11 +98,27 @@ export interface CustomerCounts {
   readonly archived: number;
 }
 
+/**
+ * Problem figures, counted from `issues` on LIVE accounts (M04).
+ *
+ * Problem RECORDS and the ACCOUNTS they affect are different numbers: one
+ * account with three open problems is 3 blocking problems and 1 affected
+ * account. Problems on soft-deleted accounts are left out — the account no
+ * longer exists anywhere else on this page.
+ */
 export interface ProblemCounts {
   readonly open: number;
   readonly waiting: number;
   readonly inProgress: number;
+  /** open + in progress + waiting — BLOCKING_STATUSES. */
+  readonly blocking: number;
+  /** Distinct accounts with at least one blocking problem. */
+  readonly accountsAffected: number;
+  /** Blocking problems of type payment_problem, and the accounts they sit on. */
+  readonly paymentProblems: number;
+  readonly paymentProblemAccounts: number;
   readonly resolvedToday: number;
+  /** Blocking and stored as critical. Historical since M03: new problems store `medium`. */
   readonly critical: number;
 }
 
@@ -127,12 +144,13 @@ export interface PreparedCounts {
   readonly thisMonth: number;
 }
 
+/** Disjoint — see `expirationBuckets` in services/profile-state-counts. */
 export interface ExpirationBuckets {
+  readonly expired: number;
   readonly today: number;
   readonly tomorrow: number;
-  readonly withinThreeDays: number;
-  readonly withinSevenDays: number;
-  readonly expired: number;
+  readonly inTwoToThree: number;
+  readonly inFourToSeven: number;
 }
 
 export interface DashboardCounts {
@@ -164,6 +182,8 @@ function readDate(row: Record<string, unknown>, key: string): Date | null {
 export interface DashboardRepository {
   /** Every KPI SQL can state on its own, in one round trip per domain group. */
   counts(): Promise<Result<RepositoryCounts>>;
+  /** Every live account's status and validity, for `accountEffectiveStatus`. */
+  accountStateInputs(): Promise<Result<readonly AccountStateRow[]>>;
   /**
    * Every profile on a live account, with the account facts the display rule
    * reads. The service turns these into the Profiles widget's figures through
@@ -182,6 +202,8 @@ export interface DashboardRepository {
   accountsCreatedByDay(days: number): Promise<Result<readonly SeriesPoint[]>>;
   customersCreatedByDay(days: number): Promise<Result<readonly SeriesPoint[]>>;
   problemsBySeverity(): Promise<Result<readonly LabelledCount[]>>;
+  /** Blocking problems on live accounts, by type — the attribute the workflow uses. */
+  problemsByType(): Promise<Result<readonly LabelledCount[]>>;
   backupsByDay(days: number): Promise<Result<readonly SeriesPoint[]>>;
 }
 
@@ -224,85 +246,16 @@ export const dashboardRepository: DashboardRepository = {
   async counts() {
     return databaseAdapter.query("dashboard.counts", async (executor) => {
       /*
-       * Four statements, not twenty-eight. Each `filter (where …)` is another
-       * bucket counted during the same scan, so adding a KPI costs no extra
-       * round trip.
+       * Four statements, one aggregate each. Accounts and profiles are no
+       * longer counted here: their buckets are display states, whose only
+       * correct definitions (`accountEffectiveStatus`, `profileCellState`)
+       * live in TypeScript. See the service.
        *
-       * Accounts and profiles are one statement because the profile buckets are
-       * a scan of a different table; customers and problems likewise. They are
-       * kept apart only where a join would multiply rows.
+       * Day boundaries are UTC, stated explicitly with the three-argument
+       * `date_trunc(field, timestamptz, 'UTC')`, rather than taken from the
+       * session's time zone — the application's own date rules are UTC, and a
+       * session in another zone would otherwise move midnight.
        */
-      /*
-       * Scoped to accounts that exist. `from accounts` with no predicate counted
-       * every soft-deleted row too, so the dashboard reported seven accounts
-       * where the Accounts page listed three.
-       *
-       * `archived` was the worse half of the same bug: it read
-       * `status = 'archived' or deleted_at is not null`, which folded deleted
-       * accounts into the archived bucket. Archiving and deleting are different
-       * acts, and only the first leaves an account on the Accounts page.
-       */
-      const accountRows = await executor.execute(sql`
-        select
-          count(*)::int as total,
-          /*
-           * Healthy means what the Accounts page means by it: stored healthy
-           * AND no blocking problem. Problems never write accounts.status
-           * (ADR-010 D4), so status = 'healthy' alone counted accounts the
-           * Accounts page badges as Problem — the same accounts then counted
-           * again under with_problems, and Healthy + With problems exceeded
-           * Total (M01 finding F4).
-           *
-           * accountMatchesStatusSql is the predicate the Accounts status
-           * filter uses, so the widget and the filter cannot disagree.
-           */
-          count(*) filter (where ${accountMatchesStatusSql("healthy")})::int as healthy,
-          count(*) filter (where status = 'archived')::int as archived,
-          (
-            select count(distinct i.account_id)::int
-            from issues i
-            join accounts ia on ia.id = i.account_id
-            where i.status in ('open', 'in_progress', 'waiting')
-              and ${rawAccountIsLive("ia")}
-          ) as with_problems
-        from accounts
-        where ${rawAccountIsLive("accounts")}
-      `);
-
-      /*
-       * Joined to accounts since M13, for not_for_sale, which reads the
-       * account's profile_slots.
-       *
-       * What this statement no longer does is classify profiles into display
-       * states. It used to count available / sold / expiring_soon / expired
-       * here, the last two from `profiles.status` values nothing writes. Those
-       * figures now come from `profileStateInputs` through `profileCellState`,
-       * so the widget and a profile's badge are one rule, not two.
-       */
-      const profileRows = await executor.execute(sql`
-        select
-          count(*)::int as total,
-          /* Literal and vestigial — see StoredProfileCounts.reserved. */
-          count(*) filter (where p.status = 'reserved')::int as reserved,
-          /*
-           * Expiry buckets read expiration_date directly rather than the status
-           * column. 03_DATABASE.md warns those enum values are not written by
-           * anything yet, so trusting them here would report zero forever.
-           */
-          count(*) filter (where p.expiration_date = current_date)::int as expiring_today,
-          count(*) filter (where p.expiration_date = current_date + 1)::int as expiring_tomorrow,
-          count(*) filter (
-            where p.expiration_date > current_date and p.expiration_date <= current_date + 3
-          )::int as expiring_three,
-          count(*) filter (
-            where p.expiration_date > current_date and p.expiration_date <= current_date + 7
-          )::int as expiring_seven,
-          count(*) filter (where p.expiration_date < current_date)::int as already_expired
-        from profiles p
-        join accounts a on a.id = p.account_id
-        where ${rawAccountIsLive("a")}
-      `);
-
       const customerRows = await executor.execute(sql`
         select
           count(*)::int as total,
@@ -320,24 +273,41 @@ export const dashboardRepository: DashboardRepository = {
                 select 1 from profiles p
                 where p.customer_id = customers.id
                   and p.status in ('sold', 'expiring_soon')
-                  and (p.expiration_date is null or p.expiration_date >= current_date)
+                  and (p.expiration_date is null
+                       or p.expiration_date >= (now() at time zone 'UTC')::date)
               )
           )::int as active
         from customers
       `);
 
+      /*
+       * On live accounts only — the same scope as every other figure here.
+       * Records and affected accounts are counted separately on purpose.
+       */
       const problemRows = await executor.execute(sql`
         select
-          count(*) filter (where status = 'open')::int as open,
-          count(*) filter (where status = 'waiting')::int as waiting,
-          count(*) filter (where status = 'in_progress')::int as in_progress,
+          count(*) filter (where i.status = 'open')::int as open,
+          count(*) filter (where i.status = 'waiting')::int as waiting,
+          count(*) filter (where i.status = 'in_progress')::int as in_progress,
+          count(*) filter (where i.status in ('open', 'in_progress', 'waiting'))::int as blocking,
+          count(distinct i.account_id) filter (
+            where i.status in ('open', 'in_progress', 'waiting')
+          )::int as accounts_affected,
           count(*) filter (
-            where status = 'resolved' and resolved_at >= date_trunc('day', now())
+            where i.status in ('open', 'in_progress', 'waiting') and i.issue_type = 'payment_problem'
+          )::int as payment_problems,
+          count(distinct i.account_id) filter (
+            where i.status in ('open', 'in_progress', 'waiting') and i.issue_type = 'payment_problem'
+          )::int as payment_problem_accounts,
+          count(*) filter (
+            where i.status = 'resolved' and i.resolved_at >= date_trunc('day', now(), 'UTC')
           )::int as resolved_today,
           count(*) filter (
-            where severity = 'critical' and status in ('open', 'in_progress', 'waiting')
+            where i.severity = 'critical' and i.status in ('open', 'in_progress', 'waiting')
           )::int as critical
-        from issues
+        from issues i
+        join accounts a on a.id = i.account_id
+        where ${rawAccountIsLive("a")}
       `);
 
       const userRows = await executor.execute(sql`
@@ -351,46 +321,27 @@ export const dashboardRepository: DashboardRepository = {
       /*
        * Quick Prepare volume comes from profile_events, the only record of a
        * sale. Counting profiles.sale_date instead would miss a profile that was
-       * later replaced or expired.
+       * later replaced or expired. UTC days, ISO weeks (Monday), UTC months.
        */
       const preparedRows = await executor.execute(sql`
         select
-          count(*) filter (where created_at >= date_trunc('day', now()))::int as today,
+          count(*) filter (where created_at >= date_trunc('day', now(), 'UTC'))::int as today,
           count(*) filter (
-            where created_at >= date_trunc('day', now()) - interval '1 day'
-              and created_at < date_trunc('day', now())
+            where created_at >= date_trunc('day', now(), 'UTC') - interval '1 day'
+              and created_at < date_trunc('day', now(), 'UTC')
           )::int as yesterday,
-          count(*) filter (where created_at >= date_trunc('week', now()))::int as this_week,
-          count(*) filter (where created_at >= date_trunc('month', now()))::int as this_month
+          count(*) filter (where created_at >= date_trunc('week', now(), 'UTC'))::int as this_week,
+          count(*) filter (where created_at >= date_trunc('month', now(), 'UTC'))::int as this_month
         from profile_events
         where event_type = 'sold'
       `);
 
-      const account = (accountRows as unknown as Record<string, unknown>[])[0] ?? {};
-      const profile = (profileRows as unknown as Record<string, unknown>[])[0] ?? {};
       const customer = (customerRows as unknown as Record<string, unknown>[])[0] ?? {};
       const problem = (problemRows as unknown as Record<string, unknown>[])[0] ?? {};
       const user = (userRows as unknown as Record<string, unknown>[])[0] ?? {};
       const prepared = (preparedRows as unknown as Record<string, unknown>[])[0] ?? {};
 
       return {
-        accounts: {
-          total: readNumber(account, "total"),
-          healthy: readNumber(account, "healthy"),
-          withProblems: readNumber(account, "with_problems"),
-          archived: readNumber(account, "archived"),
-        },
-        profiles: {
-          total: readNumber(profile, "total"),
-          reserved: readNumber(profile, "reserved"),
-        },
-        expirations: {
-          today: readNumber(profile, "expiring_today"),
-          tomorrow: readNumber(profile, "expiring_tomorrow"),
-          withinThreeDays: readNumber(profile, "expiring_three"),
-          withinSevenDays: readNumber(profile, "expiring_seven"),
-          expired: readNumber(profile, "already_expired"),
-        },
         customers: {
           total: readNumber(customer, "total"),
           active: readNumber(customer, "active"),
@@ -401,6 +352,10 @@ export const dashboardRepository: DashboardRepository = {
           open: readNumber(problem, "open"),
           waiting: readNumber(problem, "waiting"),
           inProgress: readNumber(problem, "in_progress"),
+          blocking: readNumber(problem, "blocking"),
+          accountsAffected: readNumber(problem, "accounts_affected"),
+          paymentProblems: readNumber(problem, "payment_problems"),
+          paymentProblemAccounts: readNumber(problem, "payment_problem_accounts"),
           resolvedToday: readNumber(problem, "resolved_today"),
           critical: readNumber(problem, "critical"),
         },
@@ -417,6 +372,26 @@ export const dashboardRepository: DashboardRepository = {
         },
       };
     });
+  },
+
+  async accountStateInputs() {
+    return databaseAdapter.query("dashboard.accountStateInputs", (executor) =>
+      /*
+       * Four columns per live account — no credential, no notes. Blocking
+       * problems are added by the service through problemsService, exactly as
+       * the Accounts list adds them, so both screens feed the same inputs to
+       * `accountEffectiveStatus`.
+       */
+      executor
+        .select({
+          id: accounts.id,
+          status: accounts.status,
+          validUntil: accounts.validUntil,
+          deletedAt: accounts.deletedAt,
+        })
+        .from(accounts)
+        .where(accountIsLiveSql),
+    );
   },
 
   async profileStateInputs() {
@@ -604,54 +579,60 @@ export const dashboardRepository: DashboardRepository = {
   async stockCandidates(limit) {
     return databaseAdapter.query("dashboard.stockCandidates", async (executor) => {
       /*
-       * One query, then grouped in memory. A join returns five rows per account
-       * and the alternative — one profile query per account — is the N+1 the
-       * brief forbids.
+       * Through the query builder, so rows arrive in the schema's camelCase.
        *
-       * Ordered by health score, matching how the Smart Stock Engine ranks, so
-       * "top accounts" here means the same thing it means during allocation.
+       * This used to be `to_jsonb(a)` / `to_jsonb(p)` cast to AccountRow and
+       * ProfileRow — but to_jsonb keeps the database's snake_case keys, so
+       * `profileSlots`, `profileNumber` and `validUntil` were all undefined.
+       * `evaluateAllocation` then judged every profile "not for sale" and the
+       * widget reported no stock at all, whatever the shelf held. The existing
+       * tests only asserted over non-empty results and so passed on nothing.
+       *
+       * The credential is not selected: nothing here needs it.
        */
-      const rows = await executor.execute(sql`
-        select
-          to_jsonb(a) as account,
-          to_jsonb(p) as profile,
-          exists (
-            select 1 from issues i
-            where i.account_id = a.id and i.status in ('open', 'in_progress', 'waiting')
-          ) as has_active_problem
-        from (
-          select * from accounts
-          where deleted_at is null and status <> 'deleted' and status <> 'archived'
-          order by created_at asc
-          limit ${limit}
-        ) a
-        left join profiles p on p.account_id = a.id
-        order by a.created_at asc, p.profile_number asc
-      `);
+      /* Every column except the credential, which is never read. */
+      const { passwordEncrypted: _credential, ...accountColumns } = getTableColumns(accounts);
 
-      const byAccount = new Map<
-        string,
-        { account: AccountRow; profiles: ProfileRow[]; hasActiveProblem: boolean }
-      >();
+      const accountRows = await executor
+        .select({ account: accountColumns })
+        .from(accounts)
+        .where(and(accountIsLiveSql, ne(accounts.status, "archived")))
+        .orderBy(asc(accounts.createdAt))
+        .limit(limit);
 
-      for (const raw of rows as unknown as Record<string, unknown>[]) {
-        const account = raw["account"] as AccountRow;
-        const profile = raw["profile"] as ProfileRow | null;
-
-        const existing = byAccount.get(account.id) ?? {
-          account,
-          profiles: [],
-          hasActiveProblem: raw["has_active_problem"] === true,
-        };
-
-        if (profile) {
-          existing.profiles.push(profile);
-        }
-
-        byAccount.set(account.id, existing);
+      if (accountRows.length === 0) {
+        return [];
       }
 
-      return [...byAccount.values()];
+      const ids = accountRows.map((row) => row.account.id);
+
+      const profileRows = await executor
+        .select()
+        .from(profiles)
+        .where(inArray(profiles.accountId, ids))
+        .orderBy(asc(profiles.profileNumber));
+
+      const blocked = await executor
+        .selectDistinct({ accountId: issues.accountId })
+        .from(issues)
+        .where(
+          and(
+            inArray(issues.accountId, ids),
+            inArray(issues.status, ["open", "in_progress", "waiting"]),
+          ),
+        );
+
+      const blockedIds = new Set(blocked.map((row) => row.accountId));
+
+      return accountRows.map(({ account }) => ({
+        /*
+         * evaluateAllocation takes an AccountRow; it never reads the password.
+         * An empty placeholder satisfies the type without the value existing.
+         */
+        account: { ...account, passwordEncrypted: "" },
+        profiles: profileRows.filter((profile) => profile.accountId === account.id),
+        hasActiveProblem: blockedIds.has(account.id),
+      }));
     });
   },
 
@@ -670,10 +651,29 @@ export const dashboardRepository: DashboardRepository = {
   async problemsBySeverity() {
     return databaseAdapter.query("dashboard.problemsBySeverity", async (executor) => {
       const rows = await executor.execute(sql`
-        select severity::text as label, count(*)::int as count
-        from issues
-        where status in ('open', 'in_progress', 'waiting')
-        group by severity
+        select i.severity::text as label, count(*)::int as count
+        from issues i
+        join accounts a on a.id = i.account_id
+        where i.status in ('open', 'in_progress', 'waiting') and ${rawAccountIsLive("a")}
+        group by i.severity
+      `);
+
+      return (rows as unknown as Record<string, unknown>[]).map((row) => ({
+        label: String(row["label"]),
+        count: readNumber(row, "count"),
+      }));
+    });
+  },
+
+  async problemsByType() {
+    return databaseAdapter.query("dashboard.problemsByType", async (executor) => {
+      const rows = await executor.execute(sql`
+        select i.issue_type::text as label, count(*)::int as count
+        from issues i
+        join accounts a on a.id = i.account_id
+        where i.status in ('open', 'in_progress', 'waiting') and ${rawAccountIsLive("a")}
+        group by i.issue_type
+        order by count(*) desc, i.issue_type
       `);
 
       return (rows as unknown as Record<string, unknown>[]).map((row) => ({
@@ -701,15 +701,15 @@ async function seriesByDay(
   return databaseAdapter.query(`dashboard.seriesByDay.${table}`, async (executor) => {
     const rows = await executor.execute(sql`
       select
-        to_char(d.day, 'YYYY-MM-DD') as day,
+        to_char(d.day at time zone 'UTC', 'YYYY-MM-DD') as day,
         coalesce(count(t.id), 0)::int as count
       from generate_series(
-        date_trunc('day', now()) - make_interval(days => ${days - 1}),
-        date_trunc('day', now()),
+        date_trunc('day', now(), 'UTC') - make_interval(days => ${days - 1}),
+        date_trunc('day', now(), 'UTC'),
         interval '1 day'
       ) as d(day)
       left join ${sql.identifier(table)} t
-        on date_trunc('day', t.created_at) = d.day
+        on date_trunc('day', t.created_at, 'UTC') = d.day
       group by d.day
       order by d.day asc
     `);

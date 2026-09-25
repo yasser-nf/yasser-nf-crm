@@ -202,24 +202,22 @@ describe.skipIf(!configured)("dashboard excludes deleted accounts and their prof
   it("every profile bucket is drawn only from live accounts", async () => {
     const observed = await counts();
 
-    const truth = await sql!<Record<string, number>[]>`
-      select
-        count(*)::int as total,
-        count(*) filter (where p.status = 'reserved')::int as reserved,
-        count(*) filter (where p.status = 'sold')::int as sold,
-        count(*) filter (where p.status = 'expiring_soon')::int as expiring_soon,
-        count(*) filter (where p.status = 'expired')::int as expired
+    const truth = await sql!<{ total: number }[]>`
+      select count(*)::int as total
       from public.profiles p
       join public.accounts a on a.id = p.account_id
       where a.deleted_at is null`;
 
-    for (const bucket of ["total", "reserved", "sold", "expiring_soon", "expired"] as const) {
-      const key = bucket === "expiring_soon" ? "expiringSoon" : bucket;
-      expect(
-        (observed.profiles as unknown as Record<string, number>)[key],
-        `${bucket} counts only live accounts`,
-      ).toBe(truth[0]![bucket]);
-    }
+    /*
+     * M04: the buckets are profileCellState display states, disjoint, so
+     * together they must account for exactly the live-account profiles — no
+     * profile on a deleted account can be inside any of them.
+     */
+    const p = observed.profiles;
+    expect(p.total, "total counts only live accounts").toBe(truth[0]!.total);
+    expect(p.available + p.sold + p.expiringSoon + p.expired + p.blocked + p.notForSale).toBe(
+      truth[0]!.total,
+    );
   }, 180_000);
 
   it("archived is not the same thing as deleted", async () => {

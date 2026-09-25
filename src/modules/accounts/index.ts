@@ -39,6 +39,7 @@ export { profilesService } from "./services/profiles.service";
  */
 export {
   accountCanAllocate,
+  accountEffectiveStatus,
   accountRemainingDays,
   canCoverDuration,
   isAccountExpired,
@@ -48,6 +49,7 @@ export {
   profileCellState,
   remainingCustomerDays,
   resolveValidity,
+  type AccountEffectiveStatus,
   type ProfileCellState,
 } from "./services/account-validity";
 

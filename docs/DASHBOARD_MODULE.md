@@ -214,3 +214,50 @@ query permanently.
 | Activity feed is not infinite-scroll | It paginates via the service, but the page renders the first 20; wiring the scroll needs a client component |
 | Revenue is a placeholder | By design, until orders exist |
 | `04_SECURITY.md` does not exist | The M09 brief names it; the actual rank-5 document is `04_UI_GUIDELINES.md`, which is what this module followed |
+
+---
+
+## 11. M04 — every figure from the application's own rules
+
+### Audit (before → after)
+
+| Metric | Was | Problem | Now |
+| ------ | --- | ------- | --- |
+| Accounts: Healthy | `accountMatchesStatusSql('healthy')` | right since M03, but no Expired bucket beside it | `accountEffectiveStatus` → healthy (= `accountCanAllocate`) |
+| Accounts: With problems | distinct live accounts with a blocking issue | an archived account with a problem was also Archived; a fault stored on the account counted nowhere | **Problems** = effective status is a fault (blocking problem, or fault recorded on the account) |
+| Accounts: Expired | — | missing | effective status `expired` |
+| Accounts: Archived | `status = 'archived'` | could overlap With problems | effective status `archived` |
+| Profiles | `profileCellState` tally (M01.5) + stored `reserved` | Reserved never written and already inside Sold; Blocked and Not for sale not shown, so the card did not add up | six `profileCellState` states shown, summing to Total; Reserved removed |
+| Expirations | SQL on `expiration_date` with `current_date` | cumulative, overlapping windows; free slots counted; database time zone | disjoint UTC-day buckets over held allocations, from the same classification |
+| Problems | open / waiting / in progress / resolved today / critical over ALL issues | included problems on deleted accounts; no records-vs-accounts distinction | live accounts only; **Blocking** (records) + accounts affected; payment problems (records + accounts) |
+| Smart stock | `stockCandidates(25)` via `to_jsonb` | snake_case keys → every profile judged "not for sale" → **no stock ever shown**; only the 25 oldest accounts | total = `quickPrepareService.availableStock()`; breakdown via the query builder (camelCase, no credential) |
+| Sales (Quick Prepare) | `date_trunc(…, now())` | session time zone | `date_trunc(…, now(), 'UTC')` |
+| Charts: accounts / customers / backups per day | session-time-zone days | — | UTC days |
+| Chart: problems by severity | blocking problems, all accounts | severity is no longer asked for (M03) | kept, retitled "by stored severity", live accounts only, with the reason stated |
+| Chart: problems by type | — | — | new: blocking problems on live accounts by type |
+| Failed reads | charts, lists and "who's online" became `[]` / forbidden | an outage looked like "no data" or "not your role" | `null` / `"error"` → an explicit error in the widget; "Online" shows "—" |
+
+### Definitions
+
+**Accounts** (live = not soft-deleted): `Healthy + Problems + Expired + Archived = Total`, disjoint, one bucket per account from `accountEffectiveStatus` (`services/account-state-counts.ts`). Blocking problem types come from `problemsService.accountsWithActiveProblems` — the call the Accounts list makes. *Documented exception:* an archived account with an open problem is Archived (M03 precedence: the stored status names it first, as its badge does); it is still in the Problems widget's "accounts affected".
+
+**Profiles**: `Available + Sold + Expiring soon + Expired + Blocked + Not for sale = Total`, one `profileCellState` state each. Available = free and sellable now; free slots on an account that cannot sell (problem, fault, expired validity) are Blocked.
+
+**Stock** = Quick Prepare's `availableStock()` = `Available + resellable expired`. The one legitimate difference from the profile buckets is the recycling rule (03_DATABASE: an expired allocation on a healthy account is available again): those profiles show as Expired, and are also stock. The Profiles card says how many.
+
+**Expirations**: `Today + Tomorrow + In 2–3 days = Expiring soon` (EXPIRING_SOON_DAYS = 3) and `Already expired = Expired`. Held allocations only.
+
+**Problems**: records vs accounts are separate numbers (one account with three problems = 3 blocking, 1 affected). Live accounts only — so the dashboard can show fewer than the Problems page while a problem remains open on a deleted account (reported in M03).
+
+### Dates
+
+All day boundaries are UTC: TypeScript through `remainingDays` (UTC dates), SQL through the three-argument `date_trunc(field, ts, 'UTC')` and `(now() at time zone 'UTC')::date`. An integration test sets the session to UTC+14 and requires identical figures. Shared allocation predicates elsewhere still use `current_date` (production's database is UTC); out of M04 scope.
+
+### Refresh
+
+The page reads the session cookie, so it is rendered per request; every navigation or `router.refresh()` shows current data. Mutations already revalidate their paths; no polling, no background job.
+
+### Performance
+
+`counts()` — 4 aggregate statements; plus one read of live accounts (4 columns), one of their blocking problem types, one of live profiles with account facts, and the list/chart reads — all in parallel. Classification of a few hundred rows happens on the server; nothing reaches the browser but finished numbers.
+
