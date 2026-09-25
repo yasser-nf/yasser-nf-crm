@@ -271,11 +271,20 @@ export function RevenueWidget() {
   );
 }
 
-export function HealthWidget({ health }: { health: HealthReport | null }) {
+export function HealthWidget({ health }: { health: HealthReport | "error" | null }) {
   if (!health) {
     return (
       <Widget title="System health" icon={HeartPulse}>
         <WidgetForbidden />
+      </Widget>
+    );
+  }
+
+  /* Health reads the backup facts; without them it cannot be judged. */
+  if (health === "error") {
+    return (
+      <Widget title="System health" icon={HeartPulse}>
+        <WidgetError message={LOAD_FAILED} />
       </Widget>
     );
   }
@@ -471,11 +480,26 @@ export function UsersCountsWidget({
   );
 }
 
-export function BackupWidget({ backups, now }: { backups: BackupSummary | null; now: Date }) {
+export function BackupWidget({
+  backups,
+  now,
+}: {
+  backups: BackupSummary | "error" | null;
+  now: Date;
+}) {
   if (!backups) {
     return (
       <Widget title="Backups" icon={DatabaseBackup}>
         <WidgetForbidden />
+      </Widget>
+    );
+  }
+
+  /* A failed read is an error — not "not your role", not "no backup ever". */
+  if (backups === "error") {
+    return (
+      <Widget title="Backups" icon={DatabaseBackup}>
+        <WidgetError message={LOAD_FAILED} />
       </Widget>
     );
   }

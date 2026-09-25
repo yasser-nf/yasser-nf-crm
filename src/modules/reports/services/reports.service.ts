@@ -87,7 +87,8 @@ async function healthRows(actor: AppUser): Promise<{ summary: ReportSummary; row
   const { dashboardService } = await import("@/modules/dashboard");
   const dashboard = await dashboardService.load(actor);
 
-  if (!dashboard.ok || !dashboard.value.health) {
+  /* "error": the backup facts health depends on could not be read (M04). */
+  if (!dashboard.ok || !dashboard.value.health || dashboard.value.health === "error") {
     return {
       summary: { overall: "unknown" },
       rows: [{ check: "System health", level: "unknown", detail: "Health could not be read." }],
@@ -100,7 +101,7 @@ async function healthRows(actor: AppUser): Promise<{ summary: ReportSummary; row
     summary: {
       overall: health.level,
       criticalProblems: counts.problems.critical,
-      failedBackups: backups?.failed ?? 0,
+      failedBackups: backups && backups !== "error" ? backups.failed : 0,
       activeUsers: counts.users.active,
     },
     rows: health.findings.map((finding) => ({

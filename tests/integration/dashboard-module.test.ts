@@ -195,8 +195,13 @@ describe.skipIf(!configured)("aggregate queries run against the live schema", ()
     expect(result.ok).toBe(true);
 
     if (result.ok) {
-      expect(["green", "yellow", "red"]).toContain(result.value.health?.level);
-      expect(result.value.health?.findings.length).toBeGreaterThan(0);
+      const health = result.value.health;
+      expect(health).not.toBeNull();
+      expect(health).not.toBe("error");
+      if (health && health !== "error") {
+        expect(["green", "yellow", "red"]).toContain(health.level);
+        expect(health.findings.length).toBeGreaterThan(0);
+      }
     }
   });
 

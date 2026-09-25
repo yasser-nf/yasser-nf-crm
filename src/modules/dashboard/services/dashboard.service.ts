@@ -40,8 +40,13 @@ import { assessHealth, type HealthReport } from "./system-health";
 export interface DashboardData {
   readonly counts: DashboardCounts;
   /** Present only for roles that may see administrative metrics. */
-  readonly backups: BackupSummary | null;
-  readonly health: HealthReport | null;
+  /**
+   * `null` for a role that may not see them; "error" when the backup read
+   * failed. Health depends on that read, so it fails with it rather than
+   * reporting "no backup" from data it never received.
+   */
+  readonly backups: BackupSummary | "error" | null;
+  readonly health: HealthReport | "error" | null;
   /**
    * Who is online. `null` for a role that may not see it; "error" when the
    * read failed — never an empty list standing in for a failure.
@@ -205,31 +210,34 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
   };
 
   const backupSummary = backups && backups.ok ? backups.value : null;
+  const backupReadFailed = backups !== null && !backups.ok;
 
   /*
    * Health is computed from measured facts, never assumed. `databaseReachable`
    * is true only because the counts query above succeeded — if it had failed,
    * this function returned already.
    */
-  const health: HealthReport | null = isAdmin
-    ? assessHealth(
-        {
-          criticalProblems: counts.value.problems.critical,
-          failedBackups: backupSummary?.failed ?? 0,
-          lastBackupAt: backupSummary?.lastBackupAt ?? null,
-          lastChecksumVerified: backupSummary?.lastChecksumVerified ?? false,
-          databaseReachable: true,
-        },
-        today,
-      )
-    : null;
+  const health: HealthReport | "error" | null = !isAdmin
+    ? null
+    : backupReadFailed
+      ? "error"
+      : assessHealth(
+          {
+            criticalProblems: counts.value.problems.critical,
+            failedBackups: backupSummary?.failed ?? 0,
+            lastBackupAt: backupSummary?.lastBackupAt ?? null,
+            lastChecksumVerified: backupSummary?.lastChecksumVerified ?? false,
+            databaseReachable: true,
+          },
+          today,
+        );
 
   const list = (result: Awaited<ReturnType<typeof problemsService.list>>) =>
     result.ok ? result.value.items : null;
 
   return ok({
     counts: dashboardCounts,
-    backups: backupSummary,
+    backups: !isAdmin ? null : backupReadFailed ? "error" : backupSummary,
     health,
     onlineUsers: onlineUsers === null ? null : onlineUsers.ok ? onlineUsers.value : "error",
     problems: {
