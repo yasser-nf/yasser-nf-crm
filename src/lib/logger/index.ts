@@ -1,4 +1,4 @@
-import { isAppError } from "@/lib/errors";
+import { describeCause, isAppError } from "@/lib/errors";
 
 /**
  * Application logger.
@@ -56,15 +56,16 @@ export const logger = {
   },
 
   /**
-   * Logs a failure. Unknown values are stringified rather than spread, so a
-   * third-party error object cannot leak fields we have not inspected.
+   * Logs a failure. Unknown values are described rather than spread or
+   * stringified, so neither a field we have not inspected nor a failed
+   * query's bound values can reach the log (M06).
    */
   error(message: string, error?: unknown, context?: LogContext): void {
     const errorDetail = isAppError(error)
       ? error.toLogObject()
       : error === undefined
         ? undefined
-        : { message: String(error) };
+        : { message: describeCause(error) };
 
     write("error", message, {
       ...context,

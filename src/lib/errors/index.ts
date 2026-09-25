@@ -15,3 +15,4 @@ export {
   type AppErrorOptions,
   type ErrorSeverity,
 } from "./app-error";
+export { PARAMS_REDACTED, describeCause, scrubErrorText } from "./log-safe";

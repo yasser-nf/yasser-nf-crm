@@ -1,5 +1,6 @@
 import { identifierSearchKeys } from "@/lib/phone";
 import { PROBLEM_TYPE_LABELS } from "@/shared/ui/problem-badges";
+import { escapeLike } from "@/utils/like";
 
 /**
  * Turning what someone typed into what the search queries look for.
@@ -42,16 +43,8 @@ export interface SearchTerms {
   readonly idPrefix: string | null;
 }
 
-/**
- * Escapes LIKE's wildcards so they match literally.
- *
- * Without it "a_b" would match "axb", and a query of "%" would match every row
- * of every table — a trivially expensive search anyone could type. PostgreSQL's
- * default LIKE escape character is the backslash, so no ESCAPE clause is needed.
- */
-export function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
-}
+/* Escaping lives in utils/like.ts, shared with the Logs search (M06). */
+export { escapeLike };
 
 /** The query as the service will use it, or null when it is too short to search. */
 export function normalizeQuery(raw: string): string | null {

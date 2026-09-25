@@ -262,7 +262,11 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
     return phone;
   }
 
-  const customerResult = await customersService.findOrCreateByPhone(request.phone);
+  const customerResult = await customersService.findOrCreateByPhone(
+    request.phone,
+    undefined,
+    context,
+  );
 
   if (!customerResult.ok) {
     return customerResult;

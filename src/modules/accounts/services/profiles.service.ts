@@ -245,7 +245,11 @@ async function updateProfile(
   let resolvedCustomerId: string | undefined;
 
   if (changes.customerPhone !== undefined) {
-    const customer = await customersService.findOrCreateByPhone(changes.customerPhone);
+    const customer = await customersService.findOrCreateByPhone(
+      changes.customerPhone,
+      undefined,
+      context,
+    );
 
     if (!customer.ok) {
       return fail(

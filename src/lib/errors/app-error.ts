@@ -12,6 +12,8 @@
  * should ever see.
  */
 
+import { describeCause, scrubErrorText } from "./log-safe";
+
 /** Matches the severity ladder in 05_DEVELOPMENT_WORKFLOW.md. */
 export type ErrorSeverity = "low" | "medium" | "high" | "critical";
 
@@ -61,16 +63,22 @@ export abstract class AppError extends Error {
     return this.#userMessageOverride ?? this.defaultUserMessage;
   }
 
-  /** Log-safe representation. Deliberately excludes the stack trace. */
+  /**
+   * Log-safe representation. Deliberately excludes the stack trace.
+   *
+   * The cause is described, never stringified: `String(cause)` on a failed
+   * Drizzle query is "Failed query: … params: <every bound value>", which wrote
+   * PINs and whole audit snapshots to the logs (M06). See log-safe.ts.
+   */
   toLogObject(): Record<string, unknown> {
     return {
       name: this.name,
       code: this.code,
       severity: this.severity,
-      message: this.message,
+      message: scrubErrorText(this.message),
       isOperational: this.isOperational,
       ...(this.context ? { context: this.context } : {}),
-      ...(this.cause ? { cause: String(this.cause) } : {}),
+      ...(this.cause ? { cause: describeCause(this.cause) } : {}),
     };
   }
 }
@@ -235,7 +243,8 @@ export function toAppError(value: unknown): AppError {
   }
 
   if (value instanceof Error) {
-    return new UnexpectedError(value.message, { cause: value });
+    /* Scrubbed: a wrapped query error's message carries its bound values. */
+    return new UnexpectedError(scrubErrorText(value.message), { cause: value });
   }
 
   return new UnexpectedError(String(value), { cause: value });

@@ -68,6 +68,12 @@ export interface FindOrCreateResult {
 async function findOrCreateByPhone(
   phoneInput: string,
   notes?: string | undefined,
+  /**
+   * Who is creating the customer. When given, a newly created customer is
+   * audited (M06): before it, customers appeared from Quick Prepare and profile
+   * edits with no record of their creation at all.
+   */
+  context?: AuditContext,
 ): Promise<Result<FindOrCreateResult>> {
   const phone = normalizeIdentifier(phoneInput);
 
@@ -94,6 +100,13 @@ async function findOrCreateByPhone(
   });
 
   if (created.ok) {
+    if (context) {
+      await auditService.recordOrWarn(
+        { entity: "customer", entityId: created.value.id, action: "create", after: created.value },
+        context,
+      );
+    }
+
     return ok({ customer: created.value, created: true });
   }
 
