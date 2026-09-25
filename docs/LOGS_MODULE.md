@@ -58,14 +58,24 @@ unknown events are humanised from their stored name.
 - `describeCause` reads only `name`, `code` and `message` along the cause chain (depth 4, cycles
   cut); it never spreads or stringifies an unknown object, so `params`/`parameters` cannot ride
   along.
-- `scrubErrorText` replaces Drizzle's `params: …` tail with `params: [redacted]` and blanks values
-  PostgreSQL echoes (`invalid input syntax for type integer: "[redacted]"`).
+- `scrubErrorText` removes bound values three ways, because PostgreSQL echoes input in many
+  phrasings and no list of phrasings is complete:
+  1. Drizzle's `params: …` tail becomes `params: [redacted]`.
+  2. **By value:** every bound value found in the chain (`boundValues`: Drizzle `params`,
+     postgres.js `parameters`) is redacted wherever it appears, as a whole token (values under three
+     characters are left alone so `$1` placeholders survive).
+  3. **By class:** in SQLSTATE class 22 (data exception) messages every quoted literal is blanked.
 - Applied in `AppError.toLogObject` (message and cause), `toAppError`, and `logger.error` for
   non-AppError values.
 
 Kept: error names, SQLSTATE, the parameterised SQL text, the database's message, the operation
-name. Regression tests use a real `DrizzleQueryError` and a real failing query against the isolated
-database.
+name. The integration suite runs six real failing queries carrying a PIN-like value — integer out of
+range, date/time out of range, malformed array, invalid uuid, invalid enum, invalid integer — and
+checks the captured log. (The first M06 fix covered only "invalid input syntax"; the M06 review found
+the first three still leaked.)
+
+The audit repository is not exported from the module barrel: outside `modules/audit`, the log is
+read only through `logsService`.
 
 ## 5. Audit failure semantics
 

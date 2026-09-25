@@ -12,7 +12,7 @@
  * should ever see.
  */
 
-import { describeCause, scrubErrorText } from "./log-safe";
+import { boundValues, describeCause, scrubErrorText } from "./log-safe";
 
 /** Matches the severity ladder in 05_DEVELOPMENT_WORKFLOW.md. */
 export type ErrorSeverity = "low" | "medium" | "high" | "critical";
@@ -75,7 +75,7 @@ export abstract class AppError extends Error {
       name: this.name,
       code: this.code,
       severity: this.severity,
-      message: scrubErrorText(this.message),
+      message: scrubErrorText(this.message, boundValues(this.cause)),
       isOperational: this.isOperational,
       ...(this.context ? { context: this.context } : {}),
       ...(this.cause ? { cause: describeCause(this.cause) } : {}),
@@ -244,7 +244,7 @@ export function toAppError(value: unknown): AppError {
 
   if (value instanceof Error) {
     /* Scrubbed: a wrapped query error's message carries its bound values. */
-    return new UnexpectedError(scrubErrorText(value.message), { cause: value });
+    return new UnexpectedError(scrubErrorText(value.message, boundValues(value)), { cause: value });
   }
 
   return new UnexpectedError(String(value), { cause: value });

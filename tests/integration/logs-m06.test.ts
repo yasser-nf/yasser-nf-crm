@@ -286,28 +286,51 @@ describe.skipIf(!local)("new audit coverage: customer creation", () => {
 });
 
 describe.skipIf(!local)("a real failed query logs no bound values", () => {
-  it("the adapter's error log omits the parameter and the value PostgreSQL echoes", async () => {
-    const { databaseAdapter } = await import("@/lib/database");
-    const { sql: drizzleSql } = await import("drizzle-orm");
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  /*
+   * PostgreSQL echoes the offending input in many phrasings. Each case binds a
+   * PIN-bearing value and makes the database reject it a different way; the
+   * log must keep what diagnoses the failure and lose every trace of the value.
+   * (M06 review: the first fix covered only "invalid input syntax", and the
+   * first three cases below leaked.)
+   */
+  const CASES = [
+    ["integer out of range", `9${SECRET_PIN}99999999`, "int", "22003"],
+    ["date/time out of range", `${SECRET_PIN}-99-99`, "date", "22008"],
+    ["malformed array literal", `{${SECRET_PIN}`, "int[]", "22P02"],
+    ["invalid uuid", `PIN${SECRET_PIN}`, "uuid", "22P02"],
+    ["invalid enum value", `PIN${SECRET_PIN}`, "audit_action", "22P02"],
+    ["invalid integer", `PIN-${SECRET_PIN}`, "int", "22P02"],
+  ] as const;
 
-    try {
-      const result = await databaseAdapter.query("test.failedPinQuery", (executor) =>
-        executor.execute(drizzleSql`select ${`PIN-${SECRET_PIN}`}::int`),
-      );
+  it.each(CASES)(
+    "%s: logged with its SQLSTATE and operation, without the value",
+    async (_label, value, type, sqlState) => {
+      const { databaseAdapter } = await import("@/lib/database");
+      const { sql: drizzleSql } = await import("drizzle-orm");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-      expect(result.ok).toBe(false);
-      const written = [...spy.mock.calls, ...warn.mock.calls]
-        .map((call) => String(call[0]))
-        .join("\n");
-      expect(written).toContain("test.failedPinQuery");
-      expect(written).not.toContain(SECRET_PIN);
-    } finally {
-      spy.mockRestore();
-      warn.mockRestore();
-    }
-  });
+      try {
+        const result = await databaseAdapter.query("test.failedPinQuery", (executor) =>
+          executor.execute(drizzleSql`select ${value}::${drizzleSql.raw(type)}`),
+        );
+
+        expect(result.ok).toBe(false);
+        const written = [...spy.mock.calls, ...warn.mock.calls]
+          .map((call) => String(call[0]))
+          .join("\n");
+        /* Still useful. */
+        expect(written).toContain("test.failedPinQuery");
+        expect(written).toContain(`PostgresError[${sqlState}]`);
+        expect(written).toContain("Failed query: select $1::");
+        /* And empty of the value, whole or in part. */
+        expect(written).not.toContain(SECRET_PIN);
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+      }
+    },
+  );
 });
 
 describe.skipIf(!local)("the database layer: browser roles never read audit_logs", () => {

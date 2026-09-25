@@ -4,7 +4,11 @@
  * Deliberately exposes no way to modify or delete a log entry.
  */
 export type { AuditRepository, AuditFilter } from "./repositories/audit.repository";
-export { auditRepository } from "./repositories/audit.repository";
+/*
+ * The repository itself is NOT exported (M06). It can read every entry,
+ * snapshots included; outside this module the log is read only through
+ * `logsService`, which checks view_logs first and returns safe entries.
+ */
 
 export { auditService, type AuditContext, type RecordAuditInput } from "./services/audit.service";
 

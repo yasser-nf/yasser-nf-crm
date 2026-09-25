@@ -12,7 +12,7 @@ import { fail, ok } from "@/utils/result";
 const repo = { listForLogs: vi.fn(), userNames: vi.fn(), record: vi.fn(), list: vi.fn() };
 vi.mock("@/modules/audit/repositories/audit.repository", () => ({ auditRepository: repo }));
 
-const { DatabaseError, UnexpectedError, describeCause, scrubErrorText, toAppError } =
+const { DatabaseError, UnexpectedError, boundValues, describeCause, scrubErrorText, toAppError } =
   await import("@/lib/errors");
 const { logger } = await import("@/lib/logger");
 const {
@@ -97,6 +97,35 @@ describe("a failed query never writes its bound values to the logs", () => {
       'invalid input syntax for type integer: "[redacted]"',
     );
     expect(scrubErrorText('invalid input value for enum audit_action: "x"')).not.toContain('"x"');
+  });
+
+  it("redacts every bound value from the chain, whatever PostgreSQL's phrasing", () => {
+    const echoed = Object.assign(new Error(`value "9${PIN}99" is out of range for type integer`), {
+      name: "PostgresError",
+      code: "22003",
+    });
+    const error = new DrizzleQueryError("select $1::int", [`9${PIN}99`], echoed);
+
+    expect(boundValues(error)).toEqual([`9${PIN}99`]);
+    expect(describeCause(error)).not.toContain(PIN);
+    expect(describeCause(error)).toContain("PostgresError[22003]");
+  });
+
+  it("redacts values as whole tokens only: placeholders and short values survive", () => {
+    expect(scrubErrorText("select $1 where x = 4821 and y = 48210", ["4821"])).toBe(
+      "select $1 where x = [redacted] and y = 48210",
+    );
+    expect(scrubErrorText("select $1", ["1", "$1"])).toBe("select $1");
+  });
+
+  it("blanks every quoted literal in a data-exception (class 22) message", () => {
+    expect(scrubErrorText('date/time field value out of range: "4821-99-99"', [], "22008")).toBe(
+      'date/time field value out of range: "[redacted]"',
+    );
+    /* Outside class 22, quoted identifiers stay: they diagnose. */
+    expect(scrubErrorText('relation "profiles" does not exist', [], "42P01")).toContain(
+      '"profiles"',
+    );
   });
 
   it("never spreads an unknown object: its fields cannot ride along", () => {
