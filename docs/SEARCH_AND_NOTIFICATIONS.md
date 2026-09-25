@@ -45,6 +45,9 @@ that answered "which profile has PIN 4821" would itself be the disclosure.
 - Phone fragments go through `identifierSearchKeys` in the Phone Engine, which strips the same
   prefixes `normalizeIdentifier` strips from a whole number: `0663 94` → `66394`,
   `+213 663` → `663`, `00974 7160` → `9747160`, `@RAH` → `@rah`. No second phone format exists.
+  Only phone-shaped input (digits, a leading `+`, spaces, `().-/`) yields phone keys: digits
+  inside other text (`user123@icloud.com`, `kids 2024`) are not a number and match no customer's
+  phone.
 
 ### Limits
 
@@ -74,6 +77,13 @@ Users. The whole search requires `search`.
 
 If the blocking-problem lookup fails, Accounts and Profiles report an error rather than a badge that
 might call a blocked account Healthy.
+
+### Client cache
+
+Answers are cached in the browser for 30 s, keyed by the signed-in user as well as the text. The
+query client outlives a session that ends without the Sign out button (expiry, sign-out in another
+tab), so a key without the user could show one person's answer — with its Users group — to the next
+person signed in on that tab. Notifications are keyed the same way.
 
 ### Performance
 

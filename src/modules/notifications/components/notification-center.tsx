@@ -3,10 +3,11 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { AlertTriangle, Bell, CheckCheck } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ActionError } from "@/lib/errors";
+import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -44,6 +45,16 @@ import {
 
 export const NOTIFICATIONS_QUERY_KEY = ["notifications"] as const;
 
+/**
+ * The cache entry is per person. The query client outlives a session that ends
+ * without the Sign out button (expiry, or signing out in another tab), so a
+ * key without the user would let the next person to sign in on this tab see
+ * the previous person's notifications until the entry went stale.
+ */
+function notificationsKey(userId: string | undefined) {
+  return [...NOTIFICATIONS_QUERY_KEY, userId ?? "anonymous"] as const;
+}
+
 function unwrap<T>(result: ActionResult<T>): T {
   if (result.ok) {
     return result.data;
@@ -79,9 +90,12 @@ export function NotificationCenter() {
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const { user } = useAuth();
+  const userId = user?.id;
+  const queryKey = useMemo(() => notificationsKey(userId), [userId]);
 
   const summary = useQuery({
-    queryKey: NOTIFICATIONS_QUERY_KEY,
+    queryKey,
     queryFn: async () => unwrap(await getNotificationsAction()),
   });
 
@@ -97,13 +111,13 @@ export function NotificationCenter() {
     }
 
     void queryClient.refetchQueries(
-      { queryKey: NOTIFICATIONS_QUERY_KEY, stale: true },
+      { queryKey, stale: true },
       /* Never duplicates a request already in flight. */
       { cancelRefetch: false },
     );
-  }, [pathname, queryClient]);
+  }, [pathname, queryClient, queryKey]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey });
 
   const markRead = useMutation({
     mutationFn: async (id: string) => unwrap(await markNotificationReadAction(id)),

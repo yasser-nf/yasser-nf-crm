@@ -243,6 +243,9 @@ export function normalizeIdentifier(input: string): Result<NormalizedIdentifier>
 /** Fewer digits than this match too much of the customer base to mean anything. */
 export const MIN_SEARCH_DIGITS = 3;
 
+/** Digits, a leading plus, and the separators people type between digit groups. */
+const PHONE_SHAPED = /^\+?[\d\s().\-/]+$/;
+
 /**
  * What to look for in `phone_normalized` when someone types PART of an
  * identifier into a search box.
@@ -261,12 +264,21 @@ export const MIN_SEARCH_DIGITS = 3;
  *
  * Every result is a SUBSTRING to look for, never an identity: this is for
  * finding customers, not for deciding who a customer is.
+ *
+ * Only input that is shaped like a phone number — digits and the characters
+ * people write between them — yields keys. Digits inside other text are not a
+ * phone: "user123@icloud.com" or "kids 2024" must not list every customer whose
+ * number happens to contain 123 or 2024.
  */
 export function identifierSearchKeys(input: string): string[] {
   const original = input.trim();
 
   if (original.startsWith("@")) {
     return original.length > 1 ? [original.toLowerCase()] : [];
+  }
+
+  if (!PHONE_SHAPED.test(original)) {
+    return [];
   }
 
   const cleaned = stripFormatting(original);

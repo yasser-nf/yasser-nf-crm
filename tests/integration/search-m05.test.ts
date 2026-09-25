@@ -35,6 +35,7 @@ const ids: {
   customer?: string;
   handleCustomer?: string;
   problem?: string;
+  deletedProblem?: string;
 } = {};
 
 async function services() {
@@ -104,9 +105,21 @@ beforeAll(async () => {
     await makeAccount(`bulk${index}`);
   }
 
+  const { problemsService } = await services();
+
+  /* A problem and a named profile on the account that is then deleted. */
+  const onDeleted = await problemsService.report(
+    { accountId: ids.deleted, issueType: "invalid_email", description: "" },
+    { actor: admin },
+  );
+  if (!onDeleted.ok) throw new Error(onDeleted.error.message);
+  ids.deletedProblem = onDeleted.value.id;
+  await sql!`
+    update profiles set profile_name = ${`Gone ${TAG}`}
+    where account_id = ${ids.deleted}::uuid and profile_number = 1`;
+
   await sql!`update accounts set deleted_at = now() where id = ${ids.deleted}::uuid`;
 
-  const { problemsService } = await services();
   const reported = await problemsService.report(
     { accountId: ids.blocked, issueType: "payment_problem", description: "card declined" },
     { actor: admin },
@@ -158,6 +171,16 @@ describe.skipIf(!local)("accounts", () => {
 
   it("does not find a soft-deleted account", async () => {
     expect(group(await search(`${TAG}-gone`), "accounts").hits).toEqual([]);
+  });
+
+  it("excludes the deleted account's profiles and problems too", async () => {
+    const response = await search(`${TAG}-gone`);
+
+    expect(group(await search(`gone ${TAG}`), "profiles").hits).toEqual([]);
+    expect(group(response, "problems").hits).toEqual([]);
+    expect(
+      group(await search("invalid email"), "problems").hits.map((hit) => hit.id),
+    ).not.toContain(ids.deletedProblem);
   });
 
   it("shows at most five, says more exist, and links to the Accounts search", async () => {
@@ -228,6 +251,13 @@ describe.skipIf(!local)("customers", () => {
     const hits = group(await search("@RAHIMOU"), "customers").hits;
 
     expect(hits.map((hit) => hit.id)).toContain(ids.handleCustomer);
+  });
+
+  it("digits inside an email are not a phone number: no unrelated customers", async () => {
+    /* The seed customer's number is 550000001; this is an email, not that phone. */
+    const response = await search("mail550000@example.invalid");
+
+    expect(group(response, "customers").hits).toEqual([]);
   });
 
   it("does not search or return private notes", async () => {

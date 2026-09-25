@@ -448,6 +448,39 @@ describe.skipIf(!local)("the table protects itself", () => {
     expect(policies.map((policy) => policy.cmd)).toEqual(["SELECT"]);
   });
 
+  it("refuses every browser role outright — read, insert, update, delete (grants come before RLS)", async () => {
+    const [row] = await sql!<{ id: string }[]>`
+      select id from notifications where recipient_id = ${admin.id}::uuid limit 1`;
+
+    const statements = [
+      (tx: postgres.TransactionSql) => tx`select id from notifications limit 1`,
+      (tx: postgres.TransactionSql) =>
+        tx`insert into notifications (recipient_id, type, title, dedupe_key)
+           values (${admin.id}::uuid, 'problem_reported', 'forged', 'forged')`,
+      (tx: postgres.TransactionSql) =>
+        tx`update notifications set read_at = now() where id = ${row!.id}::uuid`,
+      (tx: postgres.TransactionSql) => tx`delete from notifications where id = ${row!.id}::uuid`,
+    ];
+
+    for (const role of ["anon", "authenticated"]) {
+      for (const statement of statements) {
+        await expect(
+          sql!.begin(async (tx) => {
+            await tx.unsafe(`set local role ${role}`);
+            /* Even as the recipient themselves. */
+            await tx`select set_config('request.jwt.claim.sub', ${admin.id}, true)`;
+            await statement(tx);
+          }),
+          role,
+        ).rejects.toThrow(/permission denied/);
+      }
+    }
+
+    const [still] = await sql!<{ read_at: Date | null }[]>`
+      select read_at from notifications where id = ${row!.id}::uuid`;
+    expect(still).toBeDefined();
+  });
+
   it("rejects an unknown type and a duplicate event key at the database", async () => {
     await expect(sql!`
       insert into notifications (recipient_id, type, title, dedupe_key)

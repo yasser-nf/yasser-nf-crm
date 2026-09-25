@@ -33,6 +33,12 @@ vi.mock("@/modules/search/actions/search.actions", () => ({
   globalSearchAction: (query: string) => globalSearchAction(query),
 }));
 
+/* Who is signed in. Mutable so a test can hand the same tab to someone else. */
+let currentUser = { id: "00000000-0000-4000-8000-00000000000a", role: "super_admin" };
+vi.mock("@/providers/auth-provider", () => ({
+  useAuth: () => ({ user: currentUser, isAuthenticated: true }),
+}));
+
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 const { NotificationCenter } =
@@ -127,6 +133,32 @@ describe("NotificationCenter", () => {
 
     await waitFor(() => expect(markNotificationReadAction).toHaveBeenCalledWith(UNREAD.id));
     expect(push).toHaveBeenCalledWith(`/problems/${PROBLEM}`);
+  });
+
+  it("never shows one person's cached notifications to the next person on the same tab", async () => {
+    /* One query client for both, as in the browser: it outlives a session ending. */
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (node: React.ReactNode) => (
+      <QueryClientProvider client={client}>{node}</QueryClientProvider>
+    );
+
+    getNotificationsAction.mockResolvedValueOnce({
+      ok: true,
+      data: { items: [UNREAD], unreadCount: 3 },
+    });
+    const first = render(wrap(<NotificationCenter />));
+    await screen.findByRole("button", { name: "Notifications — 3 unread" });
+    first.unmount();
+
+    /* Someone else signs in on this tab, well inside the 30-second cache window. */
+    currentUser = { id: "00000000-0000-4000-8000-00000000000b", role: "worker" };
+    getNotificationsAction.mockResolvedValueOnce({ ok: true, data: { items: [], unreadCount: 0 } });
+    render(wrap(<NotificationCenter />));
+
+    expect(screen.queryByRole("button", { name: /3 unread/ })).toBeNull();
+    await screen.findByRole("button", { name: "Notifications" });
+    expect(getNotificationsAction).toHaveBeenCalledTimes(2);
+    currentUser = { id: "00000000-0000-4000-8000-00000000000a", role: "super_admin" };
   });
 
   it("mark all as read calls the server once", async () => {

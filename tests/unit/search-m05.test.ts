@@ -93,12 +93,19 @@ describe("phone fragments come from the Phone Engine", () => {
     ["00974 7160", ["009747160", "9747160"]],
     ["0663947116", ["0663947116", "663947116"]],
     ["@RAH", ["@rah"]],
+    ["(0663) 94-71", ["06639471", "6639471"]],
+    ["0663.94.71.16", ["0663947116", "663947116"]],
   ])("%s → %j", (input, keys) => {
     expect(identifierSearchKeys(input).sort()).toEqual([...keys].sort());
   });
 
   it("returns nothing for text or for fewer than three digits", () => {
     expect(identifierSearchKeys("karim")).toEqual([]);
+    /* Digits inside other text are not a phone number (M05 review). */
+    expect(identifierSearchKeys("user123@icloud.com")).toEqual([]);
+    expect(identifierSearchKeys("kids 2024")).toEqual([]);
+    expect(identifierSearchKeys("acc0663947@x.com")).toEqual([]);
+    expect(identifierSearchKeys("06 63 ab")).toEqual([]);
     expect(identifierSearchKeys("06")).toEqual([]);
     expect(identifierSearchKeys("@")).toEqual([]);
   });

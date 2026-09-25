@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useState } from "react";
 
 import { ActionError } from "@/lib/errors";
+import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -103,6 +104,7 @@ export function GlobalSearch() {
 
 function SearchPanel({ onNavigate }: { onNavigate: () => void }) {
   const router = useRouter();
+  const { user } = useAuth();
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
@@ -112,7 +114,12 @@ function SearchPanel({ onNavigate }: { onNavigate: () => void }) {
   const typing = normalizeQuery(text) !== query;
 
   const search = useQuery({
-    queryKey: [SEARCH_QUERY_KEY, query],
+    /*
+     * Per person, like the notifications: what a search returns depends on who
+     * asks (a Super Admin's answer has a Users group), so one person's cached
+     * answer must never be served to the next person signed in on this tab.
+     */
+    queryKey: [SEARCH_QUERY_KEY, user?.id ?? "anonymous", query],
     queryFn: () => runSearch(query ?? ""),
     enabled: query !== null,
     staleTime: 30_000,
