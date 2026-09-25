@@ -25,10 +25,13 @@ Eight tables.
 | `audit_logs` | System audit trail | **Append-only, immutable** |
 | `backups` | Backup metadata | Mutable lifecycle |
 | `settings` | Global settings | Single row |
+| `notifications` | In-app notices, one per recipient (M05, migration 0014) | Mutable `read_at` only; removed with their problem |
 
 ### Deferred (ADR-005 Decision 1)
 
-`orders` · `issues` · `timeline_events` · `notifications`
+`orders` · `issues` · `timeline_events`
+
+(`notifications` arrived in M05 — see below and `docs/SEARCH_AND_NOTIFICATIONS.md`.)
 
 Two consequences worth stating plainly:
 
@@ -162,6 +165,19 @@ is not yet known to be restorable.
 `values` is an open record because no document specifies a concrete setting.
 Settings should be promoted to typed columns as they are defined — jsonb is the
 honest placeholder, not the destination.
+
+### notifications (M05)
+
+`id`, `recipient_id` → users (cascade), `actor_id` → users (set null), `type`
+(checked: `problem_reported`, `problem_assigned`, `problem_resolved`,
+`problem_reopened`), `title`, `body`, `entity_type` + `entity_id` (both or
+neither; no foreign key — resolved to a route by a closed map), `dedupe_key`,
+`read_at`, `created_at`.
+
+Unique `(recipient_id, dedupe_key)` makes a repeated event a no-op. Indexed by
+`(recipient_id, created_at desc)` for the panel and partially by `recipient_id
+where read_at is null` for the unread count. RLS on, no grants to `anon` or
+`authenticated`, and a single SELECT policy on the recipient's own rows.
 
 ---
 

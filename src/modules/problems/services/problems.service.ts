@@ -14,6 +14,7 @@ import {
   type ProblemListEntry,
 } from "../repositories/problems.repository";
 import { createProblemSchema, updateProblemSchema } from "../validation/problem.schema";
+import { problemNotifications } from "./problem-notifications";
 import {
   canTransition,
   explainRefusal,
@@ -176,6 +177,8 @@ async function report(input: unknown, context: AuditContext): Promise<Result<Iss
     context,
   );
 
+  await problemNotifications.reported(created.value, context);
+
   return created;
 }
 
@@ -336,6 +339,8 @@ async function remove(id: string, context: AuditContext): Promise<Result<IssueRo
     { entity: "issue", entityId: id, action: "delete", before: before.value },
     context,
   );
+
+  await problemNotifications.removed(id);
 
   return removed;
 }

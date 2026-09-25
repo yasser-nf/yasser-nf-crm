@@ -10,6 +10,7 @@ import { fail, ok } from "@/utils/result";
 import { problemsRepository } from "../repositories/problems.repository";
 import { reopenProblemSchema, resolveProblemSchema } from "../validation/problem.schema";
 import { canTransition, explainRefusal } from "./problem-lifecycle";
+import { problemNotifications } from "./problem-notifications";
 import { assertMayMutate } from "./problems.service";
 
 /**
@@ -110,6 +111,8 @@ async function resolve(
     context,
   );
 
+  await problemNotifications.resolved(updated.value, context);
+
   return updated;
 }
 
@@ -179,6 +182,8 @@ async function reopen(
     userId: actor.id,
     body: `Reopened: ${parsed.data.reason}`,
   });
+
+  await problemNotifications.reopened(updated.value, context);
 
   return updated;
 }

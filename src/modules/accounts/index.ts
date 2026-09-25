@@ -89,6 +89,7 @@ export { BulkAccountsDialog } from "./components/bulk-accounts-dialog";
 export {
   AccountStatusBadge,
   ProfileStatusBadge,
+  accountBadgeStyle,
   accountStatusLabel,
   ACCOUNT_STATUS_OPTIONS,
 } from "./components/status-badge";

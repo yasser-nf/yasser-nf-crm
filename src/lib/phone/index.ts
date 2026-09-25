@@ -240,6 +240,63 @@ export function normalizeIdentifier(input: string): Result<NormalizedIdentifier>
   return fail(invalidIdentifier(original));
 }
 
+/** Fewer digits than this match too much of the customer base to mean anything. */
+export const MIN_SEARCH_DIGITS = 3;
+
+/**
+ * What to look for in `phone_normalized` when someone types PART of an
+ * identifier into a search box.
+ *
+ * `normalizeIdentifier` only accepts a whole number, but people search with
+ * fragments — "0663 94", "+213 663", "@rah". A fragment cannot be normalized,
+ * yet the stored key is always the normalized form, so the prefixes the engine
+ * strips from a whole number are stripped from the fragment the same way:
+ *
+ *   0663 94      →  066394, 66394       national trunk 0 dropped
+ *   +213 663 94  →  21366394, 66394     Algeria keeps national digits only
+ *   00213 663    →  00213663, 663
+ *   00974 7160   →  009747160, 9747160  other countries key without 00 / +
+ *   663947116    →  663947116           a whole number: its exact key
+ *   @RAH         →  @rah                handles are stored lower-cased
+ *
+ * Every result is a SUBSTRING to look for, never an identity: this is for
+ * finding customers, not for deciding who a customer is.
+ */
+export function identifierSearchKeys(input: string): string[] {
+  const original = input.trim();
+
+  if (original.startsWith("@")) {
+    return original.length > 1 ? [original.toLowerCase()] : [];
+  }
+
+  const cleaned = stripFormatting(original);
+  const hadPlus = cleaned.startsWith("+");
+  const digits = cleaned.replace(/\D/g, "");
+
+  if (digits.length < MIN_SEARCH_DIGITS) {
+    return [];
+  }
+
+  const keys = new Set<string>([digits]);
+  const whole = normalizeIdentifier(original);
+
+  if (whole.ok) {
+    keys.add(whole.value.normalized);
+  }
+
+  if (digits.startsWith(`00${ALGERIA_COUNTRY_CODE}`)) {
+    keys.add(digits.slice(2 + ALGERIA_COUNTRY_CODE.length));
+  } else if (hadPlus && digits.startsWith(ALGERIA_COUNTRY_CODE)) {
+    keys.add(digits.slice(ALGERIA_COUNTRY_CODE.length));
+  } else if (digits.startsWith("00")) {
+    keys.add(digits.slice(2));
+  } else if (digits.startsWith("0")) {
+    keys.add(digits.slice(1));
+  }
+
+  return [...keys].filter((key) => key.length >= MIN_SEARCH_DIGITS);
+}
+
 /**
  * Builds the click-to-chat URL for an Algerian national number.
  *

@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 
 import { ROUTES } from "@/config/constants";
 import { getCurrentUser } from "@/lib/auth/session";
+import { NotificationCenter } from "@/modules/notifications";
+import { GlobalSearch } from "@/modules/search";
 import { AppShell } from "@/shared/layouts/app-shell";
 
 /**
@@ -19,5 +21,9 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
     redirect(ROUTES.LOGIN);
   }
 
-  return <AppShell>{children}</AppShell>;
+  return (
+    <AppShell search={<GlobalSearch />} notifications={<NotificationCenter />}>
+      {children}
+    </AppShell>
+  );
 }

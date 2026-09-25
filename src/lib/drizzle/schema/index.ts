@@ -8,7 +8,7 @@
  * `@/lib/drizzle/client` — ADR-005 Decision 5 places the architectural boundary
  * at the connection, not at the query builder. ESLint enforces it.
  *
- * Deferred tables (ADR-005 Decision 1): orders, notifications.
+ * Deferred tables (ADR-005 Decision 1): orders. `notifications` arrived in M05.
  *
  * `issues` arrived in M08 and `timeline_events` was cancelled outright by
  * ADR-006 Decision 1, so neither is deferred any longer.
@@ -27,5 +27,6 @@ export * from "./login-history";
 export * from "./backups";
 export * from "./settings";
 export * from "./report-presets";
+export * from "./notifications";
 
 export * from "./relations";

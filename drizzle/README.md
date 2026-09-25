@@ -28,6 +28,15 @@ The migrator applies by timestamp: everything newer than the last recorded `crea
 next `drizzle-kit migrate` against production therefore applies **0012 and 0013 together**.
 Deploy the application code first — 0013 must run after the code stops writing PINs.
 
+## M05: 0014_notifications
+
+`0014_notifications` adds one table (`notifications`), its two foreign keys, four indexes and its
+RLS lockdown. It is purely additive — no existing object or row is touched — and has a
+hand-written `down/0014_notifications.down.sql`.
+
+**It is NOT applied to production.** M05 was implemented locally; the migration runs only in the
+isolated test database. Applying it is part of the M05 deployment, not of its implementation.
+
 ## Creating a migration
 
 1. Change the TypeScript schema in `src/lib/drizzle/schema/`.

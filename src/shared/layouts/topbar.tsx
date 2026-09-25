@@ -1,9 +1,8 @@
 "use client";
 
-import { Bell, LogOut, Search, Zap } from "lucide-react";
+import { LogOut, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
-import { toast } from "sonner";
+import type { ReactNode } from "react";
 
 import { ROUTES } from "@/config/constants";
 import { useLogout } from "@/modules/auth";
@@ -25,46 +24,19 @@ import {
  * 04_UI_GUIDELINES.md: search, notifications, Quick Prepare, profile menu.
  * Never overcrowd the topbar — those four, and nothing else.
  *
- * Search and notifications are rendered here because the shell owns their
- * placement, but their behaviour belongs to the milestones that build them.
- * They are disabled rather than wired to nothing, so the interface never
- * promises an action it cannot perform.
+ * Search and notifications arrive as slots (M05). The shell owns where they
+ * sit; their modules own what they do. They are composed by the authenticated
+ * layout, a Server Component, because their modules' barrels are server code
+ * that a client file in `shared` may not import.
  */
-export function Topbar() {
+export function Topbar({ search, notifications }: { search: ReactNode; notifications: ReactNode }) {
   const { user } = useAuth();
   const logout = useLogout();
   const router = useRouter();
 
-  /*
-   * 04_UI_GUIDELINES.md: global search is always accessible via CTRL+K. The
-   * shortcut is registered by the shell so it works on every page; the search
-   * experience itself belongs to its own milestone.
-   */
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        toast.info("Global search arrives in a later milestone.");
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   return (
     <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-border glass px-4 lg:px-6">
-      <Button
-        variant="outline"
-        onClick={() => toast.info("Global search arrives in a later milestone.")}
-        className="h-9 max-w-sm flex-1 justify-start gap-2 border-border bg-background-secondary px-3 text-foreground-subtle hover:text-foreground"
-      >
-        <Search className="size-4" aria-hidden="true" />
-        <span className="truncate text-description">Search</span>
-        <kbd className="ml-auto hidden items-center gap-0.5 rounded border border-border px-1.5 py-0.5 font-mono text-caption text-foreground-subtle sm:inline-flex">
-          Ctrl K
-        </kbd>
-      </Button>
+      {search}
 
       <div className="ml-auto flex items-center gap-2">
         <Button
@@ -75,15 +47,7 @@ export function Topbar() {
           Quick Prepare
         </Button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Notifications"
-          onClick={() => toast.info("Notifications arrive in a later milestone.")}
-          className="text-foreground-muted hover:text-foreground"
-        >
-          <Bell aria-hidden="true" />
-        </Button>
+        {notifications}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

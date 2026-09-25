@@ -133,7 +133,8 @@ describe("the migration history replays from nothing", () => {
     expect(applied.rows[0]!.n).toBe(journal.entries.length);
   });
 
-  it("produces the twelve application tables", async () => {
+  /* M05 added `notifications` (0014): twelve became thirteen. */
+  it("produces the thirteen application tables", async () => {
     const tables = await db.query<{ table_name: string }>(
       "select table_name from information_schema.tables where table_schema = 'public' order by 1",
     );
@@ -146,6 +147,7 @@ describe("the migration history replays from nothing", () => {
       "issue_notes",
       "issues",
       "login_history",
+      "notifications",
       "profile_events",
       "profiles",
       "report_presets",

@@ -53,6 +53,8 @@ const TABLES = [
   "issue_notes",
   /* M09 added no tables. M10 adds one. */
   "report_presets",
+  /* M05 (notifications). Added in the same change that created it. */
+  "notifications",
 ] as const;
 
 describe.skipIf(!configured)("RLS — anonymous access", () => {

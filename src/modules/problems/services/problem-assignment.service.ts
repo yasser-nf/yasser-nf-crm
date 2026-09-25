@@ -9,6 +9,7 @@ import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
 import { problemsRepository } from "../repositories/problems.repository";
 import { assignProblemSchema } from "../validation/problem.schema";
+import { problemNotifications } from "./problem-notifications";
 
 /**
  * Problem assignment.
@@ -132,6 +133,8 @@ async function assign(
     { entity: "issue", entityId: id, action: "update", before: before.value, after: updated.value },
     context,
   );
+
+  await problemNotifications.assigned(before.value, updated.value, context);
 
   return updated;
 }
