@@ -2,24 +2,30 @@ import "server-only";
 
 import { createGzip, gunzipSync } from "node:zlib";
 
-import { datasetRepository } from "../repositories/dataset.repository";
-import { BACKUP_TABLES, type BackupManifest } from "./backup-format";
+import { databaseAdapter } from "@/lib/database";
+import type { Result } from "@/types/result";
+import { readPageWith } from "../repositories/dataset.repository";
+import { BACKUP_TABLES, canonicalJson, type BackupManifest } from "./backup-format";
+import { createContentHash } from "./checksum.service";
 
 /**
  * Builds and reads the compressed artifact.
  *
- * The performance requirement in the M07 brief is that large backups stream
- * rather than being loaded whole. This is where that happens, and it is worth
- * being precise about what "streaming" means here:
+ * STREAMING. Rows are read one page at a time and pushed straight into a gzip
+ * stream. Only one page of rows and the compressed output ever exist at once —
+ * the full uncompressed dataset is never materialised. The compressed result
+ * is assembled into a Buffer before upload, because the Supabase Storage
+ * client takes a body rather than a Node stream.
  *
- *   Rows are read one page at a time and pushed straight into a gzip stream.
- *   Only one page of rows and the compressed output ever exist at once — the
- *   full uncompressed dataset is never materialised, in memory or anywhere else.
+ * CONSISTENCY (M07). Every page of every table is read inside ONE
+ * `readSnapshot` transaction — REPEATABLE READ, READ ONLY — so the whole
+ * backup shows the database at a single instant. Before M07 each page was its
+ * own query, and a sale committed between reading `accounts` and reading
+ * `profiles` could leave a profile in the backup whose account was not.
  *
- * The compressed result is still assembled into a Buffer before upload, because
- * the Supabase Storage client takes a body rather than a Node stream. For a CRM
- * dump that is a few megabytes compressed; the part that would actually have
- * exhausted memory — the uncompressed JSON — never exists.
+ * INTEGRITY (M07). Each row is fed, in canonical form, into a SHA-256 as it is
+ * written; the digest goes into the file as `contentSha256`. See `contentLines`
+ * for the exact bytes hashed.
  */
 
 /** Rows fetched per query while writing. Bounds peak memory. */
@@ -28,94 +34,107 @@ const PAGE_SIZE = 500;
 export interface WrittenArtifact {
   readonly body: Buffer;
   readonly rowCounts: Record<string, number>;
+  readonly contentSha256: string;
 }
 
 /**
- * Streams every backed-up table into one gzipped JSON document.
+ * Streams every backed-up table into one gzipped JSON document, from one
+ * consistent snapshot.
  *
  * The JSON is written by hand rather than with JSON.stringify over a complete
- * object, because building that object is exactly the thing this avoids.
+ * object, because building that object is exactly the thing this avoids. The
+ * gzip stream is created INSIDE the transaction callback: the adapter retries
+ * a failed transaction from the start, and a retry must not append to the
+ * half-written output of the attempt that failed.
  */
 export async function writeArtifact(
-  manifest: Omit<BackupManifest, "rowCounts">,
-): Promise<WrittenArtifact> {
-  const gzip = createGzip();
-  const chunks: Buffer[] = [];
+  manifest: Omit<BackupManifest, "rowCounts" | "contentSha256">,
+): Promise<Result<WrittenArtifact>> {
+  return databaseAdapter.readSnapshot("backups.writeArtifact", async (executor) => {
+    const gzip = createGzip();
+    const chunks: Buffer[] = [];
 
-  gzip.on("data", (chunk: Buffer) => chunks.push(chunk));
+    gzip.on("data", (chunk: Buffer) => chunks.push(chunk));
 
-  const finished = new Promise<void>((resolve, reject) => {
-    gzip.on("end", resolve);
-    gzip.on("error", reject);
-  });
-
-  const rowCounts: Record<string, number> = {};
-
-  /*
-   * Backpressure is respected: when the gzip stream's buffer is full, write()
-   * returns false and we wait for drain. Ignoring that is how a "streaming"
-   * writer quietly buffers the entire output anyway.
-   */
-  const write = (text: string): Promise<void> =>
-    new Promise((resolve, reject) => {
-      if (gzip.write(text)) {
-        resolve();
-        return;
-      }
-
-      gzip.once("drain", resolve);
-      gzip.once("error", reject);
+    const finished = new Promise<void>((resolve, reject) => {
+      gzip.on("end", resolve);
+      gzip.on("error", reject);
     });
 
-  await write(`{"manifest":`);
-  /* Row counts are only known after the tables are read, so they are appended last. */
-  const manifestPlaceholder = { ...manifest };
-  await write(JSON.stringify(manifestPlaceholder));
-  await write(`,"data":{`);
+    /*
+     * Backpressure is respected: when the gzip stream's buffer is full, write()
+     * returns false and we wait for drain. Ignoring that is how a "streaming"
+     * writer quietly buffers the entire output anyway.
+     */
+    const write = (text: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        if (gzip.write(text)) {
+          resolve();
+          return;
+        }
 
-  let firstTable = true;
+        gzip.once("drain", resolve);
+        gzip.once("error", reject);
+      });
 
-  for (const spec of BACKUP_TABLES) {
-    if (!firstTable) {
-      await write(",");
+    const content = createContentHash();
+    const rowCounts: Record<string, number> = {};
+
+    try {
+      await write(`{"manifest":`);
+      /* Counts and the content hash are only known at the end: they are appended last. */
+      await write(JSON.stringify(manifest));
+      await write(`,"data":{`);
+
+      let firstTable = true;
+
+      for (const spec of BACKUP_TABLES) {
+        if (!firstTable) {
+          await write(",");
+        }
+        firstTable = false;
+
+        await write(`${JSON.stringify(spec.table)}:[`);
+        content.update(`table:${spec.table}\n`);
+
+        let offset = 0;
+        let written = 0;
+
+        for (;;) {
+          const page = await readPageWith(executor, spec.table, offset, PAGE_SIZE);
+
+          for (const row of page) {
+            await write(written === 0 ? JSON.stringify(row) : `,${JSON.stringify(row)}`);
+            content.update(`${canonicalJson(row)}\n`);
+            written += 1;
+          }
+
+          if (page.length < PAGE_SIZE) {
+            break;
+          }
+
+          offset += PAGE_SIZE;
+        }
+
+        rowCounts[spec.table] = written;
+        await write("]");
+      }
+
+      const contentSha256 = content.digest();
+
+      await write(
+        `},"rowCounts":${JSON.stringify(rowCounts)},"contentSha256":${JSON.stringify(contentSha256)}}`,
+      );
+
+      gzip.end();
+      await finished;
+
+      return { body: Buffer.concat(chunks), rowCounts, contentSha256 };
+    } catch (caught) {
+      gzip.destroy();
+      throw caught;
     }
-    firstTable = false;
-
-    await write(`${JSON.stringify(spec.table)}:[`);
-
-    let offset = 0;
-    let written = 0;
-
-    for (;;) {
-      const page = await datasetRepository.readPage(spec.table, offset, PAGE_SIZE);
-
-      if (!page.ok) {
-        gzip.destroy();
-        throw page.error;
-      }
-
-      for (const row of page.value) {
-        await write(written === 0 ? JSON.stringify(row) : `,${JSON.stringify(row)}`);
-        written += 1;
-      }
-
-      if (page.value.length < PAGE_SIZE) {
-        break;
-      }
-
-      offset += PAGE_SIZE;
-    }
-
-    rowCounts[spec.table] = written;
-    await write("]");
-  }
-
-  await write(`},"rowCounts":${JSON.stringify(rowCounts)}}`);
-
-  gzip.end();
-  await finished;
-
-  return { body: Buffer.concat(chunks), rowCounts };
+  });
 }
 
 /**
@@ -145,11 +164,17 @@ export function readArtifact(body: Buffer): unknown {
     return parsed;
   }
 
+  const fields = manifest as Record<string, unknown>;
+
   return {
     ...document,
     manifest: {
-      ...(manifest as Record<string, unknown>),
-      rowCounts: (manifest as Record<string, unknown>)["rowCounts"] ?? document["rowCounts"] ?? {},
+      ...fields,
+      rowCounts: fields["rowCounts"] ?? document["rowCounts"] ?? {},
+      /* v2 writes the content hash in the trailer, for the same reason as the counts. */
+      ...((fields["contentSha256"] ?? document["contentSha256"])
+        ? { contentSha256: fields["contentSha256"] ?? document["contentSha256"] }
+        : {}),
     },
   };
 }

@@ -252,6 +252,9 @@ const EVENT_FIELDS = [
   "invitationState",
   "sessionId",
   "count",
+  /* M07 restores: which snapshot was taken first, and rows the orphan rule skipped. */
+  "safetySnapshotId",
+  "skippedRows",
 ] as const;
 
 /**

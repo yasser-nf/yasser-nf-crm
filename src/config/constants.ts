@@ -74,7 +74,15 @@ export const AUTH_FLOW_ROUTES: readonly string[] = [ROUTES.AUTH_CALLBACK, ROUTES
  * away to the dashboard, which would break a monitor that happens to hold a
  * session cookie.
  */
-export const UNAUTHENTICATED_ENDPOINTS: readonly string[] = ["/api/health"];
+export const UNAUTHENTICATED_ENDPOINTS: readonly string[] = [
+  "/api/health",
+  /*
+   * M07: the automatic-backup trigger. No session will ever call it — a
+   * scheduler does — so it cannot sit behind the login redirect. It is not
+   * open: the route itself refuses anything without the CRON_SECRET bearer.
+   */
+  "/api/cron/backups",
+];
 
 /** Where an authenticated user lands. */
 export const DEFAULT_AUTHENTICATED_ROUTE = ROUTES.DASHBOARD;

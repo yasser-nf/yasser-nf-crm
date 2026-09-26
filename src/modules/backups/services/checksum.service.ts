@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Readable } from "node:stream";
 
+import { contentLines, type BackupData } from "./backup-format";
+
 /**
  * Checksum service.
  *
@@ -57,9 +59,40 @@ export function checksumMatches(expected: string, actual: string): boolean {
   return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(actual, "utf8"));
 }
 
+/**
+ * An incremental content hash (M07): fed the canonical lines of a backup as
+ * they are written (see `contentLines` in backup-format.ts), so the writer can
+ * hash a dataset it never holds whole.
+ */
+export function createContentHash(): { update(line: string): void; digest(): string } {
+  const hash = createHash(CHECKSUM_ALGORITHM);
+
+  return {
+    update(line: string) {
+      hash.update(line, "utf8");
+    },
+    digest() {
+      return hash.digest("hex");
+    },
+  };
+}
+
+/** The content hash of a parsed backup, recomputed from its data. */
+export function contentSha256(tables: readonly string[], data: BackupData): string {
+  const hash = createContentHash();
+
+  for (const line of contentLines(tables, data)) {
+    hash.update(line);
+  }
+
+  return hash.digest();
+}
+
 export const checksumService = {
   algorithm: CHECKSUM_ALGORITHM,
   of: checksumOf,
   ofStream: checksumOfStream,
   matches: checksumMatches,
+  createContentHash,
+  contentSha256,
 } as const;

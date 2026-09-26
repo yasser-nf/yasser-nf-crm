@@ -312,8 +312,15 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
       { value: "weekly", label: "Weekly" },
       { value: "monthly", label: "Monthly" },
     ],
-    /* ADR-009 Decision 2: the schedule is stored and reported, never fired. */
-    enforcement: { state: "pending", awaiting: "a scheduler trigger (ADR-009 D2)" },
+    /*
+     * M07: the schedule is executed by /api/cron/backups, once something calls
+     * it — CRON_SECRET plus a cron (docs/BACKUP_MODULE.md §7). Pending until
+     * that trigger is deployed.
+     */
+    enforcement: {
+      state: "pending",
+      awaiting: "a scheduler trigger calling /api/cron/backups (CRON_SECRET + cron)",
+    },
     permission: PERMISSIONS.ACCESS_BACKUPS,
     readableByWorker: false,
   },
@@ -325,7 +332,10 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     type: "number",
     min: 0,
     max: 23,
-    enforcement: { state: "pending", awaiting: "a scheduler trigger (ADR-009 D2)" },
+    enforcement: {
+      state: "pending",
+      awaiting: "a scheduler trigger calling /api/cron/backups (CRON_SECRET + cron)",
+    },
     permission: PERMISSIONS.ACCESS_BACKUPS,
     readableByWorker: false,
   },

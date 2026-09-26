@@ -8,16 +8,24 @@
  * write every table in the system, so exposing either would offer a route past
  * the permission checks that make this module safe.
  */
-export { backupService } from "./services/backup.service";
+export {
+  backupService,
+  backupScheduler,
+  type BackupSummary,
+  type ScheduledRunOutcome,
+} from "./services/backup.service";
+export { isScheduledBackupDue, latestSlot, nextSlot } from "./services/schedule";
 export { restoreService } from "./services/restore.service";
 export { snapshotService, isDue } from "./services/snapshot.service";
 export { checksumService } from "./services/checksum.service";
 
-export type {
-  RestoreOutcome,
-  RestorePreview,
-  TableChange,
-  OrphanUser,
+export {
+  RESTORE_CONFIRMATION,
+  type RestoreEffects,
+  type RestoreOutcome,
+  type RestorePreview,
+  type TableChange,
+  type OrphanUser,
 } from "./services/restore.service";
 
 export {
@@ -39,6 +47,7 @@ export {
 
 export { BackupsTable, CreateBackupControls } from "./components/backups-table";
 export { BackupDetailView } from "./components/backup-detail";
+export { BackupSummaryPanel } from "./components/backup-summary";
 
 export type { BackupFilter } from "./repositories/backups.repository";
 

@@ -1,11 +1,18 @@
 import "server-only";
 
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AppUser } from "@/lib/auth";
-import { databaseAdapter } from "@/lib/database";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { databaseAdapter, type DatabaseTransaction } from "@/lib/database";
+import {
+  ConflictError,
+  ForbiddenError,
+  ValidationError,
+  describeCause,
+  isAppError,
+} from "@/lib/errors";
 import { auditService, type AuditContext } from "@/modules/audit";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
@@ -14,6 +21,9 @@ import {
   datasetRepository,
   deleteRows,
   idsOf,
+  nullableReferenceCounts,
+  publicTableCounts,
+  tryRestoreLock,
   upsertRows,
   type DatasetRow,
 } from "../repositories/dataset.repository";
@@ -23,23 +33,50 @@ import { readArtifact } from "./artifact-writer";
 import {
   BACKUP_TABLES,
   NULLABLE_USER_REFERENCES,
+  REQUIRED_USER_REFERENCES,
+  RESTORE_CONFIRMATION,
   RESTORE_DELETE_ORDER,
   checkCompatibility,
   policyFor,
+  validateAgainstSchema,
+  validateBackupStructure,
+  type BackupManifest,
 } from "./backup-format";
+import { backupEngine } from "./backup.service";
 import { checksumService } from "./checksum.service";
 
 /**
- * Restore service.
+ * Restore service — the most dangerous operation in the CRM.
  *
- * Two operations, and the order between them is the whole design: nothing is
- * ever restored without a preview first. The M07 brief states it directly —
- * never restore immediately.
+ *   Backup
+ *     ↓ download                       the stored file
+ *     ↓ file checksum                  refused if the bytes changed
+ *     ↓ parse + compatibility          refused if newer format or schema
+ *     ↓ content hash (format 2)        refused if the data was altered
+ *     ↓ structure                      ids, duplicates, counts, every relationship
+ *     ↓ schema                         required columns, enum values
+ *   PREVIEW
+ *     ↓ REHEARSAL                      the whole restore, run in a transaction
+ *                                      that is always rolled back: every
+ *                                      constraint checked by the database itself,
+ *                                      and the exact effect on every table —
+ *                                      cascades included — measured
+ *   Human reads it, types RESTORE
+ *   RESTORE
+ *     ↓ same validation again          on the same file (its checksum must match
+ *                                      the one previewed)
+ *     ↓ target marked restore point    retention can never delete it
+ *     ↓ safety snapshot                the way back; no snapshot, no restore
+ *     ↓ ONE transaction, restore lock  deletes children-first, upserts
+ *                                      parents-first; commit, or nothing
  *
- * The apply step runs inside exactly one transaction. If any table fails,
- * everything rolls back. There is no partial restore, by construction rather
- * than by care: the Database Adapter's transaction helper rolls back on a
- * thrown error, so a failure anywhere in the loop unwinds all of it.
+ * Nothing destructive happens until every check has passed, and the apply is
+ * atomic by construction: the adapter's transaction rolls back on any throw.
+ *
+ * EVIDENCE. `restore_started` is audited before the apply and
+ * `restored`/`restore_failed` after it. audit_logs is append-only in a restore
+ * — rows not in the backup are kept — so the record that a restore happened is
+ * never erased by the restore.
  */
 
 export interface TableChange {
@@ -56,11 +93,26 @@ export interface OrphanUser {
   readonly reason: string;
 }
 
+/** The measured effect of a restore: every public table, before and after. */
+export interface RestoreEffects {
+  readonly tables: readonly { table: string; before: number; after: number }[];
+  /** Links cleared by ON DELETE SET NULL, per reference, e.g. "audit_logs.user_id". */
+  readonly linksCleared: readonly { reference: string; count: number }[];
+}
+
 export interface RestorePreview {
   readonly backupId: string;
+  /** The file checksum the preview was computed from; the restore must match it. */
+  readonly checksum: string;
+  readonly formatVersion: number;
   readonly checksumVerified: boolean;
+  /** Version 2 files: the data was proven against its own content hash. */
+  readonly contentVerified: boolean;
+  /** The rehearsal ran and was rolled back: the database accepted every row. */
+  readonly rehearsed: boolean;
   readonly changes: readonly TableChange[];
   readonly totals: { create: number; update: number; delete: number };
+  readonly effects: RestoreEffects;
   readonly warnings: readonly string[];
   readonly conflicts: readonly string[];
   readonly orphans: readonly OrphanUser[];
@@ -71,36 +123,29 @@ export interface RestoreOutcome {
   readonly applied: readonly TableChange[];
   readonly orphans: readonly OrphanUser[];
   readonly nulledReferences: number;
+  readonly skippedRows: number;
+  readonly effects: RestoreEffects;
+  readonly safetySnapshotId: string | null;
 }
 
+export { RESTORE_CONFIRMATION };
+
+export const restoreRequestSchema = z.object({
+  confirmation: z.literal(RESTORE_CONFIRMATION),
+  /** The checksum shown in the preview: the restore applies that file or nothing. */
+  expectedChecksum: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
 /**
- * Drill-only options.
- *
- * M12 P0-4: a backup system is only as good as its last successful restore, and
- * this one had never been run — `restoreService.restore` appeared in exactly one
- * test, checking that a Worker is refused. Proving it works needs somewhere safe
- * to point it, and there is no second database or Supabase project.
- *
- * `schema` redirects the apply transaction at a disposable schema, exactly as
- * `scripts/rollback-drill.mjs` already does for migrations: the Drizzle tables
- * are declared unqualified, so `search_path` decides where they resolve.
- *
- * Omitted — which is every production and application call — nothing is issued
- * and the transaction runs against the existing search_path. The default path is
- * byte-for-byte what it was.
+ * Drill-only options (M12 P0-4). `schema` redirects the apply at a disposable
+ * schema, exactly as `scripts/rollback-drill.mjs` does for migrations. Omitted —
+ * every production and application call — nothing changes. A drill also skips
+ * the safety snapshot: it is not touching the live data.
  */
 export interface RestoreOptions {
-  /** A disposable schema to apply into. Never set outside a drill. */
   readonly schema?: string;
 }
 
-/**
- * A schema name safe to interpolate, checked rather than trusted.
- *
- * `sql.identifier` quotes it, but this is a drill seam reachable from a service,
- * and the cost of being wrong is a statement running somewhere unintended. The
- * allowlist is narrow on purpose: lower-case, digits and underscores only.
- */
 const SAFE_SCHEMA = /^[a-z_][a-z0-9_]*$/;
 
 function requireBackupAccess(actor: AppUser | null, action: string): Result<AppUser> {
@@ -120,17 +165,21 @@ function requireBackupAccess(actor: AppUser | null, action: string): Result<AppU
 }
 
 interface LoadedArtifact {
+  readonly manifest: BackupManifest;
   readonly data: Record<string, DatasetRow[]>;
   readonly warnings: readonly string[];
-  readonly checksumVerified: boolean;
+  readonly checksum: string;
+  readonly contentVerified: boolean;
+}
+
+function refuse(message: string, userMessage: string): Result<never> {
+  return fail(new ValidationError(message, { userMessage }));
 }
 
 /**
- * Fetches, verifies and parses a stored backup.
- *
- * The checksum is verified before the content is trusted for anything. The M07
- * brief requires verification before restore, and this is the single place both
- * preview and apply obtain their data, so neither can skip it.
+ * Fetches a stored backup and proves it, before anything else is done with it.
+ * The single place both preview and restore obtain their data, so neither can
+ * skip a check.
  */
 async function load(backupId: string): Promise<Result<LoadedArtifact>> {
   const backup = await backupsRepository.findById(backupId);
@@ -139,11 +188,14 @@ async function load(backupId: string): Promise<Result<LoadedArtifact>> {
     return backup;
   }
 
-  if (!backup.value.filename || !backup.value.checksum) {
-    return fail(
-      new ValidationError("Backup has no artifact", {
-        userMessage: "This backup has no file, so it cannot be restored.",
-      }),
+  if (
+    !backup.value.filename ||
+    !backup.value.checksum ||
+    (backup.value.status !== "completed" && backup.value.status !== "verified")
+  ) {
+    return refuse(
+      "Backup is not a finished backup",
+      "This backup did not complete, so it cannot be restored.",
     );
   }
 
@@ -154,10 +206,9 @@ async function load(backupId: string): Promise<Result<LoadedArtifact>> {
   }
 
   if (!checksumService.matches(backup.value.checksum, checksumService.of(body.value))) {
-    return fail(
-      new ValidationError(`Checksum mismatch on backup ${backupId}`, {
-        userMessage: "This backup is corrupted — its checksum does not match. Restore refused.",
-      }),
+    return refuse(
+      `Checksum mismatch on backup ${backupId}`,
+      "This backup is corrupted — its checksum does not match. Restore refused.",
     );
   }
 
@@ -165,35 +216,77 @@ async function load(backupId: string): Promise<Result<LoadedArtifact>> {
 
   try {
     document = readArtifact(body.value);
-  } catch (caught) {
-    return fail(
-      new ValidationError("Backup could not be decompressed", {
-        cause: caught,
-        userMessage: "This backup could not be read.",
-      }),
-    );
+  } catch {
+    return refuse("Backup could not be decompressed", "This backup could not be read.");
   }
 
   const parsed = backupArtifactSchema.safeParse(document);
 
   if (!parsed.success) {
-    return fail(
-      new ValidationError("Backup failed schema validation", {
-        userMessage: "This backup's structure is not valid. Restore refused.",
-      }),
+    return refuse(
+      "Backup failed schema validation",
+      "This backup's structure is not valid. Restore refused.",
     );
   }
 
-  const compatibility = checkCompatibility(parsed.data.manifest);
+  const { manifest } = parsed.data;
+  const data = parsed.data.data as Record<string, DatasetRow[]>;
+
+  const schemaVersion = await datasetRepository.schemaVersion();
+  const compatibility = checkCompatibility(
+    manifest,
+    schemaVersion.ok && schemaVersion.value !== null ? schemaVersion.value : undefined,
+  );
 
   if (!compatibility.compatible) {
-    return fail(new ValidationError(compatibility.reason, { userMessage: compatibility.reason }));
+    return refuse(compatibility.reason, compatibility.reason);
+  }
+
+  let contentVerified = false;
+
+  if (manifest.contentSha256) {
+    const actual = checksumService.contentSha256(manifest.tables, data);
+
+    if (!checksumService.matches(manifest.contentSha256, actual)) {
+      return refuse(
+        "Content hash mismatch",
+        "This backup's data does not match its own content hash — it was altered or damaged. Restore refused.",
+      );
+    }
+
+    contentVerified = true;
+  }
+
+  const structural = validateBackupStructure(manifest, data);
+
+  if (structural.length > 0) {
+    return refuse(
+      `Backup is internally inconsistent: ${structural.join(" | ")}`,
+      `This backup is not consistent and was refused before anything changed: ${structural[0]}`,
+    );
+  }
+
+  const facts = await datasetRepository.columnFacts();
+
+  if (!facts.ok) {
+    return facts;
+  }
+
+  const schemaCheck = validateAgainstSchema(data, facts.value);
+
+  if (schemaCheck.problems.length > 0) {
+    return refuse(
+      `Backup does not fit the current schema: ${schemaCheck.problems.join(" | ")}`,
+      `This backup does not fit the current database and was refused before anything changed: ${schemaCheck.problems[0]}`,
+    );
   }
 
   return ok({
-    data: parsed.data.data as Record<string, DatasetRow[]>,
-    warnings: compatibility.warnings,
-    checksumVerified: true,
+    manifest,
+    data,
+    warnings: [...compatibility.warnings, ...schemaCheck.warnings],
+    checksum: backup.value.checksum,
+    contentVerified,
   });
 }
 
@@ -203,12 +296,9 @@ function rowId(row: DatasetRow): string | null {
 }
 
 /**
- * Identifies users that cannot be restored.
- *
- * public.users.id references auth.users(id). A backed-up user whose Supabase
- * Auth identity has since been deleted cannot be inserted at all. The approved
- * rule: skip that user, report it, and restore everything else — one deleted
- * identity must not make an otherwise good backup unrestorable.
+ * Users that cannot be restored: `public.users.id` references `auth.users(id)`,
+ * and a backed-up user whose Auth identity has since been deleted cannot be
+ * inserted. Skip, report, restore everything else (ADR-009 Decision 4).
  */
 async function findOrphans(users: readonly DatasetRow[]): Promise<Result<OrphanUser[]>> {
   const ids = users.map(rowId).filter((id): id is string => id !== null);
@@ -218,24 +308,165 @@ async function findOrphans(users: readonly DatasetRow[]): Promise<Result<OrphanU
     return existing;
   }
 
-  const orphans: OrphanUser[] = [];
+  return ok(
+    users.flatMap((row) => {
+      const id = rowId(row);
 
-  for (const row of users) {
-    const id = rowId(row);
-
-    if (id && !existing.value.has(id)) {
-      orphans.push({
-        id,
-        email: typeof row["email"] === "string" ? row["email"] : "(unknown)",
-        reason: "No Supabase Auth identity exists for this user any more.",
-      });
-    }
-  }
-
-  return ok(orphans);
+      return id && !existing.value.has(id)
+        ? [
+            {
+              id,
+              email: typeof row["email"] === "string" ? row["email"] : "(unknown)",
+              reason: "No Supabase Auth identity exists for this user any more.",
+            },
+          ]
+        : [];
+    }),
+  );
 }
 
-/** Preview: what a restore would do, without doing any of it. */
+async function measure(executor: DatabaseTransaction) {
+  const [tables, links] = [
+    await publicTableCounts(executor),
+    await nullableReferenceCounts(executor),
+  ];
+  return { tables, links };
+}
+
+function effectsBetween(
+  before: Awaited<ReturnType<typeof measure>>,
+  after: Awaited<ReturnType<typeof measure>>,
+): RestoreEffects {
+  return {
+    tables: Object.keys(before.tables)
+      .filter((table) => table !== "backups")
+      .map((table) => ({
+        table,
+        before: before.tables[table] ?? 0,
+        after: after.tables[table] ?? 0,
+      })),
+    linksCleared: Object.keys(before.links)
+      .map((reference) => ({
+        reference,
+        count: Math.max((before.links[reference] ?? 0) - (after.links[reference] ?? 0), 0),
+      }))
+      .filter((entry) => entry.count > 0 && !entry.reference.startsWith("backups.")),
+  };
+}
+
+interface Applied {
+  readonly applied: TableChange[];
+  readonly nulledReferences: number;
+  readonly skippedRows: number;
+}
+
+/**
+ * The restore itself, inside a caller's transaction — the rehearsal's (rolled
+ * back) or the real one (committed). One function, so what was rehearsed is
+ * exactly what is applied.
+ *
+ * Only tables CONTAINED in the backup are touched. A table an older backup
+ * does not carry is left alone (before M07 it was treated as "keep no rows" and
+ * emptied); the database may still remove some of its rows by cascade, and the
+ * rehearsal measures exactly how many.
+ */
+async function apply(
+  executor: DatabaseTransaction,
+  loaded: LoadedArtifact,
+  orphanIds: ReadonlySet<string>,
+): Promise<Applied> {
+  const included = new Set(loaded.manifest.tables);
+  const users = (loaded.data["users"] ?? []).filter((row) => {
+    const id = rowId(row);
+    return id !== null && !orphanIds.has(id);
+  });
+
+  /*
+   * After this transaction, `users` holds exactly the restorable backup users —
+   * reconcile deletes everyone else — so those are the only ids a reference may
+   * point at.
+   */
+  const validUserIds = new Set(users.map((row) => rowId(row) ?? ""));
+  const applied: TableChange[] = [];
+  let nulledReferences = 0;
+  let skippedRows = 0;
+
+  for (const table of RESTORE_DELETE_ORDER) {
+    if (policyFor(table) !== "reconcile" || !included.has(table)) {
+      continue;
+    }
+
+    const keep = new Set(
+      (table === "users" ? users : (loaded.data[table] ?? []))
+        .map(rowId)
+        .filter((id): id is string => id !== null),
+    );
+    const present = await idsOf(executor, table);
+    const removed = await deleteRows(
+      executor,
+      table,
+      [...present].filter((id) => !keep.has(id)),
+    );
+
+    applied.push({ table, policy: "reconcile", create: 0, update: 0, delete: removed });
+  }
+
+  for (const spec of BACKUP_TABLES) {
+    if (!included.has(spec.table)) {
+      continue;
+    }
+
+    const source = spec.table === "users" ? users : (loaded.data[spec.table] ?? []);
+    const nullable = NULLABLE_USER_REFERENCES.filter((ref) => ref.table === spec.table);
+    const required = REQUIRED_USER_REFERENCES.filter((ref) => ref.table === spec.table);
+
+    const rows = source.flatMap((row) => {
+      /* A row that cannot exist without an unrestorable user is skipped and counted. */
+      if (
+        required.some(
+          (ref) =>
+            typeof row[ref.column] === "string" && !validUserIds.has(row[ref.column] as string),
+        )
+      ) {
+        skippedRows += 1;
+        return [];
+      }
+
+      if (nullable.length === 0) {
+        return [row];
+      }
+
+      const copy: DatasetRow = { ...row };
+
+      for (const ref of nullable) {
+        const value = copy[ref.column];
+
+        if (typeof value === "string" && !validUserIds.has(value)) {
+          copy[ref.column] = null;
+          nulledReferences += 1;
+        }
+      }
+
+      return [copy];
+    });
+
+    const written = await upsertRows(executor, spec.table, rows, spec.policy);
+
+    applied.push({ table: spec.table, policy: spec.policy, create: written, update: 0, delete: 0 });
+  }
+
+  return { applied, nulledReferences, skippedRows };
+}
+
+/** The database's own words for why a rehearsal or restore failed, without values. */
+function databaseReason(error: unknown): string {
+  const described = isAppError(error) ? describeCause(error.cause) : describeCause(error);
+  const last = described.split(" ← ").at(-1) ?? described;
+
+  return last.replace(/^PostgresError/, "Database").slice(0, 240) || "The database refused it.";
+}
+
+/** Preview: what a restore would do, proven by rehearsing it — and doing none of it. */
 async function preview(backupId: string, actor: AppUser | null): Promise<Result<RestorePreview>> {
   const permitted = requireBackupAccess(actor, "preview a restore");
 
@@ -261,6 +492,10 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
   const changes: TableChange[] = [];
 
   for (const spec of BACKUP_TABLES) {
+    if (!loaded.value.manifest.tables.includes(spec.table)) {
+      continue;
+    }
+
     const rows = loaded.value.data[spec.table] ?? [];
     const current = await datasetRepository.readAll(spec.table);
 
@@ -269,6 +504,7 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
     }
 
     const currentById = new Map(current.value.map((row) => [rowId(row) ?? "", row] as const));
+    const backupIds = new Set(rows.map(rowId).filter((id): id is string => id !== null));
 
     let create = 0;
     let update = 0;
@@ -284,42 +520,22 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
 
       if (!existing) {
         create += 1;
-        continue;
-      }
-
-      if (spec.policy === "append_only") {
-        /* Present already and never rewritten — nothing to do. */
-        continue;
-      }
-
-      if (JSON.stringify(existing) !== JSON.stringify(row)) {
+      } else if (spec.policy === "reconcile" && JSON.stringify(existing) !== JSON.stringify(row)) {
         update += 1;
         conflicts.push(`${spec.table}: row ${id} differs from the backup and will be overwritten.`);
       }
     }
 
-    const backupIds = new Set(rows.map(rowId).filter((id): id is string => id !== null));
+    const extra = current.value.filter((row) => {
+      const id = rowId(row);
+      return id !== null && !backupIds.has(id);
+    }).length;
 
-    const removals =
-      spec.policy === "reconcile"
-        ? current.value.filter((row) => {
-            const id = rowId(row);
-            return id !== null && !backupIds.has(id);
-          }).length
-        : 0;
-
-    if (spec.policy === "append_only") {
-      const extra = current.value.filter((row) => {
-        const id = rowId(row);
-        return id !== null && !backupIds.has(id);
-      }).length;
-
-      if (extra > 0) {
-        warnings.push(
-          `${spec.table}: ${extra} row(s) recorded since this backup will be KEPT — ` +
-            `this table is append-only and is never deleted from.`,
-        );
-      }
+    if (spec.policy === "append_only" && extra > 0) {
+      warnings.push(
+        `${spec.table}: ${extra} row(s) recorded since this backup are kept — this table is ` +
+          `append-only (except rows the database removes with a deleted parent; see the effects).`,
+      );
     }
 
     changes.push({
@@ -327,12 +543,38 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
       policy: spec.policy,
       create,
       update,
-      delete: removals,
+      delete: spec.policy === "reconcile" ? extra : 0,
     });
   }
 
   for (const orphan of orphans.value) {
     warnings.push(`User ${orphan.email} cannot be restored: ${orphan.reason}`);
+  }
+
+  /* The rehearsal: the real restore, in a transaction that is always rolled back. */
+  const rehearsal = await databaseAdapter.rehearse("restore.rehearse", async (executor) => {
+    const before = await measure(executor);
+    const result = await apply(executor, loaded.value, orphanIds);
+    const after = await measure(executor);
+
+    return { result, effects: effectsBetween(before, after) };
+  });
+
+  if (!rehearsal.ok) {
+    return fail(
+      new ValidationError("Restore rehearsal was refused by the database", {
+        cause: rehearsal.error,
+        userMessage:
+          `The restore was rehearsed and the database refused it (${databaseReason(rehearsal.error)}). ` +
+          "Nothing was changed.",
+      }),
+    );
+  }
+
+  if (rehearsal.value.result.skippedRows > 0) {
+    warnings.push(
+      `${rehearsal.value.result.skippedRows} row(s) belong to a user who cannot be restored and will be skipped.`,
+    );
   }
 
   const totals = changes.reduce(
@@ -344,27 +586,38 @@ async function preview(backupId: string, actor: AppUser | null): Promise<Result<
     { create: 0, update: 0, delete: 0 },
   );
 
-  /* Conflicts are capped: a list of ten thousand ids helps nobody decide. */
   return ok({
     backupId,
-    checksumVerified: loaded.value.checksumVerified,
+    checksum: loaded.value.checksum,
+    formatVersion: loaded.value.manifest.formatVersion,
+    checksumVerified: true,
+    contentVerified: loaded.value.contentVerified,
+    rehearsed: true,
     changes,
     totals,
+    effects: rehearsal.value.effects,
     warnings,
+    /* Capped: a list of ten thousand ids helps nobody decide. */
     conflicts: conflicts.slice(0, 50),
     orphans: orphans.value,
   });
 }
 
-/**
- * Applies a restore. All of it, or none of it.
- *
- * Deletes run children-first and inserts parents-first, so foreign keys hold at
- * every step. Everything is inside one transaction: a failure on the last table
- * unwinds the first.
- */
+async function auditRestore(
+  backupId: string,
+  after: Record<string, unknown>,
+  context: AuditContext,
+): Promise<void> {
+  await auditService.recordOrWarn(
+    { entity: "backup", entityId: backupId, action: "restore", after },
+    context,
+  );
+}
+
+/** Applies a restore. All of it, or none of it — and only what was previewed. */
 async function restore(
   backupId: string,
+  input: unknown,
   context: AuditContext,
   options?: RestoreOptions,
 ): Promise<Result<RestoreOutcome>> {
@@ -374,18 +627,35 @@ async function restore(
     return permitted;
   }
 
+  const request = restoreRequestSchema.safeParse(input);
+
+  if (!request.success) {
+    return refuse(
+      "Restore was not confirmed",
+      `Type ${RESTORE_CONFIRMATION} to confirm, after reviewing the preview.`,
+    );
+  }
+
   if (options?.schema !== undefined && !SAFE_SCHEMA.test(options.schema)) {
-    return fail(
-      new ValidationError(`Refusing to restore into an unsafe schema name`, {
-        userMessage: "That restore target is not a valid schema.",
-      }),
+    return refuse(
+      "Refusing to restore into an unsafe schema name",
+      "That restore target is not a valid schema.",
     );
   }
 
   const loaded = await load(backupId);
 
   if (!loaded.ok) {
+    await auditRestore(backupId, { event: "restore_failed", reason: loaded.error.code }, context);
     return loaded;
+  }
+
+  if (!checksumService.matches(request.data.expectedChecksum, loaded.value.checksum)) {
+    return fail(
+      new ConflictError("Backup changed since it was previewed", {
+        userMessage: "This backup is not the one you previewed. Preview it again before restoring.",
+      }),
+    );
   }
 
   const orphans = await findOrphans(loaded.value.data["users"] ?? []);
@@ -396,121 +666,97 @@ async function restore(
 
   const orphanIds = new Set(orphans.value.map((entry) => entry.id));
 
-  const restorableUsers = (loaded.value.data["users"] ?? []).filter((row) => {
-    const id = rowId(row);
-    return id !== null && !orphanIds.has(id);
-  });
+  await auditRestore(backupId, { event: "restore_started" }, context);
 
-  const applied: TableChange[] = [];
-  let nulledReferences = 0;
+  /* Restored-from backups are kept for good: retention can never delete them. */
+  await backupsRepository.markRestorePoint(backupId);
+
+  /* The way back. No snapshot, no restore. */
+  let safetySnapshotId: string | null = null;
+
+  if (options?.schema === undefined) {
+    const snapshot = await backupEngine.runBackup("snapshot", context, { prune: false });
+
+    if (!snapshot.ok) {
+      await auditRestore(
+        backupId,
+        { event: "restore_failed", reason: "safety_snapshot_failed" },
+        context,
+      );
+
+      return fail(
+        new ValidationError("Safety snapshot failed; restore not attempted", {
+          cause: snapshot.error,
+          userMessage:
+            "A snapshot of the current data could not be taken first, so nothing was restored.",
+        }),
+      );
+    }
+
+    safetySnapshotId = snapshot.value.id;
+  }
 
   const outcome = await databaseAdapter.transaction("restore.apply", async (executor) => {
-    /*
-     * The FIRST statement, before a single row is read or written.
-     *
-     * `SET LOCAL` is scoped to this transaction and reverts on commit or
-     * rollback, so it cannot leak onto a pooled connection and change where a
-     * later caller writes. That property is why the redirect belongs here and
-     * not around the transaction.
-     */
     if (options?.schema !== undefined) {
       await executor.execute(sql`set local search_path to ${sql.identifier(options.schema)}`);
     }
 
-    /*
-     * Which user ids will exist once this transaction commits: the restorable
-     * ones from the backup, plus any already present that the backup does not
-     * mention. Anything pointing outside that set would violate a foreign key,
-     * so those references are nulled rather than allowed to abort the restore.
-     */
-    const currentUserIds = await idsOf(executor, "users");
-    const validUserIds = new Set<string>([
-      ...restorableUsers.map((row) => rowId(row) ?? ""),
-      ...currentUserIds,
-    ]);
-
-    for (const id of orphanIds) {
-      validUserIds.delete(id);
-    }
-
-    /* Deletes first, children before parents. */
-    for (const table of RESTORE_DELETE_ORDER) {
-      if (policyFor(table) !== "reconcile") {
-        continue;
-      }
-
-      const rows = loaded.value.data[table] ?? [];
-      const keep = new Set(rows.map(rowId).filter((id): id is string => id !== null));
-      const present = await idsOf(executor, table);
-      const doomed = [...present].filter((id) => !keep.has(id));
-
-      const removed = await deleteRows(executor, table, doomed);
-      applied.push({ table, policy: "reconcile", create: 0, update: 0, delete: removed });
-    }
-
-    /* Then inserts and updates, parents before children. */
-    for (const spec of BACKUP_TABLES) {
-      const source =
-        spec.table === "users" ? restorableUsers : (loaded.value.data[spec.table] ?? []);
-
-      const sanitised = source.map((row) => {
-        const references = NULLABLE_USER_REFERENCES.filter((ref) => ref.table === spec.table);
-
-        if (references.length === 0) {
-          return row;
-        }
-
-        const copy: DatasetRow = { ...row };
-
-        for (const reference of references) {
-          const value = copy[reference.column];
-
-          if (typeof value === "string" && !validUserIds.has(value)) {
-            copy[reference.column] = null;
-            nulledReferences += 1;
-          }
-        }
-
-        return copy;
-      });
-
-      const written = await upsertRows(executor, spec.table, sanitised, spec.policy);
-
-      applied.push({
-        table: spec.table,
-        policy: spec.policy,
-        create: written,
-        update: 0,
-        delete: 0,
+    if (!(await tryRestoreLock(executor))) {
+      throw new ConflictError("Another restore holds the restore lock", {
+        userMessage: "Another restore is already running. Wait for it to finish.",
+        context: { restoreLock: true },
       });
     }
 
-    return true;
+    const before = await measure(executor);
+    const result = await apply(executor, loaded.value, orphanIds);
+    const after = await measure(executor);
+
+    return { ...result, effects: effectsBetween(before, after) };
   });
 
   if (!outcome.ok) {
-    return outcome;
+    await auditRestore(
+      backupId,
+      {
+        event: "restore_failed",
+        reason: outcome.error.code,
+        ...(safetySnapshotId ? { safetySnapshotId } : {}),
+      },
+      context,
+    );
+
+    return fail(
+      /* Only the lock conflict passes through as itself; a constraint conflict is a failed restore. */
+      isAppError(outcome.error) && outcome.error.context?.["restoreLock"] === true
+        ? outcome.error
+        : new ValidationError("Restore failed and was rolled back", {
+            cause: outcome.error,
+            userMessage: `The restore failed and was rolled back — nothing was changed (${databaseReason(outcome.error)}).`,
+          }),
+    );
   }
 
-  await auditService.recordOrWarn(
+  await auditRestore(
+    backupId,
     {
-      entity: "backup",
-      entityId: backupId,
-      action: "restore",
-      after: {
-        event: "restored",
-        orphans: orphans.value.length,
-        nulledReferences,
-      },
+      event: "restored",
+      orphans: orphans.value.length,
+      nulledReferences: outcome.value.nulledReferences,
+      skippedRows: outcome.value.skippedRows,
+      ...(safetySnapshotId ? { safetySnapshotId } : {}),
     },
     context,
   );
 
   return ok({
     backupId,
-    applied,
+    applied: outcome.value.applied,
     orphans: orphans.value,
-    nulledReferences,
+    nulledReferences: outcome.value.nulledReferences,
+    skippedRows: outcome.value.skippedRows,
+    effects: outcome.value.effects,
+    safetySnapshotId,
   });
 }
 

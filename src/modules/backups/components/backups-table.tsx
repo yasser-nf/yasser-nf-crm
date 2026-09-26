@@ -204,13 +204,21 @@ export function BackupsTable({ items }: { items: readonly BackupListEntry[] }) {
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-surface">
             <TableRow className="hover:bg-transparent">
-              {["Name", "Type", "Status", "Created by", "Size", "Checksum", "Version", ""].map(
-                (label) => (
-                  <TableHead key={label} className="text-caption text-foreground-muted">
-                    {label}
-                  </TableHead>
-                ),
-              )}
+              {[
+                "Created (UTC)",
+                "Name",
+                "Type",
+                "Status",
+                "Created by",
+                "Size",
+                "Checksum",
+                "Version",
+                "",
+              ].map((label) => (
+                <TableHead key={label} className="text-caption text-foreground-muted">
+                  {label}
+                </TableHead>
+              ))}
             </TableRow>
           </TableHeader>
 
@@ -227,6 +235,9 @@ export function BackupsTable({ items }: { items: readonly BackupListEntry[] }) {
                 }}
                 className="border-b border-border transition-colors last:border-0 hover:bg-surface-raised"
               >
+                <TableCell className="font-mono text-caption whitespace-nowrap text-foreground-muted">
+                  {new Date(entry.backup.createdAt).toISOString().slice(0, 16).replace("T", " ")}
+                </TableCell>
                 <TableCell className="font-medium">
                   <Link
                     href={`${ROUTES.BACKUPS}/${entry.backup.id}`}
@@ -245,7 +256,7 @@ export function BackupsTable({ items }: { items: readonly BackupListEntry[] }) {
                   <StatusBadge status={entry.backup.status} />
                 </TableCell>
                 <TableCell className="text-caption text-foreground-muted">
-                  {entry.createdByName ?? "Scheduled"}
+                  {entry.createdByName ?? "System (scheduled)"}
                 </TableCell>
                 <TableCell className="text-caption text-foreground-muted">
                   {formatBytes(entry.backup.sizeBytes)}

@@ -135,26 +135,24 @@ export async function previewRestoreAction(id: string): Promise<ActionResult<Res
 /**
  * Applies a restore.
  *
- * Takes a snapshot first. If the restore turns out to be the wrong decision,
- * that snapshot is the only way back — and it has to exist before the data is
- * overwritten, not after.
+ * Takes the confirmation the person typed and the checksum of the file they
+ * previewed. Everything else — validation, the safety snapshot (taken AFTER
+ * the backup is proven, so a corrupt file never costs a snapshot), the lock
+ * and the single transaction — is the service's.
  */
-export async function restoreBackupAction(id: string): Promise<ActionResult<RestoreOutcome>> {
+export async function restoreBackupAction(
+  id: string,
+  confirmation: { readonly confirmation: string; readonly expectedChecksum: string },
+): Promise<ActionResult<RestoreOutcome>> {
   const context = await auditContext();
-
-  const safety = await snapshotService.take(context);
-
-  if (!safety.ok) {
-    return toFailure(safety.error);
-  }
-
-  const result = await restoreService.restore(id, context);
+  const result = await restoreService.restore(id, confirmation, context);
 
   if (!result.ok) {
     return toFailure(result.error);
   }
 
   revalidatePath(ROUTES.BACKUPS);
+  revalidatePath(`${ROUTES.BACKUPS}/${id}`);
 
   return { ok: true, data: result.value };
 }

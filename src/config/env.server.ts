@@ -51,6 +51,17 @@ const serverEnvSchema = z.object({
    */
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
 
+  /**
+   * The automatic-backup trigger's secret (M07).
+   *
+   * Vercel Cron — or any external scheduler — calls /api/cron/backups with
+   * `Authorization: Bearer <CRON_SECRET>`. Optional: without it the endpoint
+   * refuses every call (503), so automatic backups are off until an operator
+   * deliberately configures a trigger. At least 32 characters: it is the only
+   * thing standing between the internet and a backup job.
+   */
+  CRON_SECRET: z.string().min(32, "CRON_SECRET must be at least 32 characters").optional(),
+
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 
@@ -58,6 +69,7 @@ const parsed = serverEnvSchema.safeParse({
   DATABASE_URL: process.env.DATABASE_URL,
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  CRON_SECRET: process.env.CRON_SECRET || undefined,
   NODE_ENV: process.env.NODE_ENV,
 });
 
@@ -110,4 +122,13 @@ export function isUserCreationConfigured(): boolean {
 /** Whether backups can be written to and read from object storage. */
 export function isBackupStorageConfigured(): boolean {
   return isServiceRoleConfigured();
+}
+
+/**
+ * Whether the automatic-backup trigger can be accepted at all (M07): a secret
+ * to authenticate it, and storage to write to. It says nothing about whether
+ * a scheduler is actually CALLING the endpoint — that is infrastructure.
+ */
+export function isBackupSchedulerConfigured(): boolean {
+  return Boolean(serverEnv.CRON_SECRET) && isBackupStorageConfigured();
 }

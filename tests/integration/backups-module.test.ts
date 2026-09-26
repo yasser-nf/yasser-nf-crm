@@ -160,9 +160,12 @@ describe.skipIf(!configured)("RBAC — a Worker cannot reach any backup operatio
 
   it("cannot restore", async () => {
     const { restoreService } = await services();
-    const result = await restoreService.restore("00000000-0000-0000-0000-000000000000", {
-      actor: WORKER,
-    });
+    /* M07: restore now takes the typed confirmation; a Worker is refused before it is read. */
+    const result = await restoreService.restore(
+      "00000000-0000-0000-0000-000000000000",
+      { confirmation: "RESTORE", expectedChecksum: "0".repeat(64) },
+      { actor: WORKER },
+    );
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBeInstanceOf(ForbiddenError);

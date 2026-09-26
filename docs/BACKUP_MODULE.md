@@ -1,266 +1,241 @@
 # Backup Module
 
-Version: 1.0
-Milestone: M07
-
-Authority: `.ai/` decides, this describes. Decisions in ADR-009.
+Version: 2.0 · Milestone: M07 (evolves the module from ADR-009; nothing was replaced wholesale)
 
 ---
 
-## 1. Responsibilities
+## 0. Status at a glance
 
-| Owns | Does not own |
-| ---- | ------------ |
-| Capturing business data as a portable artifact | The data itself — every table belongs to its own module |
-| Integrity: SHA-256 generation and verification | Supabase's own platform backups |
-| Restore preview and application | Session state — explicitly excluded |
-| Retention | Scheduling execution — see §7 |
-| Import and export | |
+| | |
+| --- | --- |
+| **Implemented now** | Manual backups and snapshots · consistent snapshot reads · format v2 with a content hash · verify · import · export (signed URL) · preview with a full **rehearsal** · typed-confirmation restore, atomic, with safety snapshot and restore lock · retention with safety floors · the scheduler logic and its authenticated endpoint · Super Admin only · audit of every step |
+| **Requires deployment / infrastructure** | Automatic backups FIRE only once (1) `CRON_SECRET` is set on the Vercel project and (2) something calls `GET /api/cron/backups` on a schedule — see §7. Until then the page says "Not running". |
+| **Deferred** | See §12 |
 
 ---
 
-## 2. Architecture
+## 1. Audit of what existed before M07
 
-```
-app/(app)/backups/*            page composition only
-  └── modules/backups (barrel)
-        ├── components/        client rendering
-        ├── actions/           network boundary (ADR-006 D3)
-        ├── services/
-        │     ├── backup.service.ts     create, verify, export, import, prune
-        │     ├── restore.service.ts    preview and apply
-        │     ├── snapshot.service.ts   system snapshots + isDue
-        │     ├── checksum.service.ts   SHA-256            (pure, testable)
-        │     ├── backup-format.ts      tables, order, policy (pure, testable)
-        │     ├── retention.ts          what may be deleted  (pure, testable)
-        │     └── artifact-writer.ts    streaming gzip writer
-        ├── repositories/
-        │     ├── backups.repository.ts  the catalogue
-        │     └── dataset.repository.ts  the actual rows
-        ├── storage/           Supabase Storage adapter
-        └── validation/        Zod schemas
-```
+| Existed | Kept | Changed in M07 |
+| --- | --- | --- |
+| Streaming gzip artifact to a private Supabase bucket | ✓ | Written inside one REPEATABLE READ snapshot; format v2 |
+| SHA-256 of the stored file, verify, constant-time compare | ✓ | Plus a content hash inside the file |
+| 7 tables captured | — | **11**: `issues`, `issue_notes`, `notifications`, `report_presets` were not backed up at all |
+| Preview (row diff) before restore | ✓ | Plus validation and a rehearsal measuring every effect, cascades included |
+| One-transaction restore, safety snapshot | ✓ | Snapshot taken after validation (a corrupt file no longer costs one); typed confirmation bound to the previewed checksum; restore lock |
+| Retention keep-last-N, restore points/snapshots protected | ✓ | Restored-from backups become restore points; nothing pruned during a restore |
+| Schedule settings, `isDue` | settings ✓ | Slot-based scheduler + endpoint; `isDue` left for compatibility |
+| Failure reason = raw error message | — | Stored through the M06 scrubber |
 
-Repositories and the storage adapter are **not** exported. Both can read and
-write every table in the system, so exposing either would offer a route past the
-permission checks that make this module safe.
+Defects found and fixed:
 
-The four pure modules — checksum, format, retention, artifact ordering — carry no
-`server-only` import, which is what makes them unit testable. Retention in
-particular is the one place whose bugs *destroy* backups rather than merely
-failing to create them, so it decides and never acts.
+- **Tables missing from an older backup were emptied on restore.** The apply loop treated an
+  absent table as "keep no rows". A v1 backup restored after M03 would have deleted every problem.
+  Absent tables are now left alone; only what the database cascades goes, and the rehearsal shows
+  exactly how much.
+- **Backups could be inconsistent.** Each 500-row page of each table was its own query.
+- **Silent side effects.** `profile_events` (append-only) cascades from `accounts`/`profiles`, and
+  deleting users clears links in `audit_logs`; neither was reported. The rehearsal now measures both.
+- **Orphan handling** allowed references to users that the restore itself deletes; now only
+  restorable backup users are valid targets.
 
 ---
 
-## 3. What Is Captured
+## 2. What is captured
 
-In dependency order. **The order is load-bearing** — inserts run forward, deletes
-run in reverse, so a parent always exists before its children.
+In dependency order — inserts run forward, deletes in reverse.
 
 | Table | Restore policy |
-| ----- | -------------- |
+| --- | --- |
 | `users` | reconcile |
 | `customers` | reconcile |
 | `accounts` | reconcile |
 | `profiles` | reconcile |
-| `profile_events` | **append-only** |
-| `audit_logs` | **append-only** |
+| `profile_events` | append-only |
+| `issues` | reconcile |
+| `issue_notes` | append-only |
+| `notifications` | reconcile |
+| `report_presets` | reconcile |
+| `audit_logs` | append-only |
 | `settings` | reconcile |
 
-`settings` carries both the audit configuration and the application
-configuration the brief lists — they are values in the singleton row, not
-separate tables.
+**Excluded, deliberately:** `auth.*` (Supabase Auth identities and credentials — a restore cannot
+recreate an Auth identity; see the orphan rule), `login_history` (session telemetry), `backups` (the
+catalogue: restoring it would delete every backup taken since, including the safety snapshot).
+A test compares this list with the database catalogue, so a new table fails the suite until it is
+classified.
 
-### Excluded, deliberately
-
-| Excluded | Why |
-| -------- | --- |
-| `auth.sessions` | The brief excludes sessions outright |
-| `login_history` | Authentication telemetry tied to sessions |
-| `backups` | A backup containing the catalogue would, on restore, delete every backup taken since — including itself |
-
-### Why two policies
-
-01_MASTER_RULES.md: audit logs are immutable, never deleted, never modified.
-
-A restore that reconciled them would delete every event recorded since the backup
-was taken — exactly the history an incident investigation needs. Append-only
-tables gain missing rows and lose nothing. The preview says so explicitly rather
-than letting the operator discover it afterwards.
+**Never in a backup:** environment variables, `ENCRYPTION_KEY`, database credentials, the service
+role key, `CRON_SECRET`, tokens, cookies, sessions. Account passwords are present **only as the
+stored AES-256-GCM ciphertext** (`lib/crypto` is never called by backup or restore); profile PINs are
+present as stored business data. Tested.
 
 ---
 
-## 4. Integrity
+## 3. Format
 
-SHA-256 over the compressed artifact, using Node's `crypto` rather than a
-dependency.
+gzipped JSON: `{"manifest":{…},"data":{"<table>":[rows…],…},"rowCounts":{…},"contentSha256":"…"}`
+(counts and hash are written last because they are known last; readers fold them into the manifest).
 
-| Stage | What happens |
-| ----- | ------------ |
-| Create | Digest computed over the gzipped bytes, stored on the row |
-| Verify | File re-downloaded, re-hashed, compared |
-| Restore | **Verified again** before a single row is read |
+| Field | |
+| --- | --- |
+| `formatVersion` | 2 (1 = pre-M07, still restorable, with a warning) |
+| `schemaVersion` | migrations applied when taken; a backup from a newer schema is refused |
+| `createdAt`, `createdBy`, `appVersion`, `databaseVersion`, `type`, `tables` | metadata |
+| `contentSha256` | SHA-256 of the data under canonical serialisation — required in v2 |
 
-`completed` and `verified` are different statuses on purpose. Completed means the
-bytes were written. Verified means they were read back and still hash to what was
-recorded. Treating those as the same is how an organisation discovers during an
-incident that its backups were empty.
+Rows come from `to_jsonb(row)` (PostgreSQL does the type conversion), ordered by `id`; tables in the
+fixed order above; `null` is explicit.
 
-Comparison is constant-time (`timingSafeEqual`), with a length guard first
-because that function throws on mismatched buffers.
-
-A checksum mismatch **refuses the restore** and marks the backup failed.
+**Content hash, exactly** — any SHA-256 tool can reproduce it: for each table in `tables` order,
+the line `table:<name>\n`, then for each row `canonicalJson(row) + "\n"`, where canonical JSON sorts
+object keys at every depth and keeps array order (`backup-format.ts`, `contentLines`). It never
+depends on key order, JavaScript insertion order or the gzip output.
 
 ---
 
-## 5. Restore Flow
+## 4. Consistency
+
+The whole artifact is read inside **one** `databaseAdapter.readSnapshot` transaction:
+`REPEATABLE READ, READ ONLY`. Every page of every table sees the database at the instant of the
+first query, whatever commits meanwhile. Read-only, it takes no write locks and cannot fail on
+serialisation. The gzip stream is created inside the transaction callback so an adapter retry starts
+from a clean stream.
+
+---
+
+## 5. Integrity
+
+| Check | Where |
+| --- | --- |
+| File SHA-256 vs catalogue row | verify, preview, restore |
+| Content hash vs data (v2) | verify, import, preview, restore |
+| Structure: tables ↔ manifest, row counts, uuid ids, duplicates, **every relationship between backed-up tables resolves inside the backup** | import, preview, restore |
+| Current schema: required columns present, enum values allowed | preview, restore |
+| Everything else the database enforces (types, unique indexes, checks, FKs to non-backed-up rows) | the rehearsal |
+
+A corrupted or malformed backup is refused before any write — and before a safety snapshot is taken.
+
+---
+
+## 6. Restore
 
 ```
-Preview  ← always first, never skippable
-   ↓ download, verify checksum, parse, check compatibility
-   ↓ diff every table against current state
-   ↓ report: create / update / delete / warnings / conflicts / orphans
-   ↓
-Human reads it and confirms
-   ↓
-Snapshot of current data taken automatically
-   ↓
-Apply, inside ONE transaction
-   ↓ deletes  — children first
-   ↓ upserts  — parents first
-   ↓
-Commit, or roll back entirely
+download → file checksum → parse + compatibility → content hash → structure → schema
+PREVIEW:  row diff + REHEARSAL (the real apply, in a transaction that is always rolled back,
+          measuring every public table before/after and every link cleared)
+CONFIRM:  type RESTORE; the request carries the previewed file's checksum
+RESTORE:  same validation again → audit restore_started → target marked restore point
+          → safety snapshot (no snapshot, no restore) → ONE transaction holding the restore
+          advisory lock: deletes children-first, upserts parents-first → commit, or nothing
+          → audit restored / restore_failed
 ```
 
-The M07 brief: never restore immediately. The confirm button does not exist until
-a preview has been produced — a destructive action reachable in one click is a
-destructive action taken by accident.
+- **Atomic by construction**: the adapter's transaction rolls back on any throw. Tested with a backup
+  the database rejects (duplicate unique key): rehearsal refused, restore rolled back, business data
+  identical.
+- **Only what was previewed**: a different checksum is a conflict.
+- **One at a time**: `pg_try_advisory_xact_lock`; a second restore is refused, and retention does not
+  delete while a restore holds the lock.
+- **Orphans**: a backed-up user without an Auth identity is skipped; nullable references to it are
+  cleared, rows that require it (a notification's recipient, a report preset's owner) are skipped;
+  all counted.
+- **Columns**: only the columns a backup carries are inserted, so columns added since take their
+  defaults.
 
-**Atomicity is structural, not careful.** The Database Adapter's transaction
-helper rolls back on a thrown error, so a failure on the last table unwinds the
-first. There is no partial restore to guard against.
+### Evidence that a restore happened
 
-A snapshot is taken before every restore. If the restore itself turns out to be
-the wrong decision, that snapshot is the only way back — and it must exist before
-the data is overwritten.
-
-### Orphaned users
-
-`public.users.id` references `auth.users(id)`. A backed-up user whose Auth
-identity has since been deleted cannot be inserted.
-
-ADR-009 Decision 4: skip that user, report it, restore everything else. Rows
-elsewhere pointing at a skipped user have that nullable column set to `null`,
-and every instance is counted — dropping the referencing row instead would lose
-an account or an audit entry to fix a user problem.
+`restore_started` is written before the apply and `restored` / `restore_failed` after it. Because
+`audit_logs` is append-only in a restore — rows not in the backup are kept — the restore never erases
+its own record. The safety snapshot lives in `backups`, which is never restored.
 
 ---
 
-## 6. Retention
+## 7. Automatic backups — endpoint implemented, trigger required
 
-Configurable, default **keep last 30**.
+`GET /api/cron/backups`, outside the login redirect, guarded by `Authorization: Bearer <CRON_SECRET>`
+(constant-time). No `CRON_SECRET` → **503** (off). Wrong bearer → 401.
 
-Never pruned, regardless of age or count:
+Each call is one tick: fail backups still `running` after 30 minutes (their process is gone); stand
+down if a backup is running; otherwise run one if due. **Slots, not intervals**, all UTC:
+hourly = each hour; daily = `hourUtc`:00; weekly = Mondays `hourUtc`:00; monthly = the 1st at
+`hourUtc`:00. Due = no successful scheduled backup since the latest slot. So any calling frequency is
+safe; a missed slot self-heals with one backup. Two triggers in the same instant could at worst make
+one extra backup, pruned like any other.
 
-- **Restore points** — a deliberate marker someone set
-- **Snapshots** — the same intent, expressed as a type
+Configuration: Settings → Backups (`frequency`, `hourUtc`, `keepLast`), as before.
 
-Both are excluded from the count entirely rather than merely sorted last, so a
-burst of snapshots cannot push out every routine backup.
+**To make it operational (deployment phase):**
 
-Pruning deletes the storage object **before** the row. The other order strands an
-orphaned object nobody can see and everyone pays for.
+1. Set `CRON_SECRET` (≥ 32 chars) on the Vercel project.
+2. Add a trigger. The project is on the **Vercel Hobby plan: Vercel Cron runs at most once a day**
+   (and not at a precise minute), which serves `daily`, `weekly` and `monthly`:
+   ```json
+   "crons": [{ "path": "/api/cron/backups", "schedule": "0 2 * * *" }]
+   ```
+   `hourly` needs a Pro plan cron or an external scheduler calling the endpoint hourly with the bearer.
 
-Retention runs after a successful backup, never before: pruning first could leave
-fewer backups than the policy promises if the new one then failed.
-
-A non-finite `keepLast` is clamped to the default. `Math.max(NaN, 1)` is `NaN`,
-which turns `slice(0, limit)` into `slice(0, NaN)` — keeping nothing and pruning
-every backup. The clamp alone looks sufficient and is not; a unit test pins it.
-
----
-
-## 7. Scheduler — INCOMPLETE
-
-ADR-009 Decision 2. The schedule and retention policy are stored in settings and
-validated. **Nothing fires automatically.**
-
-Supported frequencies: `off` · `hourly` · `daily` · `weekly` · `monthly`.
-
-`hourly` survives from four LOCKED documents; `weekly` and `monthly` come from
-the M07 brief. ADR-009 Decision 3 keeps both sets rather than overriding either.
-
-`snapshotService.isDue` is implemented and unit tested. It is the function a cron
-entry will call once a trigger mechanism is chosen, so adopting one is wiring
-rather than design.
-
-This is reported as unfinished, not as done.
+Until both are in place, the Backups page shows "Not running" for a configured schedule.
 
 ---
 
-## 8. Security
+## 8. Retention
+
+Keep the last `keepLast` (1–365, default 30) successful routine backups, applied after each
+successful backup. Never pruned and never counted: restore points (including every backup restored
+from, and imports), snapshots (including every safety snapshot). Failed backups neither count nor
+evict. `keepLast` below 1 or not a number is clamped — the newest successful backup always survives.
+The row is deleted under the restore lock, then its file; each deletion is audited.
+
+---
+
+## 9. Security
 
 | Control | Where |
-| ------- | ----- |
-| Super Admin only, checked before every operation | both services |
-| Workers have zero access | `ACCESS_BACKUPS` is absent from the Worker allow-list |
-| RLS on `backups`, Super Admin policy | migration 0002, still asserted by tests |
-| Private bucket, no public URL ever | `storage/backup-storage.ts` |
-| Export via 60-second signed URL | same |
-| Service role key `server-only` | ADR-008 Decision 4 |
-| Table names checked against an allow-list before reaching SQL | `dataset.repository.ts` |
-| Imported files validated before storage, stored before restore | `backup.service.ts` |
-
-### Dynamic SQL
-
-This module is the only place in the codebase where a table name is dynamic.
-Two rules hold without exception: every name is checked against
-`BACKUP_TABLE_NAMES` first, and identifiers go through `sql.identifier`, never
-string interpolation. A backup module that concatenated a table name into SQL
-would be a trivial injection point reachable from an uploaded file.
-
-### What a backup contains
-
-Every customer phone number and every encrypted account credential in the system.
-It is the most sensitive artifact the CRM produces, which is why the bucket is
-private, links expire in a minute, and only Super Admins can reach any of it.
-
-Account passwords stay AES-256-GCM encrypted inside the backup — the artifact
-carries the stored ciphertext, and `lib/crypto` is never invoked during backup or
-restore. A leaked backup does not leak plaintext credentials unless
-`ENCRYPTION_KEY` leaks with it.
+| --- | --- |
+| Super Admin only (`access_backups`), checked first in every public method | both services; Worker and signed-out tests |
+| No browser path to payloads | no action returns backup data; export is a 60-second signed URL |
+| RLS on `backups`, Super Admin policy; browser roles hold no grants | migration 0002, unchanged |
+| Repositories, storage and the engine are not exported | `index.ts` exports only `backupScheduler.tick` |
+| Dynamic table names checked against the allow-list, sent as identifiers | `dataset.repository.ts` |
+| Failure reasons and logs through the M06 scrubber | `safeFailureReason`, `logger` |
+| Audit entries carry metadata only — never the payload | tested |
 
 ---
 
-## 9. Performance
+## 10. Performance
 
-Backups **stream on write**. Rows are read one page at a time (500) and pushed
-straight into a gzip stream, respecting backpressure. Only one page and the
-compressed output exist at once — the full uncompressed dataset is never
-materialised.
-
-Being precise about the limit: the compressed result **is** assembled into a
-Buffer before upload, because the Supabase Storage client takes a body rather
-than a Node stream. For a CRM dump that is a few megabytes. The part that would
-actually exhaust memory — the uncompressed JSON — never exists.
-
-Restore reads the artifact whole. It has to hold the dataset anyway to diff it
-and apply it in one transaction, so streaming the read would save nothing and
-complicate the atomicity that matters more.
-
-`to_jsonb(row)` does the type conversion in PostgreSQL, and
-`jsonb_populate_recordset` does it in reverse. Neither direction re-implements
-type mapping in JavaScript, where one wrong timestamp or numeric silently
-corrupts a backup.
+Streaming write, 500 rows per page, one snapshot transaction, no N+1: a backup issues one page
+query per 500 rows per table plus a handful of catalogue reads — about 30 queries for the production
+dataset at M07 (~6,200 audit rows; the last production backup was 706 KB compressed). Peak memory is
+one page plus the compressed output. Preview and restore hold the backup in memory
+and run the apply twice (rehearsal, then real): fine at CRM scale; see §12 for the 500,000-profile
+ceiling.
 
 ---
 
-## 10. Known Gaps
+## 11. Failure behaviour
 
-| Gap | Consequence |
-| --- | ----------- |
-| Scheduler does not execute | "Automatic Backup" is stored and reported, never fired |
-| Restore never applied against the live database | Preview, checksum refusal and rollback structure are verified; the apply path is not — see the M07 report |
-| Preview loads current rows per table to diff | Fine at CRM scale, not at the 500,000-profile ceiling in 02_ARCHITECTURE.md |
-| Retention prunes only after a successful backup | A system that stops backing up also stops pruning |
-| No backup of `login_history` or sessions | Intentional; recorded here so it is not mistaken for an oversight |
+| Failure | Result |
+| --- | --- |
+| Backup write/upload fails | row `failed` with a safe reason; audited (`backup_failed`); logged safely; retention not run |
+| Process dies mid-backup | row stays `running`; the next scheduler tick marks it failed |
+| Corrupt/edited/incompatible backup | refused before any write, before any snapshot; `restore_failed` audited |
+| Database rejects the data | rehearsal refuses the preview; a forced restore rolls back entirely |
+| Safety snapshot fails | restore refused, nothing changed |
+| Another restore running | refused (conflict) |
+
+---
+
+## 12. Deferred / limitations
+
+- **Automatic backups are not operational** until `CRON_SECRET` and a trigger exist (§7).
+- **Auth identities are not backed up** (Supabase Auth owns them); restoring after a user was deleted
+  from Auth skips that user.
+- **Storage is a single Supabase bucket in the same project** as the database: a project-wide loss
+  loses both. Off-site copies (downloading exports, or a second destination) are an operational
+  practice, not implemented.
+- **Restore holds the backup in memory** and rehearses in full: fine now, not at the 500,000-profile
+  ceiling in 02_ARCHITECTURE.md.
+- **No manual delete** in the UI; deletion is retention only.
+- **Restores against production have never been run**; they are proven against the isolated database.

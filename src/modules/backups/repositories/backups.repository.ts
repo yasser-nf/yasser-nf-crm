@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 
 import {
   databaseAdapter,
@@ -10,6 +10,7 @@ import {
 } from "@/lib/database";
 import { backups, users, type BackupRow } from "@/lib/drizzle/schema";
 import type { Result } from "@/types/result";
+import { tryRestoreLock } from "./dataset.repository";
 
 /**
  * Backup metadata repository.
@@ -56,8 +57,27 @@ export interface BackupsRepository {
   retentionCandidates(): Promise<
     Result<readonly { id: string; createdAt: Date; type: string; isRestorePoint: boolean }[]>
   >;
-  deleteMany(ids: readonly string[]): Promise<Result<readonly BackupRow[]>>;
+  /**
+   * Deletes backup rows — but only while no restore is running (M07). Takes
+   * the restore advisory lock inside its own transaction; if a restore holds
+   * it, nothing is deleted and `null` is returned.
+   */
+  deleteMany(ids: readonly string[]): Promise<Result<readonly BackupRow[] | null>>;
+  /** Protects a backup from retention for good: it was restored from, or deliberately kept. */
+  markRestorePoint(id: string): Promise<Result<BackupRow>>;
+  /** Backups whose status is still `running`, oldest first. */
+  running(): Promise<Result<readonly BackupRow[]>>;
+  /** Marks `running` rows started before `startedBefore` as failed: their process is gone. */
+  failInterrupted(startedBefore: Date, reason: string): Promise<Result<number>>;
+  /** The newest successful backup of one of these types, or null. */
+  lastSuccessful(types?: readonly BackupRow["type"][]): Promise<Result<BackupRow | null>>;
+  /** The newest failed backup, or null. */
+  lastFailed(): Promise<Result<BackupRow | null>>;
+  /** Successful backups, and all backups, in the catalogue. */
+  counts(): Promise<Result<{ readonly successful: number; readonly total: number }>>;
 }
+
+const SUCCESSFUL: BackupRow["status"][] = ["completed", "verified"];
 
 export const backupsRepository: BackupsRepository = {
   async list(filter = {}) {
@@ -197,11 +217,106 @@ export const backupsRepository: BackupsRepository = {
       return databaseAdapter.query("backups.deleteMany", async () => []);
     }
 
-    return databaseAdapter.query("backups.deleteMany", (executor) =>
-      executor
+    return databaseAdapter.transaction("backups.deleteMany", async (executor) => {
+      /* A restore in progress may be reading any of these: do not touch them. */
+      if (!(await tryRestoreLock(executor))) {
+        return null;
+      }
+
+      return executor
         .delete(backups)
         .where(inArray(backups.id, [...ids]))
-        .returning(),
+        .returning();
+    });
+  },
+
+  async markRestorePoint(id) {
+    const result = await databaseAdapter.query("backups.markRestorePoint", (executor) =>
+      executor.update(backups).set({ isRestorePoint: true }).where(eq(backups.id, id)).returning(),
     );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return requireFound(result.value[0], "Backup", id);
+  },
+
+  async running() {
+    return databaseAdapter.query("backups.running", (executor) =>
+      executor
+        .select()
+        .from(backups)
+        .where(eq(backups.status, "running"))
+        .orderBy(backups.createdAt, backups.id),
+    );
+  },
+
+  async failInterrupted(startedBefore, reason) {
+    const result = await databaseAdapter.query("backups.failInterrupted", (executor) =>
+      executor
+        .update(backups)
+        .set({ status: "failed", errorMessage: reason })
+        .where(and(eq(backups.status, "running"), lt(backups.createdAt, startedBefore)))
+        .returning({ id: backups.id }),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return { ok: true, value: result.value.length } as const;
+  },
+
+  async lastSuccessful(types) {
+    const result = await databaseAdapter.query("backups.lastSuccessful", (executor) =>
+      executor
+        .select()
+        .from(backups)
+        .where(
+          and(
+            inArray(backups.status, SUCCESSFUL),
+            types && types.length > 0 ? inArray(backups.type, [...types]) : undefined,
+          ),
+        )
+        .orderBy(desc(backups.createdAt))
+        .limit(1),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return { ok: true, value: result.value[0] ?? null } as const;
+  },
+
+  async lastFailed() {
+    const result = await databaseAdapter.query("backups.lastFailed", (executor) =>
+      executor
+        .select()
+        .from(backups)
+        .where(eq(backups.status, "failed"))
+        .orderBy(desc(backups.createdAt))
+        .limit(1),
+    );
+
+    if (!result.ok) {
+      return result;
+    }
+
+    return { ok: true, value: result.value[0] ?? null } as const;
+  },
+
+  async counts() {
+    return databaseAdapter.query("backups.counts", async (executor) => {
+      const [row] = await executor
+        .select({
+          successful: sql<number>`count(*) filter (where ${inArray(backups.status, SUCCESSFUL)})::int`,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(backups);
+
+      return { successful: row?.successful ?? 0, total: row?.total ?? 0 };
+    });
   },
 };

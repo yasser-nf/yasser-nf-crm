@@ -3,10 +3,15 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { PAGINATION } from "@/config/constants";
-import { isBackupStorageConfigured } from "@/config/env.server";
+import { isBackupSchedulerConfigured, isBackupStorageConfigured } from "@/config/env.server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { ForbiddenError } from "@/lib/errors";
-import { BackupsTable, CreateBackupControls, backupService } from "@/modules/backups";
+import {
+  BackupSummaryPanel,
+  BackupsTable,
+  CreateBackupControls,
+  backupService,
+} from "@/modules/backups";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -42,10 +47,39 @@ export default async function BackupsPage() {
         </p>
       ) : null}
 
+      <Suspense fallback={<Skeleton className="h-28 w-full" />}>
+        <Summary />
+      </Suspense>
+
       <Suspense fallback={<TableSkeleton />}>
         <BackupsList />
       </Suspense>
     </div>
+  );
+}
+
+/**
+ * The summary: last successful and failed backup, schedule, retention, counts.
+ * A refusal renders nothing here — the list below already says why — and a
+ * failed read is an error, never a row of zeros.
+ */
+async function Summary() {
+  const actor = await getCurrentUser();
+  const result = await backupService.summary(actor);
+
+  if (!result.ok) {
+    if (result.error instanceof ForbiddenError) {
+      return null;
+    }
+
+    return <ErrorState error={result.error} title="Could not load the backup summary" />;
+  }
+
+  return (
+    <BackupSummaryPanel
+      summary={result.value}
+      schedulerConfigured={isBackupSchedulerConfigured()}
+    />
   );
 }
 

@@ -280,4 +280,66 @@ async function transaction<T>(
   return runWithRetry(operation, () => drizzleClient.transaction((tx) => run(tx)));
 }
 
-export const databaseAdapter = { query, transaction } as const;
+/**
+ * Reads under ONE consistent snapshot (M07).
+ *
+ * REPEATABLE READ, READ ONLY: every statement inside sees the database as of
+ * the transaction's first query, whatever commits meanwhile — so a backup that
+ * reads eleven tables page by page cannot capture half of one operation and
+ * half of another. Read-only, so it can never write and never holds a write
+ * lock; it also cannot fail on a serialization conflict.
+ */
+async function readSnapshot<T>(
+  operation: string,
+  run: (executor: DatabaseTransaction) => Promise<T>,
+): Promise<Result<T>> {
+  return runWithRetry(operation, () =>
+    drizzleClient.transaction((tx) => run(tx), {
+      isolationLevel: "repeatable read",
+      accessMode: "read only",
+    }),
+  );
+}
+
+/** Thrown only to end a rehearsal; never escapes `rehearse`. */
+class RehearsalRollback extends Error {
+  constructor(readonly value: unknown) {
+    super("rehearsal rollback");
+  }
+}
+
+/**
+ * Runs work in a transaction that is ALWAYS rolled back, and returns what the
+ * work computed (M07).
+ *
+ * The strongest validation available for a restore: the real statements run
+ * against the real schema — every foreign key, unique index, check constraint,
+ * enum and type — and nothing is ever committed. If the work throws, the
+ * failure is returned like any other; if it succeeds, its result is returned
+ * and every change it made is discarded.
+ */
+async function rehearse<T>(
+  operation: string,
+  run: (executor: DatabaseTransaction) => Promise<T>,
+): Promise<Result<T>> {
+  const result = await runWithRetry(operation, async () => {
+    try {
+      await drizzleClient.transaction(async (tx) => {
+        throw new RehearsalRollback(await run(tx));
+      });
+    } catch (caught) {
+      if (caught instanceof RehearsalRollback) {
+        return caught.value as T;
+      }
+
+      throw caught;
+    }
+
+    /* Unreachable: the callback always throws. Kept for the type checker. */
+    throw new Error("Rehearsal did not roll back");
+  });
+
+  return result;
+}
+
+export const databaseAdapter = { query, transaction, readSnapshot, rehearse } as const;

@@ -59,6 +59,12 @@ export const backupManifestSchema = z.object({
   type: z.string(),
   tables: z.array(z.string()),
   rowCounts: z.record(z.string(), z.number().int().min(0)),
+  /* Format 2 (M07). Declared here so Zod does not strip them before they are checked. */
+  schemaVersion: z.number().int().min(0).optional(),
+  contentSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 
 export const backupArtifactSchema = z.object({

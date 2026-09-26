@@ -31,6 +31,8 @@ function manifest(overrides: Partial<BackupManifest> = {}): BackupManifest {
     type: "manual",
     tables: BACKUP_TABLE_NAMES,
     rowCounts: {},
+    /* M07: format 2 requires a content hash; matching it is tested in backup-m07.test.ts. */
+    contentSha256: "0".repeat(64),
     ...overrides,
   };
 }

@@ -174,7 +174,13 @@ describe("middleware does not block the invitation", () => {
   it("leaves the existing login flow exactly as it was", () => {
     /* Nothing about ordinary route protection may change. */
     expect(PUBLIC_ROUTES).toEqual([ROUTES.LOGIN]);
-    expect(UNAUTHENTICATED_ENDPOINTS).toEqual(["/api/health"]);
+    /*
+     * Exact, still: M07 added the automatic-backup trigger, which a scheduler
+     * (never a session) calls and which refuses anything without its
+     * CRON_SECRET bearer (tests/unit/backup-m07.test.ts). Anything else added
+     * here must be a deliberate decision that updates this line.
+     */
+    expect(UNAUTHENTICATED_ENDPOINTS).toEqual(["/api/health", "/api/cron/backups"]);
     expect(DEFAULT_AUTHENTICATED_ROUTE).toBe(ROUTES.DASHBOARD);
   });
 
