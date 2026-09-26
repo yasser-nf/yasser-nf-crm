@@ -1,7 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Readable } from "node:stream";
 
-import { contentLines, type BackupData } from "./backup-format";
+import { canonicalJson, contentLines, type BackupData } from "./backup-format";
 
 /**
  * Checksum service.
@@ -88,6 +88,19 @@ export function contentSha256(tables: readonly string[], data: BackupData): stri
   return hash.digest();
 }
 
+/**
+ * The manifest's authentication code (M07 review): HMAC-SHA256, under the
+ * backup key, of the canonical manifest WITHOUT its own `contentMac`. It
+ * covers every manifest field — versions, tables, row counts, the content
+ * hash, dates, type — so editing any of them, or the data behind the content
+ * hash, without the key is detected.
+ */
+export function manifestMac(manifest: Readonly<Record<string, unknown>>, key: Buffer): string {
+  const { contentMac: _mac, ...signed } = manifest;
+
+  return createHmac(CHECKSUM_ALGORITHM, key).update(canonicalJson(signed), "utf8").digest("hex");
+}
+
 export const checksumService = {
   algorithm: CHECKSUM_ALGORITHM,
   of: checksumOf,
@@ -95,4 +108,5 @@ export const checksumService = {
   matches: checksumMatches,
   createContentHash,
   contentSha256,
+  manifestMac,
 } as const;

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 
 import {
   databaseAdapter,
@@ -223,9 +223,20 @@ export const backupsRepository: BackupsRepository = {
         return null;
       }
 
+      /*
+       * Protection is re-checked HERE, at delete time, not only when the plan
+       * was made: a restore may have marked one of these a restore point since.
+       */
       return executor
         .delete(backups)
-        .where(inArray(backups.id, [...ids]))
+        .where(
+          and(
+            inArray(backups.id, [...ids]),
+            eq(backups.isRestorePoint, false),
+            ne(backups.type, "snapshot"),
+            inArray(backups.status, SUCCESSFUL),
+          ),
+        )
         .returning();
     });
   },

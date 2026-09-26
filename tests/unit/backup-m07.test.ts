@@ -12,7 +12,7 @@ import {
   validateBackupStructure,
   type BackupManifest,
 } from "@/modules/backups/services/backup-format";
-import { contentSha256 } from "@/modules/backups/services/checksum.service";
+import { contentSha256, manifestMac } from "@/modules/backups/services/checksum.service";
 import { planRetention } from "@/modules/backups/services/retention";
 import { isScheduledBackupDue, latestSlot, nextSlot } from "@/modules/backups/services/schedule";
 
@@ -39,6 +39,7 @@ function manifest(overrides: Partial<BackupManifest> = {}): BackupManifest {
     tables: ["users", "accounts", "profiles"],
     rowCounts: { users: 1, accounts: 1, profiles: 1 },
     contentSha256: "0".repeat(64),
+    contentMac: "0".repeat(64),
     ...overrides,
   };
 }
@@ -206,9 +207,46 @@ describe("structure is proven before any write", () => {
   });
 });
 
+describe("the manifest signature (M07 review)", () => {
+  const key = Buffer.alloc(32, 1);
+  const base = {
+    formatVersion: 2,
+    createdAt: "2026-09-26T00:00:00.000Z",
+    tables: ["users"],
+    rowCounts: { users: 1 },
+    contentSha256: "a".repeat(64),
+  };
+
+  it("covers every manifest field, and ignores key order", () => {
+    const mac = manifestMac(base, key);
+
+    expect(manifestMac({ ...base, createdAt: "2020-01-01T00:00:00.000Z" }, key)).not.toBe(mac);
+    expect(manifestMac({ ...base, rowCounts: { users: 2 } }, key)).not.toBe(mac);
+    expect(manifestMac({ ...base, contentSha256: "b".repeat(64) }, key)).not.toBe(mac);
+    expect(manifestMac({ ...base, formatVersion: 1 }, key)).not.toBe(mac);
+    expect(manifestMac(Object.fromEntries(Object.entries(base).reverse()), key)).toBe(mac);
+  });
+
+  it("excludes its own field, and depends on the key", () => {
+    const mac = manifestMac(base, key);
+
+    expect(manifestMac({ ...base, contentMac: mac }, key)).toBe(mac);
+    expect(manifestMac(base, Buffer.alloc(32, 2))).not.toBe(mac);
+  });
+
+  it("row order is content: reversing rows changes the hash", () => {
+    const rows = { users: [{ id: A }, { id: B }] };
+
+    expect(contentSha256(["users"], rows)).not.toBe(
+      contentSha256(["users"], { users: [{ id: B }, { id: A }] }),
+    );
+  });
+});
+
 describe("compatibility", () => {
-  it("refuses a version 2 manifest without a content hash", () => {
+  it("refuses a version 2 manifest without a content hash or without a signature", () => {
     expect(checkCompatibility(manifest({ contentSha256: undefined })).compatible).toBe(false);
+    expect(checkCompatibility(manifest({ contentMac: undefined })).compatible).toBe(false);
   });
 
   it("refuses a backup from a newer schema, warns on an older one", () => {
@@ -219,7 +257,9 @@ describe("compatibility", () => {
   });
 
   it("accepts a version 1 backup, with a warning that its content cannot be proven", () => {
-    const v1 = checkCompatibility(manifest({ formatVersion: 1, contentSha256: undefined }));
+    const v1 = checkCompatibility(
+      manifest({ formatVersion: 1, contentSha256: undefined, contentMac: undefined }),
+    );
 
     expect(v1.compatible && v1.warnings.join()).toMatch(/no content hash/);
   });

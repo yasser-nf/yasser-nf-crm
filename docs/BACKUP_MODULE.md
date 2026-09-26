@@ -83,6 +83,7 @@ gzipped JSON: `{"manifest":{…},"data":{"<table>":[rows…],…},"rowCounts":{�
 | `schemaVersion` | migrations applied when taken; a backup from a newer schema is refused |
 | `createdAt`, `createdBy`, `appVersion`, `databaseVersion`, `type`, `tables` | metadata |
 | `contentSha256` | SHA-256 of the data under canonical serialisation — required in v2 |
+| `contentMac` | HMAC-SHA256 of the rest of the manifest under the backup key — required in v2 (M07 review) |
 
 Rows come from `to_jsonb(row)` (PostgreSQL does the type conversion), ordered by `id`; tables in the
 fixed order above; `null` is explicit.
@@ -109,6 +110,7 @@ from a clean stream.
 | Check | Where |
 | --- | --- |
 | File SHA-256 vs catalogue row | verify, preview, restore |
+| Signature (`contentMac`) vs manifest (v2) — covers versions, tables, counts, dates and the content hash | verify, import, preview, restore |
 | Content hash vs data (v2) | verify, import, preview, restore |
 | Structure: tables ↔ manifest, row counts, uuid ids, duplicates, **every relationship between backed-up tables resolves inside the backup** | import, preview, restore |
 | Current schema: required columns present, enum values allowed | preview, restore |
@@ -117,6 +119,22 @@ from a clean stream.
 A corrupted or malformed backup is refused before any write — and before a safety snapshot is taken.
 
 ---
+
+### Why a signature, not only a hash (M07 review)
+
+The content hash is an ordinary SHA-256: whoever holds an exported file can edit its data, recompute
+the hash and recompress it. For a backup already in the bucket that is caught anyway — the catalogue
+row holds the trusted file checksum — but an **imported** file has no trusted copy. So v2 manifests
+are signed: HMAC-SHA256 under a key derived with HKDF from `ENCRYPTION_KEY`
+(label `ynf-crm/backup-manifest-mac/v1`; no second secret, and the MAC key is never the encryption
+key). Editing data, row order or any manifest field without that key is refused.
+
+- Imports must be format 2 with a valid signature. **Version 1 files cannot be imported** — they
+  carry no signature. Version 1 backups already stored remain restorable (the catalogue checksum
+  vouches for them), with a warning.
+- A backup is only restorable on an installation holding the same `ENCRYPTION_KEY` — already true,
+  since its account passwords are encrypted with it.
+- Row order is part of the hashed content: reordering rows without re-signing is tampering.
 
 ## 6. Restore
 
@@ -135,6 +153,9 @@ RESTORE:  same validation again → audit restore_started → target marked rest
   the database rejects (duplicate unique key): rehearsal refused, restore rolled back, business data
   identical.
 - **Only what was previewed**: a different checksum is a conflict.
+- **Nothing interleaves**: after the advisory lock, the transaction takes `EXCLUSIVE` locks on every
+  backed-up table (reads still allowed) with a 15 s `lock_timeout` (M07 review). Without it, an
+  application write committed during the restore would survive on top of the restored state.
 - **One at a time**: `pg_try_advisory_xact_lock`; a second restore is refused, and retention does not
   delete while a restore holds the lock.
 - **Orphans**: a backed-up user without an Auth identity is skipped; nullable references to it are
@@ -142,6 +163,17 @@ RESTORE:  same validation again → audit restore_started → target marked rest
   all counted.
 - **Columns**: only the columns a backup carries are inserted, so columns added since take their
   defaults.
+
+### Transactional, and not
+
+| Inside the restore transaction (all or nothing) | Outside it (deliberately) |
+| --- | --- |
+| advisory lock, table locks, every DELETE and UPSERT, the before/after measurements | `restore_started` / `restored` / `restore_failed` audit entries; marking the source a restore point; the safety snapshot (a `backups` row and a storage object) |
+
+The outside steps are evidence and protection; each is written before the transaction starts or after
+it ends, and none depends on the transaction's outcome. If the transaction fails they remain — that
+is intended. A process that dies mid-restore loses its connection: PostgreSQL rolls the transaction
+back and releases both locks; `restore_started` without a result records the interruption.
 
 ### Evidence that a restore happened
 
@@ -226,6 +258,18 @@ ceiling.
 | Another restore running | refused (conflict) |
 
 ---
+
+## 11a. What is tested, and what rests on PostgreSQL semantics
+
+| Guarantee | Evidence |
+| --- | --- |
+| Snapshot is REPEATABLE READ, READ ONLY | tested: settings read inside `readSnapshot`, and a write refused |
+| All page reads use that one transaction | code: postgres.js `begin()` reserves one connection; every read takes the transaction's executor |
+| Forced failure after DELETEs → byte-identical tables | tested (fingerprint of every business table) |
+| Lock released after a failed restore | tested |
+| Second restore refused while the lock is held | tested with the lock reported held; two truly concurrent transactions cannot be staged on the single-session test database |
+| Table locks block concurrent writes | PostgreSQL semantics of `LOCK … IN EXCLUSIVE MODE`; not concurrency-tested for the same reason |
+| Backup consistent under concurrent writes | PostgreSQL semantics of REPEATABLE READ; not concurrency-tested |
 
 ## 12. Deferred / limitations
 

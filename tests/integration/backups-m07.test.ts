@@ -21,6 +21,8 @@ import { describeDatabaseUrl } from "../support/database-target.mjs";
 /* ---------------------------------------------------- in-memory storage */
 
 const bucket = vi.hoisted(() => new Map<string, Buffer>());
+/* Flip to make every upload fail, e.g. the restore's safety snapshot. */
+const failUploads = vi.hoisted(() => ({ on: false }));
 
 vi.mock("@/modules/backups/storage/backup-storage", () => {
   const ok = <T>(value: T) => ({ ok: true as const, value });
@@ -31,6 +33,13 @@ vi.mock("@/modules/backups/storage/backup-storage", () => {
       pathFor: (id: string) => `${id}.json.gz`,
       ensureBucket: async () => ok(true),
       upload: async (id: string, body: Buffer) => {
+        if (failUploads.on) {
+          const { ExternalServiceError } = await import("@/lib/errors");
+          return {
+            ok: false as const,
+            error: new ExternalServiceError("Backup upload failed: storage unavailable"),
+          };
+        }
         bucket.set(`${id}.json.gz`, Buffer.from(body));
         return ok({ path: `${id}.json.gz` });
       },
@@ -115,6 +124,7 @@ function artifactOf(filename: string) {
     data: Record<string, Record<string, unknown>[]>;
     rowCounts: Record<string, number>;
     contentSha256?: string;
+    contentMac?: string;
   };
 }
 
@@ -137,24 +147,56 @@ async function storeCrafted(document: unknown): Promise<{ id: string; checksum: 
 async function edited(
   filename: string,
   edit: (data: Record<string, Record<string, unknown>[]>) => void,
-  options: { keepHash?: boolean } = {},
+  options: { keepHash?: boolean; sign?: boolean; key?: Buffer } = {},
 ) {
   const { checksumService } = await services();
+  const { backupMacKey } = await import("@/modules/backups/services/backup-key");
   const document = artifactOf(filename);
   const data = structuredClone(document.data);
   edit(data);
   const tables = document.manifest["tables"] as string[];
   const rowCounts = Object.fromEntries(tables.map((table) => [table, data[table]?.length ?? 0]));
+  const manifest = {
+    ...document.manifest,
+    rowCounts,
+    contentSha256: options.keepHash
+      ? document.contentSha256
+      : checksumService.contentSha256(tables, data),
+  };
+  /* Signed like a real backup (with the installation's key) unless a test says otherwise. */
   return {
-    manifest: {
-      ...document.manifest,
-      rowCounts,
-      contentSha256: options.keepHash
-        ? document.contentSha256
-        : checksumService.contentSha256(tables, data),
-    },
+    manifest:
+      options.sign === false
+        ? manifest
+        : {
+            ...manifest,
+            contentMac: checksumService.manifestMac(manifest, options.key ?? backupMacKey()),
+          },
     data,
   };
+}
+
+/** A fingerprint of every row of every business table: equal means identical. */
+async function fingerprint(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const table of [
+    "users",
+    "customers",
+    "accounts",
+    "profiles",
+    "profile_events",
+    "issues",
+    "issue_notes",
+    "notifications",
+    "report_presets",
+    "settings",
+  ]) {
+    const [row] = await sql!<{ digest: string | null }[]>`
+      select md5(coalesce(string_agg(to_jsonb(t)::text, '|' order by t.id), '')) as digest
+      from ${sql!(table)} t`;
+    out[table] = row?.digest ?? "";
+  }
+  return out;
 }
 
 async function count(table: string): Promise<number> {
@@ -798,5 +840,341 @@ describe.skipIf(!local)("the format stays in step with the schema", () => {
         (rel) => `${rel.table}.${rel.column}->${rel.parent}:${rel.nullable}`,
       ).sort(),
     ).toEqual(catalog);
+  });
+});
+
+/* ======================================================================= */
+/* M07 final review                                                         */
+/* ======================================================================= */
+
+describe.skipIf(!local)(
+  "review: the snapshot really is one repeatable-read, read-only transaction",
+  () => {
+    it("runs REPEATABLE READ and READ ONLY, and refuses a write", async () => {
+      const { databaseAdapter } = await import("@/lib/database");
+      const { sql: q } = await import("drizzle-orm");
+
+      const settingsInside = await databaseAdapter.readSnapshot(
+        "test.snapshot",
+        async (executor) => {
+          const [row] = (await executor.execute(
+            q`select current_setting('transaction_isolation') as isolation,
+                 current_setting('transaction_read_only') as read_only`,
+          )) as unknown as { isolation: string; read_only: string }[];
+          return row;
+        },
+      );
+      const write = await databaseAdapter.readSnapshot("test.snapshotWrite", (executor) =>
+        executor.execute(q`update settings set updated_at = now()`),
+      );
+
+      expect(settingsInside.ok && settingsInside.value).toEqual({
+        isolation: "repeatable read",
+        read_only: "on",
+      });
+      expect(write.ok).toBe(false);
+    });
+  },
+);
+
+describe.skipIf(!local)("review: a file cannot be forged without the installation's key", () => {
+  it("edited data with a recomputed hash and checksum, but no valid signature, is refused", async () => {
+    const { restoreService, backupService } = await services();
+    const source = await backup();
+    const forged = await edited(
+      source.filename!,
+      (data) => {
+        data["accounts"]![0]!["email"] = "forged@example.invalid";
+      },
+      { sign: false },
+    );
+    const foreignKey = await edited(
+      source.filename!,
+      (data) => {
+        data["accounts"]![0]!["email"] = "forged@example.invalid";
+      },
+      { key: Buffer.alloc(32, 7) },
+    );
+
+    const stored = await storeCrafted({
+      ...forged,
+      manifest: { ...forged.manifest, contentMac: artifactOf(source.filename!).contentMac },
+    });
+    const previewed = await restoreService.preview(stored.id, admin);
+    const importedUnsigned = await backupService.importArtifact(
+      gzipSync(Buffer.from(JSON.stringify(forged))),
+      { actor: admin },
+    );
+    const importedForeign = await backupService.importArtifact(
+      gzipSync(Buffer.from(JSON.stringify(foreignKey))),
+      { actor: admin },
+    );
+
+    expect(previewed.ok).toBe(false);
+    if (!previewed.ok) expect(previewed.error.userMessage).toMatch(/signature/);
+    expect(importedUnsigned.ok).toBe(false);
+    expect(importedForeign.ok).toBe(false);
+    if (!importedForeign.ok) expect(importedForeign.error.userMessage).toMatch(/signature/);
+  });
+
+  it("editing only the manifest's metadata is detected", async () => {
+    const { backupService } = await services();
+    const good = artifactOf((await backup()).filename!);
+    const retimed = {
+      ...good,
+      manifest: { ...good.manifest, createdAt: "2020-01-01T00:00:00.000Z" },
+    };
+
+    const imported = await backupService.importArtifact(
+      gzipSync(Buffer.from(JSON.stringify(retimed))),
+      {
+        actor: admin,
+      },
+    );
+
+    expect(imported.ok).toBe(false);
+  });
+
+  it("an unauthenticated version 1 file cannot be imported", async () => {
+    const { backupService } = await services();
+    const good = artifactOf((await backup()).filename!);
+    const v1 = {
+      manifest: { ...good.manifest, formatVersion: 1 },
+      data: good.data,
+      rowCounts: good.rowCounts,
+    };
+
+    const imported = await backupService.importArtifact(gzipSync(Buffer.from(JSON.stringify(v1))), {
+      actor: admin,
+    });
+
+    expect(imported.ok).toBe(false);
+    if (!imported.ok) expect(imported.error.userMessage).toMatch(/version 2/);
+  });
+
+  it("row order is part of the content: reordered rows without a new hash are refused", async () => {
+    const { restoreService } = await services();
+    const reordered = await edited(
+      (await backup()).filename!,
+      (data) => {
+        data["profiles"]!.reverse();
+      },
+      { keepHash: true },
+    );
+    const stored = await storeCrafted(reordered);
+
+    const previewed = await restoreService.preview(stored.id, admin);
+
+    expect(previewed.ok).toBe(false);
+    if (!previewed.ok) expect(previewed.error.userMessage).toMatch(/content hash/);
+  });
+});
+
+describe.skipIf(!local)("review: confirmation is bound to the previewed file", () => {
+  it("a confirmation for backup A does not restore backup B", async () => {
+    const { restoreService } = await services();
+    const a = await backup();
+    await makeAccount("between-a-and-b");
+    const b = await backup();
+    const before = await fingerprint();
+
+    const previewA = await restoreService.preview(a.id, admin);
+    expect(previewA.ok).toBe(true);
+    const checksumA = previewA.ok ? previewA.value.checksum : "";
+
+    const wrongTarget = await restoreService.restore(
+      b.id,
+      { confirmation: "RESTORE", expectedChecksum: checksumA },
+      { actor: admin },
+    );
+
+    expect(wrongTarget.ok).toBe(false);
+    if (!wrongTarget.ok) expect(wrongTarget.error.code).toBe("CONFLICT");
+    expect(await fingerprint()).toEqual(before);
+  });
+});
+
+describe.skipIf(!local)(
+  "review: a failure after destructive statements leaves the exact prior state",
+  () => {
+    it("rolls back to byte-identical tables, keeps both backups valid, and releases the lock", async () => {
+      const { restoreService, backupService } = await services();
+      const source = await backup();
+      /*
+       * The failure is at the customers UPSERT, which runs after every reconcile
+       * DELETE: the transaction had already removed rows when it failed.
+       */
+      await makeAccount("deleted-by-the-failed-restore");
+      const crafted = await storeCrafted(
+        await edited(source.filename!, (data) => {
+          const customers = data["customers"]!;
+          customers.push({ ...customers[0]!, id: "0e070000-0000-4000-8000-0000000000a1" });
+        }),
+      );
+      const before = await fingerprint();
+
+      const restored = await restoreService.restore(
+        crafted.id,
+        { confirmation: "RESTORE", expectedChecksum: crafted.checksum },
+        { actor: admin },
+      );
+
+      expect(restored.ok).toBe(false);
+      expect(await fingerprint()).toEqual(before);
+
+      /* The source and the safety snapshot taken before the attempt are both intact. */
+      const [safety] = await sql!<{ id: string }[]>`
+      select id from backups where type = 'snapshot' order by created_at desc limit 1`;
+      expect((await backupService.verify(source.id, { actor: admin })).ok).toBe(true);
+      expect((await backupService.verify(safety!.id, { actor: admin })).ok).toBe(true);
+
+      /* The advisory lock went with the transaction: another restore can take it at once. */
+      const { databaseAdapter } = await import("@/lib/database");
+      const { tryRestoreLock } = await import("@/modules/backups/repositories/dataset.repository");
+      const lock = await databaseAdapter.transaction("test.lockFree", (executor) =>
+        tryRestoreLock(executor),
+      );
+      expect(lock.ok && lock.value).toBe(true);
+    });
+
+    it("a failing restore's message and logs never carry a PIN-like value it was fed", async () => {
+      const { restoreService } = await services();
+      const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const warns = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const crafted = await storeCrafted(
+        await edited((await backup()).filename!, (data) => {
+          data["profiles"]![0]!["sale_date"] = "PIN-8631-99";
+        }),
+      );
+
+      try {
+        const previewed = await restoreService.preview(crafted.id, admin);
+
+        expect(previewed.ok).toBe(false);
+        if (!previewed.ok) expect(previewed.error.userMessage).not.toContain("8631");
+        const written = [...errors.mock.calls, ...warns.mock.calls]
+          .map((call) => String(call[0]))
+          .join("\n");
+        expect(written).not.toContain("8631");
+      } finally {
+        errors.mockRestore();
+        warns.mockRestore();
+      }
+    });
+  },
+);
+
+describe.skipIf(!local)("review: the safety snapshot gates the restore", () => {
+  it("if the snapshot cannot be taken, nothing is restored and the failure is recorded", async () => {
+    const { restoreService } = await services();
+    const source = await backup();
+    await makeAccount("survives-a-refused-restore");
+    const before = await fingerprint();
+
+    failUploads.on = true;
+    let restored;
+    try {
+      restored = await restoreService.restore(
+        source.id,
+        { confirmation: "RESTORE", expectedChecksum: source.checksum! },
+        { actor: admin },
+      );
+    } finally {
+      failUploads.on = false;
+    }
+
+    expect(restored.ok).toBe(false);
+    if (!restored.ok) expect(restored.error.userMessage).toMatch(/snapshot .* could not be taken/);
+    expect(await fingerprint()).toEqual(before);
+    const [event] = await sql!<{ reason: string }[]>`
+      select after->>'reason' as reason from audit_logs
+      where entity = 'backup' and entity_id = ${source.id}::uuid and action = 'restore'
+      order by created_at desc limit 1`;
+    expect(event?.reason).toBe("safety_snapshot_failed");
+  });
+
+  it("a corrupted file never costs a snapshot", async () => {
+    const { restoreService } = await services();
+    const source = await backup();
+    bucket.set(source.filename!, Buffer.concat([bucket.get(source.filename!)!, Buffer.from([1])]));
+    const [{ n: before } = { n: -1 }] = await sql!<
+      { n: number }[]
+    >`select count(*)::int n from backups where type = 'snapshot'`;
+
+    const restored = await restoreService.restore(
+      source.id,
+      { confirmation: "RESTORE", expectedChecksum: source.checksum! },
+      { actor: admin },
+    );
+
+    expect(restored.ok).toBe(false);
+    const [{ n: after } = { n: -1 }] = await sql!<
+      { n: number }[]
+    >`select count(*)::int n from backups where type = 'snapshot'`;
+    expect(after).toBe(before);
+  });
+});
+
+describe.skipIf(!local)("review: the record of a restore survives it", () => {
+  it("restoring an older audit history keeps the restore events, with the right actor", async () => {
+    const { restoreService } = await services();
+    const older = await backup();
+    /* History written after the backup: must survive (audit_logs is append-only in a restore). */
+    await makeAccount("history-after-backup");
+    const [{ n: historyBefore } = { n: -1 }] = await sql!<
+      { n: number }[]
+    >`select count(*)::int n from audit_logs`;
+
+    const restored = await restoreService.restore(
+      older.id,
+      { confirmation: "RESTORE", expectedChecksum: older.checksum! },
+      { actor: admin },
+    );
+    expect(restored.ok, restored.ok ? "" : restored.error.message).toBe(true);
+
+    const events = await sql!<
+      { event: string; user_id: string | null; actor_email: string | null; body: string }[]
+    >`
+      select after->>'event' as event, user_id, actor_email, after::text as body from audit_logs
+      where entity = 'backup' and entity_id = ${older.id}::uuid and action = 'restore' order by created_at`;
+    expect(events.map((row) => row.event)).toEqual(["restore_started", "restored"]);
+    for (const row of events) {
+      expect(row.user_id).toBe(admin.id);
+      expect(row.actor_email).toBe(admin.email);
+      expect(row.body).not.toMatch(/"data"|password_encrypted|v1:|memory:\/\//);
+      expect(row.body).not.toContain(PIN);
+    }
+    const [{ n: historyAfter } = { n: -1 }] = await sql!<
+      { n: number }[]
+    >`select count(*)::int n from audit_logs`;
+    expect(historyAfter).toBeGreaterThan(historyBefore);
+  });
+});
+
+describe.skipIf(!local)("review: retention cannot delete a backup a restore has claimed", () => {
+  it("a stale retention plan cannot delete a backup marked restore point since", async () => {
+    const { backupsRepository } = await import("@/modules/backups/repositories/backups.repository");
+    const routine = await backup();
+
+    /* The plan was made while this was a routine backup; a restore then claims it. */
+    await backupsRepository.markRestorePoint(routine.id);
+    const deleted = await backupsRepository.deleteMany([routine.id]);
+
+    expect(deleted.ok && deleted.value).toEqual([]);
+    const [{ n } = { n: -1 }] = await sql!<
+      { n: number }[]
+    >`select count(*)::int n from backups where id = ${routine.id}::uuid`;
+    expect(n).toBe(1);
+  });
+
+  it("never deletes a snapshot or a failed backup, even when asked to by id", async () => {
+    const { backupsRepository } = await import("@/modules/backups/repositories/backups.repository");
+    const snapshot = await backup("snapshot");
+    const [{ id: failedId } = { id: "" }] = await sql!<{ id: string }[]>`
+      insert into backups (name, type, status, error_message) values ('failed-x', 'manual', 'failed', 'x') returning id`;
+
+    const deleted = await backupsRepository.deleteMany([snapshot.id, failedId]);
+
+    expect(deleted.ok && deleted.value).toEqual([]);
   });
 });

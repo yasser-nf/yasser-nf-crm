@@ -163,6 +163,8 @@ export interface BackupManifest {
   readonly rowCounts: Readonly<Record<string, number>>;
   /** SHA-256 of the data under `canonicalJson`. Required from v2. */
   readonly contentSha256?: string | undefined;
+  /** HMAC of the rest of the manifest under the backup key. Required from v2. */
+  readonly contentMac?: string | undefined;
 }
 
 export type BackupData = Readonly<Record<string, readonly Record<string, unknown>[]>>;
@@ -201,10 +203,10 @@ export function checkCompatibility(
     };
   }
 
-  if (manifest.formatVersion >= 2 && !manifest.contentSha256) {
+  if (manifest.formatVersion >= 2 && (!manifest.contentSha256 || !manifest.contentMac)) {
     return {
       compatible: false,
-      reason: "This backup declares format version 2 but carries no content hash.",
+      reason: "This backup declares format version 2 but is missing its content hash or signature.",
     };
   }
 

@@ -255,6 +255,26 @@ export async function tryRestoreLock(executor: DatabaseTransaction): Promise<boo
   return row?.locked === true;
 }
 
+/**
+ * Freezes writes to every backed-up table for the rest of the caller's
+ * transaction (M07 review): EXCLUSIVE mode, which still admits plain reads.
+ *
+ * Without it, a sale committed by the application while a restore runs would
+ * survive on top of the restored state. With it, application writes wait for
+ * the restore to commit or roll back — seconds. `lock_timeout` bounds the wait
+ * for the locks themselves: a restore that cannot get them fails, and rolls
+ * back, rather than hanging.
+ */
+export async function lockBackedUpTables(executor: DatabaseTransaction): Promise<void> {
+  await executor.execute(sql`set local lock_timeout = '15s'`);
+  await executor.execute(
+    sql`lock table ${sql.join(
+      BACKUP_TABLE_NAMES.map((table) => sql.identifier(table)),
+      sql`, `,
+    )} in exclusive mode`,
+  );
+}
+
 /** Row counts of every public base table, for the rehearsal's before/after. */
 export async function publicTableCounts(
   executor: DatabaseExecutor,

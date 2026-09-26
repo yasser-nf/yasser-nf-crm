@@ -65,6 +65,10 @@ export const backupManifestSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/)
     .optional(),
+  contentMac: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 
 export const backupArtifactSchema = z.object({

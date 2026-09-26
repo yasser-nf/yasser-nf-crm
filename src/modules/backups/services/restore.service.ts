@@ -21,6 +21,7 @@ import {
   datasetRepository,
   deleteRows,
   idsOf,
+  lockBackedUpTables,
   nullableReferenceCounts,
   publicTableCounts,
   tryRestoreLock,
@@ -43,6 +44,7 @@ import {
   type BackupManifest,
 } from "./backup-format";
 import { backupEngine } from "./backup.service";
+import { backupMacKey } from "./backup-key";
 import { checksumService } from "./checksum.service";
 
 /**
@@ -240,6 +242,19 @@ async function load(backupId: string): Promise<Result<LoadedArtifact>> {
 
   if (!compatibility.compatible) {
     return refuse(compatibility.reason, compatibility.reason);
+  }
+
+  if (
+    manifest.contentMac &&
+    !checksumService.matches(
+      manifest.contentMac,
+      checksumService.manifestMac(manifest, backupMacKey()),
+    )
+  ) {
+    return refuse(
+      "Backup signature mismatch",
+      "This backup's signature does not match — it was altered, or made by another installation. Restore refused.",
+    );
   }
 
   let contentVerified = false;
@@ -666,10 +681,22 @@ async function restore(
 
   const orphanIds = new Set(orphans.value.map((entry) => entry.id));
 
-  await auditRestore(backupId, { event: "restore_started" }, context);
+  /*
+   * Restored-from backups are kept for good: retention can never delete them
+   * (it re-checks this flag at delete time). If the row has just been pruned,
+   * the restore stops here — before any write — rather than proceed from a
+   * backup that no longer exists.
+   */
+  const marked = await backupsRepository.markRestorePoint(backupId);
 
-  /* Restored-from backups are kept for good: retention can never delete them. */
-  await backupsRepository.markRestorePoint(backupId);
+  if (!marked.ok) {
+    return refuse(
+      "Backup disappeared before the restore could protect it",
+      "This backup no longer exists. Nothing was restored.",
+    );
+  }
+
+  await auditRestore(backupId, { event: "restore_started" }, context);
 
   /* The way back. No snapshot, no restore. */
   let safetySnapshotId: string | null = null;
@@ -707,6 +734,9 @@ async function restore(
         context: { restoreLock: true },
       });
     }
+
+    /* No application write can interleave with the restore from here to commit. */
+    await lockBackedUpTables(executor);
 
     const before = await measure(executor);
     const result = await apply(executor, loaded.value, orphanIds);

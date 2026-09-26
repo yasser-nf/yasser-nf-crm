@@ -40,6 +40,7 @@ import {
   checkCompatibility,
   validateBackupStructure,
 } from "./backup-format";
+import { backupMacKey } from "./backup-key";
 import { checksumService } from "./checksum.service";
 import { planRetention } from "./retention";
 import { INTERRUPTED_AFTER_MS, isScheduledBackupDue, nextSlot } from "./schedule";
@@ -339,7 +340,10 @@ async function verify(id: string, context: AuditContext): Promise<Result<BackupR
  * (version 2) and internal consistency. Used by verify and import; the restore
  * does the same and more before writing anything.
  */
-function proveContent(body: Buffer): Result<{ warnings: readonly string[] }> {
+function proveContent(
+  body: Buffer,
+  options: { readonly requireAuthenticated?: boolean } = {},
+): Result<{ warnings: readonly string[] }> {
   let document: unknown;
 
   try {
@@ -374,6 +378,36 @@ function proveContent(body: Buffer): Result<{ warnings: readonly string[] }> {
   }
 
   const { manifest, data } = artifact.data;
+
+  /*
+   * An imported file has no trusted copy to compare with, so it must prove
+   * itself with the backup key. Version 1 files carry no signature: they are
+   * refused on import (backups already stored stay restorable — the catalogue
+   * checksum vouches for those).
+   */
+  if (options.requireAuthenticated && !manifest.contentMac) {
+    return fail(
+      new ValidationError("Unauthenticated backup file refused on import", {
+        userMessage:
+          "Only version 2 backup files can be imported: older files cannot be authenticated.",
+      }),
+    );
+  }
+
+  if (
+    manifest.contentMac &&
+    !checksumService.matches(
+      manifest.contentMac,
+      checksumService.manifestMac(manifest, backupMacKey()),
+    )
+  ) {
+    return fail(
+      new ValidationError("Backup signature mismatch", {
+        userMessage:
+          "This backup's signature does not match — it was altered, or made by another installation.",
+      }),
+    );
+  }
 
   if (manifest.contentSha256) {
     const actual = checksumService.contentSha256(manifest.tables, data);
@@ -440,7 +474,7 @@ async function importArtifact(body: Buffer, context: AuditContext): Promise<Resu
     return permitted;
   }
 
-  const proven = proveContent(body);
+  const proven = proveContent(body, { requireAuthenticated: true });
 
   if (!proven.ok) {
     return proven;

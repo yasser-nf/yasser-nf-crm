@@ -66,6 +66,8 @@ export function BackupDetailView({
   const [preview, setPreview] = useState<RestorePreview | null>(null);
   const [outcome, setOutcome] = useState<RestoreOutcome | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  /* A refused preview (corrupt, forged, inconsistent) stays on screen, not only as a toast. */
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const tableCounts = (backup.tableCounts ?? {}) as Record<string, number>;
 
@@ -80,8 +82,12 @@ export function BackupDetailView({
 
   const runPreview = useMutation({
     mutationFn: async () => unwrap(await previewRestoreAction(backup.id)),
+    onMutate: () => setPreviewError(null),
     onSuccess: (result) => setPreview(result),
-    onError: (error) => toast.error("Preview failed", { description: error.userMessage }),
+    onError: (error) => {
+      setPreview(null);
+      setPreviewError(error.userMessage);
+    },
   });
 
   const restore = useMutation({
@@ -211,6 +217,19 @@ export function BackupDetailView({
           </Button>
         </div>
 
+        {previewError ? (
+          <p
+            role="alert"
+            className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle p-4 text-description text-danger"
+          >
+            <CircleX className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>
+              <strong className="block">This backup cannot be restored</strong>
+              {previewError}
+            </span>
+          </p>
+        ) : null}
+
         {failure ? (
           <p
             role="alert"
@@ -319,6 +338,9 @@ function PreviewPanel({
       </ul>
 
       <div className="flex flex-wrap gap-4">
+        <span className="w-full text-caption text-foreground-subtle">
+          Row comparison — backup against current data:
+        </span>
         <Total label="Rows to create" value={preview.totals.create} tone="text-success" />
         <Total label="Rows to update" value={preview.totals.update} tone="text-warning" />
         <Total label="Rows to delete" value={preview.totals.delete} tone="text-danger" />
@@ -345,7 +367,7 @@ function PreviewPanel({
 
       <div className="flex flex-col gap-1.5">
         <span className="text-caption font-medium text-foreground">
-          Measured effect on every table
+          Measured effect on every table (from the rehearsal)
         </span>
         {changed.length === 0 ? (
           <p className="text-caption text-foreground-muted">

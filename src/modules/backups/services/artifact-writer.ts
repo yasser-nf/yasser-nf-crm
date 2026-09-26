@@ -6,7 +6,8 @@ import { databaseAdapter } from "@/lib/database";
 import type { Result } from "@/types/result";
 import { readPageWith } from "../repositories/dataset.repository";
 import { BACKUP_TABLES, canonicalJson, type BackupManifest } from "./backup-format";
-import { createContentHash } from "./checksum.service";
+import { backupMacKey } from "./backup-key";
+import { createContentHash, manifestMac } from "./checksum.service";
 
 /**
  * Builds and reads the compressed artifact.
@@ -121,9 +122,12 @@ export async function writeArtifact(
       }
 
       const contentSha256 = content.digest();
+      /* Signed last: the MAC covers the complete manifest, counts and hash included. */
+      const contentMac = manifestMac({ ...manifest, rowCounts, contentSha256 }, backupMacKey());
 
       await write(
-        `},"rowCounts":${JSON.stringify(rowCounts)},"contentSha256":${JSON.stringify(contentSha256)}}`,
+        `},"rowCounts":${JSON.stringify(rowCounts)},"contentSha256":${JSON.stringify(contentSha256)}` +
+          `,"contentMac":${JSON.stringify(contentMac)}}`,
       );
 
       gzip.end();
@@ -171,9 +175,12 @@ export function readArtifact(body: Buffer): unknown {
     manifest: {
       ...fields,
       rowCounts: fields["rowCounts"] ?? document["rowCounts"] ?? {},
-      /* v2 writes the content hash in the trailer, for the same reason as the counts. */
+      /* v2 writes the content hash and its MAC in the trailer, for the same reason as the counts. */
       ...((fields["contentSha256"] ?? document["contentSha256"])
         ? { contentSha256: fields["contentSha256"] ?? document["contentSha256"] }
+        : {}),
+      ...((fields["contentMac"] ?? document["contentMac"])
+        ? { contentMac: fields["contentMac"] ?? document["contentMac"] }
         : {}),
     },
   };
