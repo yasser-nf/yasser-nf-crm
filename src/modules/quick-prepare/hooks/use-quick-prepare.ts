@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 import { ActionError } from "@/lib/errors";
@@ -36,6 +37,40 @@ function unwrapAction<T>(result: ActionResult<T>): T {
  * could show stock that confirmation then refused. The action validates both
  * fields now, so this cannot regress silently.
  */
+/**
+ * M08 jobs: an operation id per thing being confirmed.
+ *
+ * Returns the same id for as long as `identity` (what the operator approved —
+ * customer, replacement account, held profiles) stays the same, and a new one
+ * when it changes. Every attempt to confirm the same replacement therefore
+ * carries the same id, so a retry after a lost response replays the first
+ * result instead of being refused as "allocation changed".
+ */
+export function useOperationId(): (identity: string) => string {
+  const current = useRef<{ identity: string; id: string } | null>(null);
+
+  return useCallback((identity: string) => {
+    if (current.current?.identity !== identity) {
+      current.current = { identity, id: crypto.randomUUID() };
+    }
+
+    return current.current.id;
+  }, []);
+}
+
+/** What a replacement confirmation is about — the input to `useOperationId`. */
+export function replacementIdentity(input: {
+  readonly customerId: string;
+  readonly replacementAccountId: string;
+  readonly expectedProfileIds: readonly string[];
+}): string {
+  return [
+    input.customerId,
+    input.replacementAccountId,
+    ...[...input.expectedProfileIds].sort(),
+  ].join(":");
+}
+
 export function usePreviewAllocation() {
   return useMutation({
     mutationFn: async (input: { profileCount: number; durationDays: number }) =>
@@ -59,7 +94,14 @@ export function usePreviewReplacement() {
 export function useConfirmReplacement() {
   return useMutation({
     mutationFn: async (input: unknown) => unwrapAction(await confirmReplacementAction(input)),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (data.replayed) {
+        toast.info("Already replaced", {
+          description: "This replacement was already done — showing its result again.",
+        });
+        return;
+      }
+
       toast.success("Replacement allocated", {
         description: "The customer keeps their original expiry date.",
       });
@@ -75,6 +117,14 @@ export function useConfirmReplacement() {
 export function useConfirmPreparation() {
   return useMutation({
     mutationFn: async (input: unknown) => unwrapAction(await confirmPreparationAction(input)),
+    onSuccess: (data) => {
+      /* M08 jobs: the same order confirmed twice. Nothing new was sold. */
+      if (data.replayed) {
+        toast.info("Already prepared", {
+          description: "This order was already confirmed — showing its result again.",
+        });
+      }
+    },
     onError: (error) => {
       /* Field errors render on the form; only the rest need a toast. */
       if (!(error instanceof ActionError) || !error.fieldErrors) {

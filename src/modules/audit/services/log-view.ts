@@ -43,6 +43,7 @@ export const AUDIT_ENTITIES = [
   "user",
   "backup",
   "settings",
+  "job",
 ] as const;
 export type AuditEntityName = (typeof AUDIT_ENTITIES)[number];
 
@@ -64,6 +65,7 @@ export const ENTITY_LABELS: Record<AuditEntityName, string> = {
   user: "User",
   backup: "Backup",
   settings: "Settings",
+  job: "Job",
 };
 
 /**
@@ -83,6 +85,10 @@ export const EVENT_LABELS: Record<string, string> = {
   invitation_resent: "Invitation resent",
   user_created: "User created",
   restored: "Backup restored",
+  job_succeeded: "Job succeeded",
+  job_failed: "Job failed",
+  job_cancelled: "Job cancelled",
+  job_recovered: "Job recovered from a silent worker",
 };
 
 /** Page size, the application's own. */
@@ -527,6 +533,8 @@ function describeSubject(entity: string, before: unknown, after: unknown): strin
     }
     case "backup":
       return pick("name") ?? pick("filename");
+    case "job":
+      return pick("type");
     default:
       return null;
   }
@@ -557,6 +565,9 @@ export function entityHref(
       return `${ROUTES.BACKUPS}/${entityId}`;
     case "settings":
       return ROUTES.SETTINGS;
+    case "job":
+      /* A job has no page of its own; the jobs list finds it by id. */
+      return `${ROUTES.JOBS}?search=${entityId}`;
     case "profile": {
       /* A profile lives on its account's page. */
       const accountId = { ...asRecord(before), ...asRecord(after) }["accountId"];

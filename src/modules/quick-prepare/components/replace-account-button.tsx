@@ -14,7 +14,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-import { useConfirmReplacement, usePreviewReplacement } from "../hooks/use-quick-prepare";
+import {
+  replacementIdentity,
+  useConfirmReplacement,
+  useOperationId,
+  usePreviewReplacement,
+} from "../hooks/use-quick-prepare";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type { ReplacementPreview } from "../services/quick-replace.service";
 
@@ -96,6 +101,7 @@ export function ReplaceAccountButton({
 
   const previewReplacement = usePreviewReplacement();
   const confirmReplacement = useConfirmReplacement();
+  const operationIdFor = useOperationId();
 
   const busy = previewReplacement.isPending || confirmReplacement.isPending;
 
@@ -294,6 +300,13 @@ export function ReplaceAccountButton({
                         replacementAccountId: replacement.account.id,
                         reason: account.status,
                         passwordChangeConfirmed: passwordChanged,
+                        operationId: operationIdFor(
+                          replacementIdentity({
+                            customerId,
+                            replacementAccountId: replacement.account.id,
+                            expectedProfileIds: selected.profiles.map((profile) => profile.id),
+                          }),
+                        ),
                       },
                       { onSuccess: setResult },
                     )

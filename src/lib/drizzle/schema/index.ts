@@ -28,5 +28,7 @@ export * from "./backups";
 export * from "./settings";
 export * from "./report-presets";
 export * from "./notifications";
+export * from "./jobs";
+export * from "./idempotency-keys";
 
 export * from "./relations";

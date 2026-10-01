@@ -5,10 +5,11 @@ import { headers } from "next/headers";
 
 import { ROUTES } from "@/config/constants";
 import { getCurrentUser } from "@/lib/auth/session";
-import { UnauthorizedError, isAppError, type AppError } from "@/lib/errors";
+import { UnauthorizedError, ValidationError, isAppError, type AppError } from "@/lib/errors";
 import type { AuditContext } from "@/modules/audit";
 import { quickPrepareService } from "../services/quick-prepare.service";
 import { quickReplaceService } from "../services/quick-replace.service";
+import { operationIdSchema } from "../validation/quick-prepare.schema";
 
 /**
  * Quick Prepare server actions.
@@ -103,7 +104,29 @@ export async function previewAllocationAction(input: unknown) {
 }
 
 /** Allocates and returns credentials. Revalidates the screens whose data moved. */
+/**
+ * M08 jobs: a confirmation from the browser must carry its operation id.
+ *
+ * The services accept a call without one (server code gets a fresh key per
+ * call), but a browser request without one could not be told apart from its
+ * own repeat — so it is refused here, before any work, rather than allowed to
+ * sell twice. A page loaded before this change sends none; reloading fixes it.
+ */
+function requireOperationId(input: unknown): ValidationError | null {
+  return operationIdSchema.safeParse(input).success
+    ? null
+    : new ValidationError("Confirmation without an operation id", {
+        userMessage: "This page is out of date. Reload it and try again.",
+      });
+}
+
 export async function confirmPreparationAction(input: unknown) {
+  const missing = requireOperationId(input);
+
+  if (missing) {
+    return toFailure(missing);
+  }
+
   return run(
     async (context) => quickPrepareService.confirm(input, context),
     [ROUTES.ACCOUNTS, ROUTES.QUICK_PREPARE],
@@ -138,6 +161,12 @@ export async function previewReplacementAction(input: unknown) {
  * M13 §10 guards.
  */
 export async function confirmReplacementAction(input: unknown) {
+  const missing = requireOperationId(input);
+
+  if (missing) {
+    return toFailure(missing);
+  }
+
   return run(
     async (context) => quickPrepareService.confirmReplacement(input, context),
     [ROUTES.ACCOUNTS, ROUTES.QUICK_PREPARE],

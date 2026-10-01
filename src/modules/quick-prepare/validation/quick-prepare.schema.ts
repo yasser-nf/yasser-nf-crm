@@ -57,6 +57,17 @@ export const quickPrepareSchema = z.object({
    * a client that sends `true` for an account needing no change changes nothing.
    */
   passwordChangeConfirmed: z.boolean().optional(),
+
+  /**
+   * M08 jobs: identifies this ORDER, not this request. The page creates it
+   * once per reviewed order and sends the same value on every attempt — a
+   * double click or a retry after a lost response — so the server can tell a
+   * repeat from a new sale and replay the first instead of selling twice.
+   * Optional here (server code may call without one and gets a fresh key per
+   * call, which still protects the adapter's own retries); the Server Action
+   * requires it.
+   */
+  operationId: z.uuid().optional(),
 });
 
 export type QuickPrepareInput = z.infer<typeof quickPrepareSchema>;
@@ -152,8 +163,16 @@ export const confirmReplacementSchema = z.object({
    * account being handed over. Required when the preview flagged reuse.
    */
   passwordChangeConfirmed: z.boolean().optional(),
+
+  /** M08 jobs: one per previewed replacement, repeated on every attempt. See quickPrepareSchema. */
+  operationId: z.uuid().optional(),
 });
 
 export type ConfirmReplacementInput = z.infer<typeof confirmReplacementSchema>;
+
+/** What the Server Actions require on top of the service schemas: the operation id. */
+export const operationIdSchema = z.object({
+  operationId: z.uuid({ error: "Missing confirmation id" }),
+});
 
 export { MAX_PROFILES_PER_PREPARATION, MIN_DURATION_DAYS, MAX_DURATION_DAYS };

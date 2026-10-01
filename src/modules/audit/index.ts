@@ -12,6 +12,12 @@ export type { AuditRepository, AuditFilter } from "./repositories/audit.reposito
 
 export { auditService, type AuditContext, type RecordAuditInput } from "./services/audit.service";
 
+/*
+ * M08 jobs: the same sensitive-key rule, reused to refuse a job payload that
+ * carries a credential — one definition of "secret", not two.
+ */
+export { isSensitiveKey } from "./services/audit-redaction";
+
 /* M06: the Logs page. Entries leave the server only as `LogEntry`. */
 export { logsService } from "./services/logs.service";
 export {

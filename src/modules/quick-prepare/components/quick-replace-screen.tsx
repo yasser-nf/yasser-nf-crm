@@ -18,7 +18,12 @@ import {
   type ProfileSlotState,
 } from "@/shared/ui/profile-state";
 import { cn } from "@/utils/cn";
-import { useConfirmReplacement, usePreviewReplacement } from "../hooks/use-quick-prepare";
+import {
+  replacementIdentity,
+  useConfirmReplacement,
+  useOperationId,
+  usePreviewReplacement,
+} from "../hooks/use-quick-prepare";
 import { CredentialResult } from "./credential-result";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type {
@@ -453,6 +458,7 @@ export function QuickReplaceScreen() {
 
   const lookup = usePreviewReplacement();
   const confirm = useConfirmReplacement();
+  const operationIdFor = useOperationId();
 
   const form = useForm<LookupForm>({
     resolver: zodResolver(lookupFormSchema),
@@ -508,14 +514,23 @@ export function QuickReplaceScreen() {
       return;
     }
 
+    const expectedProfileIds = selected.profiles.map((profile) => profile.id);
+
     confirm.mutate(
       {
         accountId: preview.oldAccount.id,
         customerId: selected.customer.id,
-        expectedProfileIds: selected.profiles.map((profile) => profile.id),
+        expectedProfileIds,
         replacementAccountId,
         reason: preview.oldAccount.status,
         passwordChangeConfirmed: passwordChanged,
+        operationId: operationIdFor(
+          replacementIdentity({
+            customerId: selected.customer.id,
+            replacementAccountId,
+            expectedProfileIds,
+          }),
+        ),
       },
       { onSuccess: setResult },
     );

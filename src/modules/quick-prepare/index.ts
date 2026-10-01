@@ -7,7 +7,12 @@
  * inside this module's transaction, and handing it to a caller that does not
  * open one would produce a lock-free "check then allocate" race.
  */
-export { quickPrepareService } from "./services/quick-prepare.service";
+export {
+  quickPrepareService,
+  /* M08 jobs: receipt scopes, for a job type that runs one of these operations. */
+  QUICK_PREPARE_SCOPE,
+  QUICK_REPLACE_SCOPE,
+} from "./services/quick-prepare.service";
 export type {
   PreparationPreview,
   PreparationResult,

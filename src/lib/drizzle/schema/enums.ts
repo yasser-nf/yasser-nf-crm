@@ -135,6 +135,8 @@ export const auditEntityEnum = pgEnum("audit_entity", [
   "settings",
   /* M08. The problem timeline is read from audit_logs, so problems must be nameable here. */
   "issue",
+  /* M08 jobs: created, cancelled, finished and recovered jobs are traceable in the Logs. */
+  "job",
 ]);
 
 /**
@@ -235,4 +237,25 @@ export const backupStatusEnum = pgEnum("backup_status", [
   "completed",
   "failed",
   "verified",
+]);
+
+/**
+ * A durable job's lifecycle (M08 jobs). See docs/JOBS_MODULE.md §3.
+ *
+ *   queued     waiting to be claimed — first time, or again after a retryable
+ *              failure (then `attempts` > 0 and `available_at` is the backoff)
+ *   running    claimed by one worker, which holds `claim_token`
+ *   succeeded  finished; terminal
+ *   failed     a permanent failure, or attempts exhausted; terminal
+ *   cancelled  withdrawn while still queued; terminal
+ *
+ * No separate "retrying" status: a retry is `queued` with a later
+ * `available_at`, which is exactly what a claim needs to read.
+ */
+export const jobStatusEnum = pgEnum("job_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
 ]);

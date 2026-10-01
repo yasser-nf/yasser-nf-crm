@@ -377,6 +377,30 @@ const ENTITY_FIELDS: Record<AuditEntity, readonly string[]> = {
    * settings module imports this one, so importing back would be a cycle.
    */
   settings: ["general", "company", "security", "notifications", "backup"],
+  /*
+   * M08 jobs. The lifecycle columns only. Deliberately absent: `payload` and
+   * `result` (whatever a job type carries stays out of a second table), and
+   * `claimToken` — the proof of ownership a worker presents; recording it would
+   * let anyone who can read the log act as that worker.
+   */
+  job: [
+    "id",
+    "type",
+    "status",
+    "priority",
+    "attempts",
+    "maxAttempts",
+    "availableAt",
+    "startedAt",
+    "finishedAt",
+    "cancelledAt",
+    "claimedBy",
+    "lastError",
+    "lastErrorCode",
+    "recoveredAt",
+    "createdBy",
+    "createdAt",
+  ],
 };
 
 function isAllowedKey(entity: AuditEntity, key: string): boolean {

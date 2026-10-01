@@ -37,6 +37,18 @@ hand-written `down/0014_notifications.down.sql`.
 **It is NOT applied to production.** M05 was implemented locally; the migration runs only in the
 isolated test database. Applying it is part of the M05 deployment, not of its implementation.
 
+## M08 jobs: 0015_jobs_queue
+
+`0015_jobs_queue` adds the `job_status` enum, two tables (`jobs`, `idempotency_keys`) with their
+foreign keys, indexes, check constraints and RLS lockdown (grants revoked from `anon` and
+`authenticated`, RLS on, no policy), and recreates `audit_entity` with `'job'` added — the same
+recreate-and-cast form 0008 used, so no existing value can be lost. Hand-written
+`down/0015_jobs_queue.down.sql`. See docs/JOBS_MODULE.md.
+
+**It is NOT applied to production.** Applying it is part of the M08 deployment. Deploy order: the
+migration first (the new code reads both tables on every Quick Prepare / Quick Replace confirm),
+then the application.
+
 ## Creating a migration
 
 1. Change the TypeScript schema in `src/lib/drizzle/schema/`.

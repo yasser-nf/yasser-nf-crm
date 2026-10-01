@@ -2,6 +2,7 @@ import {
   ChartColumn,
   DatabaseBackup,
   LayoutDashboard,
+  ListChecks,
   RefreshCcw,
   ScrollText,
   Settings,
@@ -63,6 +64,12 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
     href: ROUTES.LOGS,
     icon: ScrollText,
     requiredPermission: PERMISSIONS.VIEW_LOGS,
+  },
+  {
+    label: "Jobs",
+    href: ROUTES.JOBS,
+    icon: ListChecks,
+    requiredPermission: PERMISSIONS.VIEW_JOBS,
   },
   {
     label: "Settings",

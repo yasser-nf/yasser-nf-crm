@@ -61,6 +61,15 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
   /** Latched for the duration of one confirmation. See `submitConfirmation`. */
   const inFlight = useRef(false);
 
+  /**
+   * M08 jobs: this order's identity, created when its preview arrives and sent
+   * with every confirmation attempt for it. A retry after a lost response, or
+   * a second tap that slips past the latch, therefore reaches the server as the
+   * SAME order — which replays the first result instead of selling twice. A
+   * new preview is a new order and gets a new id.
+   */
+  const [operationId, setOperationId] = useState<string | null>(null);
+
   const {
     register,
     handleSubmit,
@@ -103,6 +112,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         onSuccess: () => {
           /* A fresh preview means a fresh decision about the password. */
           setPasswordChanged(false);
+          setOperationId(crypto.randomUUID());
           setStage("review");
         },
       },
@@ -118,9 +128,10 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
      * same frame, before the prop changes. This ref flips synchronously, inside
      * the handler, so the second call returns before reaching the action.
      *
-     * The server is not relying on it: the locking read takes row locks with
-     * SKIP LOCKED, so a genuine concurrent confirm gets different stock or none.
-     * This is the cheap guard in front of that, not a replacement for it — and
+     * The server is not relying on it. The operation id below makes a repeat
+     * of this order replay the first result (M08 jobs), and the locking read
+     * takes row locks with SKIP LOCKED, so two DIFFERENT orders at once get
+     * different stock or none. This is the cheap guard in front of both — and
      * it is a latch rather than a delay, so nothing is ever merely slowed down.
      */
     if (inFlight.current) return;
@@ -140,6 +151,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
          * refuses if this is missing — see `confirm` in quick-prepare.service.
          */
         passwordChangeConfirmed: passwordChanged,
+        operationId: operationId ?? undefined,
       },
       {
         onSuccess: (data) => {
@@ -163,6 +175,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
 
   function startOver() {
     inFlight.current = false;
+    setOperationId(null);
     reset();
     setResult(null);
     preview.reset();

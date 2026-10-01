@@ -83,6 +83,9 @@ export const PERMISSIONS = {
   ACCESS_BACKUPS: "access_backups",
   VIEW_SECURITY: "view_security",
   VIEW_LOGS: "view_logs",
+  /* M08 jobs: the operations view, and withdrawing a queued job. Super Admin only. */
+  VIEW_JOBS: "view_jobs",
+  MANAGE_JOBS: "manage_jobs",
   ACCESS_DEVELOPER_PAGES: "access_developer_pages",
   VIEW_SYSTEM_INFORMATION: "view_system_information",
 } as const;

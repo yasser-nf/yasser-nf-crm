@@ -134,7 +134,7 @@ describe("the migration history replays from nothing", () => {
   });
 
   /* M05 added `notifications` (0014): twelve became thirteen. */
-  it("produces the thirteen application tables", async () => {
+  it("produces the fifteen application tables", async () => {
     const tables = await db.query<{ table_name: string }>(
       "select table_name from information_schema.tables where table_schema = 'public' order by 1",
     );
@@ -144,8 +144,10 @@ describe("the migration history replays from nothing", () => {
       "audit_logs",
       "backups",
       "customers",
+      "idempotency_keys",
       "issue_notes",
       "issues",
+      "jobs",
       "login_history",
       "notifications",
       "profile_events",

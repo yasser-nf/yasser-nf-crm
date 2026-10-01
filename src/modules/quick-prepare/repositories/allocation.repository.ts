@@ -208,6 +208,28 @@ async function readCandidates(
 }
 
 /** Total profiles allocatable right now. Powers the "not enough stock" message. */
+/**
+ * The rows behind an allocation that already committed, for an idempotent
+ * replay (M08 jobs). Unlocked: a replay reads, it never allocates — and the
+ * caller verifies these rows still say what the receipt says before it hands
+ * anything over.
+ */
+async function readAllocation(
+  profileIds: readonly string[],
+): Promise<Result<readonly { readonly profile: ProfileRow; readonly account: AccountRow }[]>> {
+  if (profileIds.length === 0) {
+    return ok([]);
+  }
+
+  return databaseAdapter.query("allocation.readAllocation", async (executor) =>
+    executor
+      .select({ profile: profiles, account: accounts })
+      .from(profiles)
+      .innerJoin(accounts, eq(profiles.accountId, accounts.id))
+      .where(inArray(profiles.id, [...profileIds])),
+  );
+}
+
 async function countAvailable(): Promise<Result<number>> {
   return databaseAdapter.query("allocation.countAvailable", async (executor) => {
     const rows = await executor
@@ -262,6 +284,7 @@ async function accountsNeedingPasswordChange(
 export const allocationRepository = {
   findCandidates,
   lockCandidates,
+  readAllocation,
   countAvailable,
   accountsNeedingPasswordChange,
 } as const;

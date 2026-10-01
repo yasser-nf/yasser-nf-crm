@@ -1,16 +1,20 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { z } from "zod";
 
 import { databaseAdapter } from "@/lib/database";
 import { decryptSecret } from "@/lib/crypto";
 import { remainingDays } from "@/lib/dates";
 import { customers, profileEvents, profiles } from "@/lib/drizzle/schema";
-import { ValidationError } from "@/lib/errors";
+import { ConflictError, ValidationError } from "@/lib/errors";
 import { formatPreparation, type AccountCredential } from "@/lib/clipboard";
 import { normalizeIdentifier } from "@/lib/phone";
 import { auditService, type AuditContext } from "@/modules/audit";
 import { customersService } from "@/modules/customers";
+import { idempotency, isReplay, type Operation, type Receipt } from "@/modules/idempotency";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
 import { allocationRepository } from "../repositories/allocation.repository";
@@ -19,6 +23,7 @@ import {
   computeExpirationDate,
   todayAsDate,
   type AllocationPlan,
+  type AllocationSlice,
 } from "./allocation-engine";
 import { quickReplaceService } from "./quick-replace.service";
 import {
@@ -98,6 +103,163 @@ export interface PreparationResult {
    * the moment it is acknowledged is a warning nobody re-reads.
    */
   readonly requiresPasswordChange: boolean;
+  /**
+   * M08 jobs: true when this response repeats an operation that had already
+   * committed — the same order confirmed twice — rather than performing it.
+   * The credentials are re-read from the live records, not from storage.
+   */
+  readonly replayed: boolean;
+}
+
+/** Receipt scopes (M08 jobs). One per operation family. */
+export const QUICK_PREPARE_SCOPE = "quick_prepare.confirm";
+export const QUICK_REPLACE_SCOPE = "quick_replace.confirm";
+
+/**
+ * What a committed sale or replacement records in its receipt: references
+ * only. Enough to find the rows again and check they still say the same; no
+ * credential, no PIN, no phone number.
+ */
+const allocationReceiptSchema = z.object({
+  customerId: z.uuid(),
+  customerIsNew: z.boolean(),
+  expirationDate: z.string(),
+  durationDays: z.number().int(),
+  requiresPasswordChange: z.boolean(),
+  accounts: z.array(z.object({ accountId: z.uuid(), profileIds: z.array(z.uuid()).min(1) })).min(1),
+});
+
+type AllocationReceipt = z.infer<typeof allocationReceiptSchema>;
+
+function receiptOf(
+  slices: AllocationPlan["slices"],
+  fields: Omit<AllocationReceipt, "accounts">,
+): AllocationReceipt {
+  return {
+    ...fields,
+    accounts: slices.map((slice) => ({
+      accountId: slice.account.id,
+      profileIds: slice.profiles.map((profile) => profile.id),
+    })),
+  };
+}
+
+/** The answer when a receipt exists but the allocation it names has moved on. */
+function staleReplay(): ConflictError {
+  return new ConflictError("Replayed operation no longer matches the live allocation", {
+    userMessage:
+      "This was already completed, and the profiles it allocated have changed since. Open the " +
+      "customer to see what they hold now.",
+  });
+}
+
+/**
+ * Repeats a committed sale or replacement's RESULT without repeating the
+ * operation (M08 jobs).
+ *
+ * Nothing is allocated, written or audited. The rows the receipt names are read
+ * back and must still say exactly what the receipt says — sold, to this
+ * customer, with this expiry. If anything moved since (a later replacement, an
+ * unassignment), the replay refuses rather than hand over credentials that no
+ * longer belong to this customer.
+ */
+async function replayAllocation(
+  receipt: Receipt,
+  contact: { readonly customerPhone: string; readonly whatsappUrl: string },
+): Promise<Result<PreparationResult>> {
+  const parsed = allocationReceiptSchema.safeParse(receipt.result);
+
+  if (!parsed.success) {
+    return fail(staleReplay());
+  }
+
+  const recorded = parsed.data;
+  const rows = await allocationRepository.readAllocation(
+    recorded.accounts.flatMap((entry) => entry.profileIds),
+  );
+
+  if (!rows.ok) {
+    return rows;
+  }
+
+  const byId = new Map(rows.value.map((row) => [row.profile.id, row]));
+  const slices: AllocationSlice[] = [];
+
+  for (const entry of recorded.accounts) {
+    const found = entry.profileIds.map((id) => byId.get(id));
+    const intact = found.every(
+      (row) =>
+        row !== undefined &&
+        row.account.id === entry.accountId &&
+        row.profile.status === "sold" &&
+        row.profile.customerId === recorded.customerId &&
+        row.profile.expirationDate === recorded.expirationDate,
+    );
+    const account = found[0]?.account;
+
+    if (!intact || !account) {
+      return fail(staleReplay());
+    }
+
+    slices.push({ account, profiles: found.flatMap((row) => (row ? [row.profile] : [])) });
+  }
+
+  let credentials: readonly PreparedAccount[];
+
+  try {
+    credentials = prepareCredentialsOrThrow(slices);
+  } catch {
+    return fail(staleReplay());
+  }
+
+  return ok(
+    preparationResult({
+      customerId: recorded.customerId,
+      ...contact,
+      customerIsNew: recorded.customerIsNew,
+      expirationDate: recorded.expirationDate,
+      durationDays: recorded.durationDays,
+      requiresPasswordChange: recorded.requiresPasswordChange,
+      credentials,
+      replayed: true,
+    }),
+  );
+}
+
+/** The response shape, built the same way for a fresh operation and a replay. */
+function preparationResult(input: {
+  readonly customerId: string;
+  readonly customerPhone: string;
+  readonly whatsappUrl: string;
+  readonly customerIsNew: boolean;
+  readonly expirationDate: string;
+  readonly durationDays: number;
+  readonly requiresPasswordChange: boolean;
+  readonly credentials: readonly PreparedAccount[];
+  readonly replayed: boolean;
+}): PreparationResult {
+  return {
+    customerId: input.customerId,
+    customerPhone: input.customerPhone,
+    whatsappUrl: input.whatsappUrl,
+    customerIsNew: input.customerIsNew,
+    expirationDate: input.expirationDate,
+    durationDays: input.durationDays,
+    requiresPasswordChange: input.requiresPasswordChange,
+    replayed: input.replayed,
+    accounts: input.credentials,
+    clipboardText: formatPreparation(
+      input.credentials.map((account): AccountCredential => ({
+        email: account.email,
+        password: account.password,
+        profiles: account.profiles.map((profile) => ({
+          profileNumber: profile.profileNumber,
+          pin: profile.pin,
+          profileName: profile.profileName,
+        })),
+      })),
+    ),
+  };
 }
 
 /**
@@ -262,6 +424,38 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
     return phone;
   }
 
+  const contact = { customerPhone: phone.value.normalized, whatsappUrl: phone.value.whatsappUrl };
+
+  /*
+   * M08 jobs: at most one sale per order. The key is the page's operation id
+   * (one per reviewed order, repeated on every attempt) or, from server code
+   * that sends none, a fresh one — which still makes the adapter's own retry
+   * of this transaction safe. Bound to the actor and to what was asked.
+   */
+  const operation = idempotency.operation(
+    QUICK_PREPARE_SCOPE,
+    request.operationId ?? randomUUID(),
+    context.actor?.id ?? null,
+    {
+      profileCount: request.profileCount,
+      durationDays: request.durationDays,
+      phone: phone.value.normalized,
+      notes: request.notes ?? null,
+      passwordChangeConfirmed: request.passwordChangeConfirmed === true,
+    },
+  );
+
+  /* Cheap pre-check: a repeat of a committed order replays before touching anything. */
+  const prior = await idempotency.lookup(operation);
+
+  if (!prior.ok) {
+    return prior;
+  }
+
+  if (prior.value) {
+    return replayAllocation(prior.value, contact);
+  }
+
   const customerResult = await customersService.findOrCreateByPhone(
     request.phone,
     undefined,
@@ -279,6 +473,15 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
   const expirationDate = computeExpirationDate(now, request.durationDays);
 
   const allocation = await databaseAdapter.transaction("quickPrepare.confirm", async (executor) => {
+    /*
+     * The guarantee behind the pre-check, and the transaction's FIRST write: the
+     * receipt commits with the sale or not at all. A repeat that got past the
+     * pre-check — the same order arriving twice at once, or this very
+     * transaction being retried after a COMMIT whose acknowledgement was lost —
+     * stops here and replays (`IdempotentReplay` rolls this attempt back).
+     */
+    await idempotency.begin(executor, operation);
+
     /*
      * Re-select under lock. The preview the worker saw may be stale, and the
      * only stock that matters is the stock this transaction actually holds.
@@ -339,7 +542,7 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
      * only locks — no profile has been marked sold, no event written, nothing to
      * roll back — so a retry finds exactly the stock it started with.
      */
-    const credentials = prepareCredentialsOrThrow(plan);
+    const credentials = prepareCredentialsOrThrow(plan.slices);
 
     const profileIds = plan.slices.flatMap((slice) => slice.profiles.map((profile) => profile.id));
 
@@ -393,11 +596,26 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
       })
       .where(eq(customers.id, customer.id));
 
+    /* What was sold, by reference, in the same transaction as the sale. */
+    await idempotency.complete(
+      executor,
+      operation,
+      receiptOf(plan.slices, {
+        customerId: customer.id,
+        customerIsNew,
+        expirationDate,
+        durationDays: request.durationDays,
+        requiresPasswordChange: request.passwordChangeConfirmed === true,
+      }),
+    );
+
     return { plan, credentials };
   });
 
   if (!allocation.ok) {
-    return allocation;
+    return isReplay(allocation.error)
+      ? replayAllocation(allocation.error.receipt, contact)
+      : allocation;
   }
 
   const { credentials } = allocation.value;
@@ -420,28 +638,19 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
     );
   }
 
-  return ok({
-    customerId: customer.id,
-    customerPhone: phone.value.normalized,
-    whatsappUrl: phone.value.whatsappUrl,
-    customerIsNew,
-    expirationDate,
-    durationDays: request.durationDays,
-    /* The operator confirmed it; the result repeats it so it is not forgotten. */
-    requiresPasswordChange: request.passwordChangeConfirmed === true,
-    accounts: credentials,
-    clipboardText: formatPreparation(
-      credentials.map((account): AccountCredential => ({
-        email: account.email,
-        password: account.password,
-        profiles: account.profiles.map((profile) => ({
-          profileNumber: profile.profileNumber,
-          pin: profile.pin,
-          profileName: profile.profileName,
-        })),
-      })),
-    ),
-  });
+  return ok(
+    preparationResult({
+      customerId: customer.id,
+      ...contact,
+      customerIsNew,
+      expirationDate,
+      durationDays: request.durationDays,
+      /* The operator confirmed it; the result repeats it so it is not forgotten. */
+      requiresPasswordChange: request.passwordChangeConfirmed === true,
+      credentials,
+      replayed: false,
+    }),
+  );
 }
 
 /**
@@ -479,6 +688,36 @@ async function confirmReplacement(
   } = parsed.data;
 
   /*
+   * M08 jobs: at most one replacement per previewed replacement. Checked before
+   * `stillHolds`, because a repeat of a replacement that committed would
+   * otherwise be refused as "allocation changed" — correct, but the operator
+   * whose first response was lost would never see the new credentials.
+   */
+  const operation = idempotency.operation(
+    QUICK_REPLACE_SCOPE,
+    parsed.data.operationId ?? randomUUID(),
+    context.actor?.id ?? null,
+    {
+      accountId,
+      customerId,
+      expectedProfileIds: [...expectedProfileIds].sort(),
+      replacementAccountId,
+      reason: reason ?? null,
+      passwordChangeConfirmed: passwordChangeConfirmed === true,
+    },
+  );
+
+  const prior = await idempotency.lookup(operation);
+
+  if (!prior.ok) {
+    return prior;
+  }
+
+  if (prior.value) {
+    return replayReplacement(prior.value, customerId);
+  }
+
+  /*
    * Verify the preview before touching anything. If another operator replaced
    * this customer while the confirmation dialog sat open, the profiles they
    * were shown no longer belong to them — committing anyway is the "accidental
@@ -491,6 +730,17 @@ async function confirmReplacement(
   }
 
   if (!current.value) {
+    /*
+     * A repeat can reach this point in the instant after the first commits —
+     * its pre-check ran just before. The allocation "changed" because THIS
+     * replacement happened: replay it rather than report a conflict.
+     */
+    const committed = await idempotency.lookup(operation);
+
+    if (committed.ok && committed.value) {
+      return replayReplacement(committed.value, customerId);
+    }
+
     return fail(
       new ValidationError("The preview no longer matches the current allocation", {
         userMessage:
@@ -522,11 +772,13 @@ async function confirmReplacement(
       replacementAccountId,
       expectedProfileIds,
       passwordChangeConfirmed,
+      operation,
     },
     context,
   );
 
-  if (outcome.ok && passwordChangeConfirmed === true) {
+  /* Only a replacement that happened now is audited again — never a replay. */
+  if (outcome.ok && !outcome.value.replayed && passwordChangeConfirmed === true) {
     /* The confirmation is itself auditable, per §8. */
     await auditService.recordOrWarn(
       {
@@ -570,6 +822,38 @@ interface CommitReplacementOptions {
   /** Profiles the preview showed, re-verified under lock. */
   readonly expectedProfileIds: readonly string[];
   readonly passwordChangeConfirmed?: boolean | undefined;
+  /** M08 jobs: the receipt claimed as the transaction's first write. */
+  readonly operation: Operation;
+}
+
+/** A customer's contact details, as a replay's response repeats them. */
+async function customerContact(
+  customerId: string,
+): Promise<Result<{ readonly customerPhone: string; readonly whatsappUrl: string }>> {
+  const rows = await databaseAdapter.query("quickPrepare.readCustomerContact", (executor) =>
+    executor
+      .select({ customerPhone: customers.phoneNormalized, whatsappUrl: customers.whatsappUrl })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1),
+  );
+
+  if (!rows.ok) {
+    return rows;
+  }
+
+  const contact = rows.value[0];
+
+  return contact ? ok(contact) : fail(staleReplay());
+}
+
+async function replayReplacement(
+  receipt: Receipt,
+  customerId: string,
+): Promise<Result<PreparationResult>> {
+  const contact = await customerContact(customerId);
+
+  return contact.ok ? replayAllocation(receipt, contact.value) : contact;
 }
 
 /** The release-and-reallocate transaction. One caller: `confirmReplacement`. */
@@ -581,6 +865,7 @@ async function commitReplacement(
     replacementAccountId,
     expectedProfileIds,
     passwordChangeConfirmed,
+    operation,
   }: CommitReplacementOptions,
   context: AuditContext,
 ): Promise<Result<PreparationResult>> {
@@ -607,6 +892,9 @@ async function commitReplacement(
   const replacement = await databaseAdapter.transaction(
     "quickPrepare.replace",
     async (executor) => {
+      /* M08 jobs: the receipt, first. A repeat stops here and replays. */
+      await idempotency.begin(executor, operation);
+
       /* The profiles this customer currently holds on the failing account. */
       const held = await executor
         .select()
@@ -785,7 +1073,7 @@ async function commitReplacement(
        * they were, holding profiles they can still use, instead of moving them
        * onto an account nobody can read the password for.
        */
-      const credentials = prepareCredentialsOrThrow(plan);
+      const credentials = prepareCredentialsOrThrow(plan.slices);
 
       /* Release the old profiles. Available requires no customer — see the check constraint. */
       await executor
@@ -857,12 +1145,29 @@ async function commitReplacement(
         ),
       );
 
+      await idempotency.complete(
+        executor,
+        operation,
+        receiptOf(plan.slices, {
+          customerId,
+          customerIsNew: false,
+          expirationDate,
+          durationDays,
+          requiresPasswordChange,
+        }),
+      );
+
       return { plan, expirationDate, durationDays, requiresPasswordChange, credentials };
     },
   );
 
   if (!replacement.ok) {
-    return replacement;
+    return isReplay(replacement.error)
+      ? replayAllocation(replacement.error.receipt, {
+          customerPhone: customer.phoneNormalized,
+          whatsappUrl: customer.whatsappUrl,
+        })
+      : replacement;
   }
 
   const { credentials } = replacement.value;
@@ -887,6 +1192,7 @@ async function commitReplacement(
     customerPhone: customer.phoneNormalized,
     whatsappUrl: customer.whatsappUrl,
     customerIsNew: false,
+    replayed: false,
     expirationDate: replacement.value.expirationDate,
     durationDays: replacement.value.durationDays,
     /*
@@ -937,8 +1243,8 @@ async function commitReplacement(
  *
  * Called BEFORE any write, so a failure leaves nothing to roll back at all.
  */
-function prepareCredentialsOrThrow(plan: AllocationPlan): readonly PreparedAccount[] {
-  return plan.slices.map((slice) => {
+function prepareCredentialsOrThrow(slices: readonly AllocationSlice[]): readonly PreparedAccount[] {
+  return slices.map((slice) => {
     const password = decryptSecret(slice.account.passwordEncrypted);
 
     if (!password.ok) {

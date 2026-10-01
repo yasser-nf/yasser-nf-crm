@@ -78,8 +78,22 @@ export const BACKUP_TABLES: readonly BackupTableSpec[] = [
 
 export const BACKUP_TABLE_NAMES: readonly string[] = BACKUP_TABLES.map((spec) => spec.table);
 
-/** Public tables that are deliberately NOT backed up. */
-export const EXCLUDED_TABLES: readonly string[] = ["backups", "login_history"];
+/**
+ * Public tables that are deliberately NOT backed up.
+ *
+ * M08 jobs adds two operational tables, excluded for the same reason as the
+ * catalogue: restoring them would rewind live machinery, not business data.
+ *   jobs              an old queue state would re-queue work already done
+ *   idempotency_keys  receipts for operations; a restore rewinds the business
+ *                     rows, and a stale receipt then refuses its replay (the
+ *                     allocation it names no longer matches) rather than lying
+ */
+export const EXCLUDED_TABLES: readonly string[] = [
+  "backups",
+  "login_history",
+  "jobs",
+  "idempotency_keys",
+];
 
 /**
  * What a person must type to confirm a restore. Here, in the pure module, so
