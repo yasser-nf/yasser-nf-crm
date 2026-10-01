@@ -13,11 +13,11 @@ import type { BackupSummary } from "../services/backup.service";
  * with none.
  */
 
-function utc(value: Date | string | null): string {
+export function utc(value: Date | string | null): string {
   return value ? `${new Date(value).toISOString().slice(0, 16).replace("T", " ")} UTC` : "—";
 }
 
-const FREQUENCY_LABELS: Record<string, string> = {
+export const FREQUENCY_LABELS: Record<string, string> = {
   off: "Off",
   hourly: "Hourly",
   daily: "Daily",

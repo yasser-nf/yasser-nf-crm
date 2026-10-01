@@ -435,6 +435,27 @@ export function searchDefinitions(query: string): SettingDefinition[] {
   );
 }
 
+/**
+ * The catalogue with some enforcement states replaced by what the server
+ * measured for this request. The catalogue is static; whether a setting is
+ * acted upon can depend on deployment — the backups module, for one, knows
+ * whether a scheduler trigger is configured. Keys without an override keep
+ * the catalogue's own state.
+ */
+export function withEnforcement(
+  definitions: readonly SettingDefinition[],
+  overrides: Readonly<Record<string, Enforcement>> | undefined,
+): readonly SettingDefinition[] {
+  if (!overrides) {
+    return definitions;
+  }
+
+  return definitions.map((definition) => {
+    const enforcement = overrides[definition.key];
+    return enforcement ? { ...definition, enforcement } : definition;
+  });
+}
+
 /** A short phrase explaining why a setting is not acted upon, or null when it is. */
 export function enforcementNote(definition: SettingDefinition): string | null {
   switch (definition.enforcement.state) {

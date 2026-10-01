@@ -1,10 +1,15 @@
 import { ShieldAlert } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { getCurrentUser } from "@/lib/auth/session";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { settingsService } from "../services/settings.service";
 import type { Configuration } from "../validation/configuration.schema";
-import type { SettingsCategory } from "../services/settings-definitions";
+import {
+  withEnforcement,
+  type Enforcement,
+  type SettingsCategory,
+} from "../services/settings-definitions";
 import { SettingsForm } from "./settings-form";
 
 /**
@@ -15,7 +20,9 @@ import { SettingsForm } from "./settings-form";
  * composition and nothing else — while the loading happens once here.
  *
  * It holds no business logic: it asks the service for the view, and the service
- * decides what this caller may see and change.
+ * decides what this caller may see and change. A route may hand it what another
+ * module measured — `enforcement` overrides and a `status` panel — without this
+ * module knowing where they came from.
  */
 
 /** Which jsonb key a category's values live under. */
@@ -31,10 +38,16 @@ export async function SettingsCategorySection({
   category,
   title,
   description,
+  enforcement,
+  status,
 }: {
   category: Exclude<SettingsCategory, "system">;
   title: string;
   description: string;
+  /** Enforcement measured at request time, by setting key. */
+  enforcement?: Readonly<Record<string, Enforcement>> | undefined;
+  /** Shown between the header and the form. */
+  status?: ReactNode;
 }) {
   const actor = await getCurrentUser();
   const view = await settingsService.load(actor);
@@ -43,7 +56,7 @@ export async function SettingsCategorySection({
     return <ErrorState error={view.error} title="Could not load settings" />;
   }
 
-  const definitions = settingsService.forCategory(category, actor);
+  const definitions = withEnforcement(settingsService.forCategory(category, actor), enforcement);
 
   if (definitions.length === 0) {
     return (
@@ -73,6 +86,8 @@ export async function SettingsCategorySection({
         <h1 className="text-page-title text-foreground">{title}</h1>
         <p className="text-description text-foreground-muted">{description}</p>
       </header>
+
+      {status}
 
       <SettingsForm
         category={category}

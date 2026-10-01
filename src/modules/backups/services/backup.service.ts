@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { APP_VERSION } from "@/config/constants";
+import { isBackupSchedulerConfigured } from "@/config/env.server";
 import { PERMISSIONS, roleHasPermission } from "@/config/roles";
 import type { AppUser } from "@/lib/auth";
 import { databaseAdapter, type Page } from "@/lib/database";
@@ -43,7 +44,13 @@ import {
 import { backupMacKey } from "./backup-key";
 import { checksumService } from "./checksum.service";
 import { planRetention } from "./retention";
-import { INTERRUPTED_AFTER_MS, isScheduledBackupDue, nextSlot } from "./schedule";
+import {
+  INTERRUPTED_AFTER_MS,
+  SCHEDULED_BACKUP_TYPES,
+  isScheduledBackupDue,
+  nextSlot,
+  type SchedulerStatus,
+} from "./schedule";
 
 /**
  * Backup service.
@@ -744,6 +751,41 @@ async function summary(actor: AppUser | null, now = new Date()): Promise<Result<
   });
 }
 
+/**
+ * The automatic-backup scheduler as it stands: whether a trigger is configured,
+ * the next slot, and when a scheduled backup last succeeded. Read-only, and
+ * Super Admin only like everything else here. CRON_SECRET itself never leaves
+ * env.server — only whether it is set.
+ */
+async function schedulerStatus(
+  actor: AppUser | null,
+  now = new Date(),
+): Promise<Result<SchedulerStatus>> {
+  const permitted = requireBackupAccess(actor, "view the backup scheduler");
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  const [current, last] = await Promise.all([
+    settings(),
+    backupsRepository.lastSuccessful(SCHEDULED_BACKUP_TYPES),
+  ]);
+
+  if (!current.ok) return current;
+  if (!last.ok) return last;
+
+  const { frequency, hourUtc } = current.value.schedule;
+
+  return ok({
+    frequency,
+    hourUtc,
+    configured: isBackupSchedulerConfigured(),
+    nextScheduledAt: nextSlot(frequency, hourUtc, now),
+    lastScheduledAt: last.value?.createdAt ?? null,
+  });
+}
+
 export const backupService = {
   list,
   getDetail,
@@ -754,6 +796,7 @@ export const backupService = {
   readSettings,
   pruneByRetention,
   summary,
+  schedulerStatus,
 } as const;
 
 /**

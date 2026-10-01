@@ -3,6 +3,7 @@ import { Suspense } from "react";
 
 import { USER_ROLES } from "@/config/roles";
 import { ChangePasswordForm } from "@/modules/auth";
+import { backupService, scheduleEnforcement } from "@/modules/backups";
 import { getCurrentUser } from "@/lib/auth/session";
 import {
   configurationService,
@@ -11,6 +12,7 @@ import {
   SettingsSearch,
   SettingsSearchResults,
   settingsService,
+  withEnforcement,
   type SettingsCategory,
 } from "@/modules/settings";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -95,7 +97,13 @@ async function AccountSecurity() {
 
 async function SearchResults({ query }: { query: string }) {
   const actor = await getCurrentUser();
-  const matches = settingsService.search(query, actor);
+
+  /* The backup schedule's badge depends on the deployed scheduler — measured, not declared. */
+  const scheduler = query.trim() ? await backupService.schedulerStatus(actor) : null;
+  const matches = withEnforcement(
+    settingsService.search(query, actor),
+    scheduler?.ok ? scheduleEnforcement(scheduler.value) : undefined,
+  );
 
   return <SettingsSearchResults matches={matches} query={query} />;
 }

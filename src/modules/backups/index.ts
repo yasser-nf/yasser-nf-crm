@@ -14,7 +14,14 @@ export {
   type BackupSummary,
   type ScheduledRunOutcome,
 } from "./services/backup.service";
-export { isScheduledBackupDue, latestSlot, nextSlot } from "./services/schedule";
+export {
+  DEPLOYED_TRIGGER,
+  isScheduledBackupDue,
+  latestSlot,
+  nextSlot,
+  type SchedulerStatus,
+} from "./services/schedule";
+export { scheduleEnforcement } from "./services/schedule-enforcement";
 export { restoreService } from "./services/restore.service";
 export { snapshotService, isDue } from "./services/snapshot.service";
 export { checksumService } from "./services/checksum.service";
@@ -48,6 +55,7 @@ export {
 export { BackupsTable, CreateBackupControls } from "./components/backups-table";
 export { BackupDetailView } from "./components/backup-detail";
 export { BackupSummaryPanel } from "./components/backup-summary";
+export { BackupSchedulerStatus } from "./components/scheduler-status";
 
 export type { BackupFilter } from "./repositories/backups.repository";
 

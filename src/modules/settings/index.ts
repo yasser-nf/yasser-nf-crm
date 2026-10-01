@@ -32,6 +32,7 @@ export {
   enforcementNote,
   isSettingsCategory,
   searchDefinitions,
+  withEnforcement,
   type Enforcement,
   type SettingDefinition,
   type SettingsCategory,

@@ -275,6 +275,7 @@ describe.skipIf(!local)("authorization: Super Admin only, checked before anythin
       backupService.exportUrl(id, actor),
       backupService.importArtifact(Buffer.from("x"), context),
       backupService.readSettings(actor),
+      backupService.schedulerStatus(actor),
       restoreService.preview(id, actor),
       restoreService.restore(
         id,
@@ -780,6 +781,65 @@ describe.skipIf(!local)("the scheduler", () => {
     const [audit] = await sql!<{ user_id: string | null }[]>`
       select user_id from audit_logs where entity = 'backup' and entity_id = ${backupId!}::uuid and action = 'create'`;
     expect(audit?.user_id).toBeNull();
+  });
+
+  it("reports its state without claiming a run that has not happened (cleanup)", async () => {
+    const { backupService, backupScheduler } = await services();
+    const { isBackupSchedulerConfigured } = await import("@/config/env.server");
+    await setBackupSettings({
+      schedule: { frequency: "weekly", hourUtc: 3 },
+      retention: { keepLast: 30 },
+    });
+    const newestScheduled = async () => {
+      const [row] = await sql!<{ created_at: Date }[]>`
+        select created_at from backups
+        where type in ('hourly', 'daily', 'weekly', 'monthly') and status in ('completed', 'verified')
+        order by created_at desc limit 1`;
+      return row?.created_at.getTime() ?? null;
+    };
+
+    const now = new Date("2026-06-17T10:30:00Z");
+    const before = await backupService.schedulerStatus(admin, now);
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(before.value).toMatchObject({
+      frequency: "weekly",
+      hourUtc: 3,
+      configured: isBackupSchedulerConfigured(),
+      nextScheduledAt: new Date("2026-06-22T03:00:00Z"),
+    });
+    expect(before.value.lastScheduledAt?.getTime() ?? null).toBe(await newestScheduled());
+
+    /* A manual backup is not a scheduled run. */
+    await backupService.create({ type: "manual" }, { actor: admin });
+    const afterManual = await backupService.schedulerStatus(admin, now);
+    expect(afterManual.ok && afterManual.value.lastScheduledAt).toEqual(
+      before.value.lastScheduledAt,
+    );
+
+    /* A scheduler tick that runs is. Eight days on, a weekly slot has passed since any earlier run. */
+    const tick = await backupScheduler.tick(new Date(Date.now() + 8 * 24 * 60 * 60 * 1000));
+    expect(tick.ok && tick.value.reason).toBe("completed");
+    const afterTick = await backupService.schedulerStatus(admin, now);
+    expect(afterTick.ok && afterTick.value.lastScheduledAt?.getTime()).toBe(
+      await newestScheduled(),
+    );
+    expect(afterTick.ok && afterTick.value.lastScheduledAt).not.toEqual(
+      before.value.lastScheduledAt,
+    );
+
+    await setBackupSettings({
+      schedule: { frequency: "off", hourUtc: 2 },
+      retention: { keepLast: 30 },
+    });
+    const off = await backupService.schedulerStatus(admin, now);
+    expect(off.ok && off.value.nextScheduledAt).toBeNull();
+
+    /* Leave the schedule as the test before this one did: the next test relies on it. */
+    await setBackupSettings({
+      schedule: { frequency: "daily", hourUtc: 0 },
+      retention: { keepLast: 30 },
+    });
   });
 
   it("stands down while a backup is running, and fails one that was abandoned", async () => {

@@ -307,45 +307,80 @@ describe.skipIf(!local)("the dashboard follows mutations", () => {
 });
 
 describe.skipIf(!local)("dates are UTC in SQL too", () => {
-  it("20–22. sales today / yesterday / this month do not move with the session time zone", async () => {
+  /*
+   * A fixed clock, so the buckets never depend on the day the suite runs. With
+   * a clock relative to the real date, "just before UTC midnight" and "just
+   * before the UTC month began" are the same instant on the 1st of a month —
+   * the event was then counted twice as yesterday and the test failed.
+   *
+   * The dashboard asks SQL for `now()`. PostgreSQL resolves an unqualified
+   * function through search_path, and pg_catalog is searched first only when
+   * the path does not list it — so in a session whose path is
+   * `test_clock, pg_catalog, public`, `now()` is test_clock.now(). The
+   * in-process database has one session, shared with the application's pool,
+   * so the dashboard's own queries see the fixed clock. Column defaults keep
+   * the real one: they were bound to pg_catalog.now when the tables were made.
+   *
+   * Wednesday 17 June 2026, 10:30 UTC: mid-week, mid-month, and already
+   * Thursday 18 June in Pacific/Kiritimati (UTC+14), so the time-zone half
+   * below always crosses a date line.
+   */
+  const NOW = "2026-06-17 10:30:00+00";
+
+  it("20–22. sales today / yesterday / this week / this month do not move with the session time zone", async () => {
     const [profile] = await sql!<{ id: string; account_id: string }[]>`
       select id, account_id from profiles where account_id = ${ids["healthy"] ?? ""}::uuid limit 1`;
 
     const insertAt = async (at: string): Promise<void> => {
-      await sql!.unsafe(
-        `insert into profile_events (account_id, profile_id, event_type, created_at)
-         values ($1, $2, 'sold', ${at})`,
-        [profile!.account_id, profile!.id],
-      );
+      await sql!`
+        insert into profile_events (account_id, profile_id, event_type, created_at)
+        values (${profile!.account_id}::uuid, ${profile!.id}::uuid, 'sold', ${at}::timestamptz)`;
     };
 
-    const before = (await dashboard()).counts.prepared;
+    const [{ path } = { path: "" }] = await sql!<{ path: string }[]>`
+      select current_setting('search_path') as path`;
+    await sql!`create schema if not exists test_clock`;
+    await sql!.unsafe(
+      `create or replace function test_clock.now() returns timestamptz
+       language sql stable as $$ select '${NOW}'::timestamptz $$`,
+    );
+    await sql!`select set_config('search_path', 'test_clock, pg_catalog, public', false)`;
 
-    /* One second either side of UTC midnight, and just before the UTC month began. */
-    await insertAt("date_trunc('day', now(), 'UTC') + interval '1 second'");
-    await insertAt("date_trunc('day', now(), 'UTC') - interval '1 second'");
-    await insertAt("date_trunc('month', now(), 'UTC') - interval '1 second'");
-
-    const utc = (await dashboard()).counts.prepared;
-
-    expect(utc.today - before.today).toBe(1);
-    expect(utc.yesterday - before.yesterday).toBe(1);
-    /* Only the "today" event is certainly inside this month; yesterday may be last month. */
-    expect(utc.thisMonth - before.thisMonth).toBeGreaterThanOrEqual(1);
-    expect(utc.thisMonth - before.thisMonth).toBeLessThanOrEqual(2);
-
-    /*
-     * The same question from a session fourteen hours ahead of UTC. The
-     * in-process database has one session, shared with the application's pool,
-     * so this changes what `current_date` means to every query that relies on
-     * it — and must change nothing on the dashboard.
-     */
-    await sql!`set time zone 'Pacific/Kiritimati'`;
     try {
-      const shifted = (await dashboard()).counts.prepared;
-      expect(shifted).toEqual(utc);
+      const [{ clock } = { clock: "" }] = await sql!<{ clock: string }[]>`
+        select to_char(now() at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') as clock`;
+      expect(clock).toBe("2026-06-17 10:30:00");
+
+      const before = (await dashboard()).counts.prepared;
+
+      /* Monday 15 June starts the ISO week; 1 June starts the month. */
+      await insertAt("2026-06-17 00:00:01+00"); // today, a second after UTC midnight
+      await insertAt("2026-06-16 23:59:59+00"); // yesterday, a second before it
+      await insertAt("2026-06-14 23:59:59+00"); // Sunday: this month, last week
+      await insertAt("2026-05-31 23:59:59+00"); // a second before the UTC month began
+
+      const utc = (await dashboard()).counts.prepared;
+
+      expect(utc.today - before.today).toBe(1);
+      expect(utc.yesterday - before.yesterday).toBe(1);
+      expect(utc.thisWeek - before.thisWeek).toBe(2);
+      expect(utc.thisMonth - before.thisMonth).toBe(3);
+
+      /*
+       * The same question from a session fourteen hours ahead of UTC, where it
+       * is already 18 June. This changes what `current_date` means to every
+       * query that relies on it — and must change nothing on the dashboard.
+       */
+      await sql!`set time zone 'Pacific/Kiritimati'`;
+      try {
+        const shifted = (await dashboard()).counts.prepared;
+        expect(shifted).toEqual(utc);
+      } finally {
+        await sql!`set time zone 'UTC'`;
+      }
     } finally {
-      await sql!`set time zone 'UTC'`;
+      await sql!`select set_config('search_path', ${path}, false)`;
+      await sql!`drop schema test_clock cascade`;
     }
   });
 });

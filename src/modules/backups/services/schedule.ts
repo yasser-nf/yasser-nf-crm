@@ -104,3 +104,38 @@ export function nextSlot(frequency: BackupFrequency, hourUtc: number, now: Date)
 
 /** A backup still `running` after this long has lost its process. */
 export const INTERRUPTED_AFTER_MS = 30 * 60 * 1000;
+
+/** The backup types the scheduler creates: one per frequency, never `manual`. */
+export const SCHEDULED_BACKUP_TYPES = ["hourly", "daily", "weekly", "monthly"] as const;
+
+/**
+ * What calls the scheduler in production: the cron in vercel.json. The Vercel
+ * Hobby plan allows one call a day, so this — not the configured frequency —
+ * bounds what actually fires. A unit test keeps it equal to vercel.json.
+ */
+export const DEPLOYED_TRIGGER = {
+  path: "/api/cron/backups",
+  schedule: "0 2 * * *",
+  hourUtc: 2,
+} as const;
+
+/** "02:00" — an hour of the day, UTC. */
+export function formatHourUtc(hourUtc: number): string {
+  return `${String(clampHour(hourUtc)).padStart(2, "0")}:00`;
+}
+
+/**
+ * The scheduler as measured on the server, for display (never for deciding
+ * whether to back up — that is `isScheduledBackupDue`). "Configured" and "has
+ * run" are separate facts: a trigger can be configured and not have fired yet.
+ */
+export interface SchedulerStatus {
+  readonly frequency: BackupFrequency;
+  readonly hourUtc: number;
+  /** CRON_SECRET and storage are configured: /api/cron/backups accepts a trigger. */
+  readonly configured: boolean;
+  /** The schedule's next slot; null when the schedule is off. */
+  readonly nextScheduledAt: Date | null;
+  /** When the newest successful scheduled backup was taken; null until one has run. */
+  readonly lastScheduledAt: Date | null;
+}
