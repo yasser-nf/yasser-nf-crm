@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseTransaction } from "@/lib/database";
 import { idempotencyKeys, type IdempotencyKeyRow } from "@/lib/drizzle/schema";
+import { ConflictError } from "@/lib/errors";
 import type { Result } from "@/types/result";
 
 /**
@@ -76,8 +77,20 @@ export const idempotencyRepository: IdempotencyRepository = {
     const [existing] = await executor.select().from(idempotencyKeys).where(matches(receipt));
 
     if (!existing) {
-      /* The conflicting row vanished between the two statements: only a rollback does that. */
-      throw new Error("Idempotency receipt conflict could not be resolved");
+      /*
+       * The insert conflicted but the row is not visible to this transaction.
+       *
+       * Unreachable under READ COMMITTED, which every business transaction
+       * uses: a conflicting insert that is still in flight is waited for, and
+       * this SELECT then takes a fresh snapshot that sees it (or it rolled
+       * back, and the insert above succeeded). Under REPEATABLE READ the
+       * snapshot predates the other commit and this becomes reachable — so it
+       * refuses the operation rather than letting it proceed unprotected.
+       */
+      throw new ConflictError("Idempotency receipt conflict could not be resolved", {
+        userMessage: "This is already being processed. Try again in a moment.",
+        context: { scope: receipt.scope },
+      });
     }
 
     return { claimed: false, existing };

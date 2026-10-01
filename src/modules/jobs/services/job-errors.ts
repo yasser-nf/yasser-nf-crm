@@ -29,6 +29,13 @@ export class JobRetryableError extends AppError {
 /** Recorded when a worker stops heartbeating. */
 export const STALE_ERROR_CODE = "JOB_STALE";
 
+/**
+ * Recorded when a stale job cannot prove whether its work committed, so it is
+ * failed rather than retried. `defineJob` makes such a type unrepresentable;
+ * this is what recovery records if one reaches it from JavaScript.
+ */
+export const UNVERIFIABLE_ERROR_CODE = "JOB_UNVERIFIABLE";
+
 /** PostgreSQL classes that describe the connection or a collision, not the data. */
 const TRANSIENT_SQL_STATE = /^(08|40001|40P01|57P0[1-3]|53)/;
 

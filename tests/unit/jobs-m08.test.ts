@@ -183,6 +183,7 @@ describe("job types", () => {
   const echo = defineJob({
     type: "test.echo",
     payload: z.object({ n: z.number() }),
+    retryOnStale: "re-running is safe",
     async run(context) {
       return ok({ n: context.payload.n });
     },
@@ -193,6 +194,22 @@ describe("job types", () => {
     expect(() => defineJob({ ...echo, type: "a".repeat(65) })).toThrow();
     expect(() => defineJob({ ...echo, maxAttempts: 0 })).toThrow();
     expect(() => defineJob({ ...echo, maxAttempts: 21 })).toThrow();
+  });
+
+  it("refuses a type that does not say how stale recovery may judge it", () => {
+    const receipt = () => ({ scope: "test.scope", key: "k" });
+
+    /* Neither rule, and both at once: each is a definition nobody can judge. */
+    expect(() => defineJob({ ...echo, retryOnStale: undefined } as never)).toThrow(
+      /exactly one of receipt\(\) or retryOnStale/,
+    );
+    expect(() => defineJob({ ...echo, receipt } as never)).toThrow(
+      /exactly one of receipt\(\) or retryOnStale/,
+    );
+
+    /* Either one alone is a complete declaration. */
+    expect(() => defineJob({ ...echo, retryOnStale: undefined, receipt } as never)).not.toThrow();
+    expect(() => defineJob(echo)).not.toThrow();
   });
 
   it("refuses a registry that defines a type twice", () => {

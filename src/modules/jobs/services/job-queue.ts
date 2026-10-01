@@ -22,7 +22,12 @@ import {
   type JobDefinition,
   type JobRegistry,
 } from "./job-definition";
-import { JobRetryableError, STALE_ERROR_CODE, classifyFailure } from "./job-errors";
+import {
+  JobRetryableError,
+  STALE_ERROR_CODE,
+  UNVERIFIABLE_ERROR_CODE,
+  classifyFailure,
+} from "./job-errors";
 import {
   HEARTBEAT_EVERY_MS,
   JOB_PRIORITIES,
@@ -399,21 +404,38 @@ async function recoverStale(
           idempotencyKey: job.idempotencyKey,
           payload: payload.data,
         });
-        const done = receipt ? await idempotency.committed(executor, receipt) : false;
 
-        decision = done
+        /*
+         * Never requeue work that might already have committed. A receipt
+         * settles it; `retryOnStale` is the author's assertion that re-running
+         * cannot duplicate anything. With neither — only reachable from
+         * JavaScript, since `defineJob` refuses such a type — the job is failed
+         * for a human to judge, not retried.
+         */
+        const committed = receipt ? await idempotency.committed(executor, receipt) : false;
+        const mayRequeue = receipt !== undefined || definition.retryOnStale !== undefined;
+
+        decision = committed
           ? { kind: "completed" }
-          : job.attempts >= job.maxAttempts
+          : !mayRequeue
             ? {
                 kind: "fail",
-                code: STALE_ERROR_CODE,
-                message: "The worker stopped responding and no attempts remain.",
+                code: UNVERIFIABLE_ERROR_CODE,
+                message:
+                  "The worker stopped responding and this job cannot prove whether its work " +
+                  "completed, so it was not retried.",
               }
-            : {
-                kind: "requeue",
-                code: STALE_ERROR_CODE,
-                message: "The worker stopped responding; the job was returned to the queue.",
-              };
+            : job.attempts >= job.maxAttempts
+              ? {
+                  kind: "fail",
+                  code: STALE_ERROR_CODE,
+                  message: "The worker stopped responding and no attempts remain.",
+                }
+              : {
+                  kind: "requeue",
+                  code: STALE_ERROR_CODE,
+                  message: "The worker stopped responding; the job was returned to the queue.",
+                };
       }
 
       const row = await jobsRepository.applyRecovery(executor, job.id, decision);

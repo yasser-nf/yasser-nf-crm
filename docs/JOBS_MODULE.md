@@ -160,10 +160,22 @@ work, and a receipt is meaningful only with the live rows it names.
 
 ## 5. Job types
 
-A job type is a value created with `defineJob({ type, payload, maxAttempts?, priority?, receipt?, run })`.
+A job type is a value created with `defineJob({ type, payload, maxAttempts?, priority?, run, … })`.
 There is no global registry: whoever enqueues passes the definition, and a worker process is given
 the list it can run (`createRegistry([...])`). **M08 ships no production job type** — M09 adds the
 first.
+
+**Every type must say how stale recovery may judge it** (M08 review). A worker that stops responding
+leaves a job that may or may not have done its work, and recovery must never guess, so the
+definition declares exactly one of:
+
+| Declaration | Meaning | Recovery does |
+| --- | --- | --- |
+| `receipt(job) => { scope, key }` | where the business operation records its receipt; the handler claims it inside its own transaction | reads it: committed ⇒ **succeeded**, never re-run |
+| `retryOnStale: "re-running is safe"` | re-running cannot duplicate a business effect — the job writes nothing, or its writes are idempotent on their own | may **queue it again** |
+
+A type declaring neither is a TypeScript error, and `defineJob` throws as well (for JavaScript
+callers). A type declaring both is refused too: two answers to one question is not an answer.
 
 Payloads carry references. `enqueue` validates the payload with the type's schema, then refuses it
 (writing nothing) if any key, at any depth, is sensitive by the audit module's own rule (`password`,
@@ -258,9 +270,13 @@ decides per job, **before** anything is retried:
 
 1. Its type declares a receipt and the receipt has committed → the business operation already
    happened (the worker died after its transaction, before reporting) → **succeeded**, never re-run.
-2. Otherwise, attempts remain → **queued** after the backoff, `last_error_code = JOB_STALE`.
-3. Otherwise → **failed**.
-4. A type the given registry does not know → **left untouched** (recovery cannot judge work it does
+2. It can prove nothing — neither a receipt nor `retryOnStale` (§5) → **failed**, with
+   `last_error_code = JOB_UNVERIFIABLE`, for a human to judge. It is never requeued: re-running work
+   that might already have committed is the one thing recovery must not do. `defineJob` makes such a
+   type unrepresentable, so this is the floor, not the normal path.
+3. Otherwise, attempts remain → **queued** after the backoff, `last_error_code = JOB_STALE`.
+4. Otherwise → **failed**.
+5. A type the given registry does not know → **left untouched** (recovery cannot judge work it does
    not understand).
 
 Every recovery is audited (`job_recovered`) and stamps `recovered_at`. Even if a requeued job's
@@ -320,6 +336,20 @@ and other connections wait. "Simultaneous" calls in the tests interleave at tran
 | Two claims truly overlapping skip each other's locked row | PostgreSQL `FOR UPDATE SKIP LOCKED` semantics |
 | A repeat inside the first's open transaction waits on the receipt key | PostgreSQL unique-index semantics |
 
+The second row deserves care, because the whole scheme rests on it. Two repeats of one operation
+reach `INSERT INTO idempotency_keys … ON CONFLICT DO NOTHING` inside their own transactions. Whatever
+the timing, **a duplicate row is impossible** — the primary key forbids it, and an insert conflicting
+with an in-flight one waits for that transaction to end. So the second gets exactly one of:
+
+- the first committed → no insert → the follow-up `SELECT` (a fresh snapshot, READ COMMITTED) reads
+  the committed receipt → **replay**;
+- the first rolled back → the insert succeeds → it performs the operation itself.
+
+A business transaction must therefore run at READ COMMITTED, which is what
+`databaseAdapter.transaction` uses (only `readSnapshot`, for backups, raises the isolation level).
+Under REPEATABLE READ the follow-up `SELECT` would not see the other commit; the repository refuses
+the operation there rather than letting it proceed unprotected (M08 review).
+
 Observed while testing, outside M08: three concurrent **first-ever** purchases for the same brand-new
 phone made `customersService.findOrCreateByPhone` return `NOT_FOUND` once in the harness (an
 `INSERT … RETURNING` that returned no row and no error, which PostgreSQL does not do). The harness's
@@ -349,8 +379,10 @@ retry, and run under the same `SKIP LOCKED` discipline.
 
 **Required for M09**
 
-- The first job types (`defineJob`) — each that changes business data MUST declare `receipt()` and
-  claim it inside its own transaction.
+- The first job types (`defineJob`). Each must declare how recovery may judge it (§5): a job that
+  changes business data declares `receipt()` and claims it inside its own transaction; only a job
+  that cannot duplicate anything declares `retryOnStale`. The type system enforces the choice; it
+  cannot enforce that the answer is honest, which is what a job type's review is for.
 - A long-running worker process (server-side, holding `DATABASE_URL`): a loop of
   `recoverStale(registry)` every few minutes and `processNext(workerId, registry)`; a graceful
   shutdown that stops claiming and lets in-flight jobs finish or go stale.
@@ -358,7 +390,9 @@ retry, and run under the same `SKIP LOCKED` discipline.
 
 **Deferred**
 
-- Job retention / cleanup (§13).
+- Job retention / cleanup (§13), including audit volume: every job success, failure, cancellation
+  and recovery writes an audit row, which is right at M09's volume and would need rethinking for a
+  queue running thousands of jobs a day.
 - Cancelling a running job (needs real cooperative cancellation in a handler).
 - A manual "retry this failed job" control.
 - Real-PostgreSQL concurrency tests (the harness serialises transactions).

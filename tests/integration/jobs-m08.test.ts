@@ -43,6 +43,8 @@ async function echoType(options: { maxAttempts?: number } = {}) {
   return defineJob({
     type: `test.echo_${randomUUID().slice(0, 8)}`,
     payload: z.object({ n: z.number() }),
+    /* Writes nothing, so recovery may safely run it again. */
+    retryOnStale: "re-running is safe",
     ...(options.maxAttempts ? { maxAttempts: options.maxAttempts } : {}),
     async run(context) {
       return ok({ n: context.payload.n });
@@ -154,6 +156,7 @@ describe.skipIf(!local)("enqueue: once per business operation", () => {
     const loose = defineJob({
       type: `test.loose_${randomUUID().slice(0, 8)}`,
       payload: z.record(z.string(), z.unknown()),
+      retryOnStale: "re-running is safe",
       async run() {
         return ok({});
       },
@@ -448,6 +451,7 @@ describe.skipIf(!local)("finishing: complete, retry with backoff, fail", () => {
     const flaky = defineJob({
       type: `test.flaky_${randomUUID().slice(0, 8)}`,
       payload: z.object({}),
+      retryOnStale: "re-running is safe",
       async run() {
         return fail(new JobRetryableError("try later"));
       },
@@ -455,6 +459,7 @@ describe.skipIf(!local)("finishing: complete, retry with backoff, fail", () => {
     const throwing = defineJob({
       type: `test.throws_${randomUUID().slice(0, 8)}`,
       payload: z.object({}),
+      retryOnStale: "re-running is safe",
       async run(): Promise<never> {
         throw new Error("boom with PIN 9876");
       },
@@ -727,6 +732,36 @@ describe.skipIf(!local)("stale recovery: never re-runs work that committed", () 
 
     /* Cleaned up by a worker that knows it, so later tests see no stale rows of this type. */
     await jobQueue.recoverStale(createRegistry([unknown]));
+  });
+
+  it("review: fails — never requeues — a stale job that cannot prove its work completed", async () => {
+    const { jobQueue, createRegistry, defineJob, ok } = await modules();
+
+    /*
+     * A type that declares neither a receipt nor retryOnStale is refused by
+     * defineJob, so it can only reach recovery from JavaScript. Built here the
+     * way such a caller would: around the type system, not through it.
+     */
+    const unverifiable = {
+      ...defineJob({
+        type: `test.unverifiable_${randomUUID().slice(0, 8)}`,
+        payload: z.object({ n: z.number() }),
+        retryOnStale: "re-running is safe" as const,
+        async run() {
+          return ok({});
+        },
+      }),
+      retryOnStale: undefined,
+    } as never;
+
+    const held = await staleJob(unverifiable);
+    const report = await jobQueue.recoverStale(createRegistry([unverifiable]));
+
+    expect(report.ok && report.value).toMatchObject({ failed: 1, requeued: 0, completed: 0 });
+    expect(await row(held.jobId)).toMatchObject({
+      status: "failed",
+      last_error_code: "JOB_UNVERIFIABLE",
+    });
   });
 });
 

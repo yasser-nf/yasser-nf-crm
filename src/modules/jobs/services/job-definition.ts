@@ -27,7 +27,7 @@ export interface JobContext<P> {
   readonly signal: AbortSignal;
 }
 
-export interface JobDefinition<P> {
+interface JobDefinitionBase<P> {
   /** Dotted lowercase, e.g. `netflix.verify_account`. */
   readonly type: string;
   /** References only. Validated before a job is written and again before it runs. */
@@ -35,21 +35,43 @@ export interface JobDefinition<P> {
   readonly maxAttempts?: number;
   readonly priority?: JobPriorityName;
 
-  /**
-   * Where this job's business operation records its receipt (the idempotency
-   * module), when it performs one. A job that changes business data MUST
-   * declare it and claim that receipt inside its own transaction: stale
-   * recovery reads it to learn whether the work already committed before it
-   * decides to retry, and a retried run finds it and replays.
-   */
-  receipt?(job: { readonly idempotencyKey: string; readonly payload: P }): {
-    readonly scope: string;
-    readonly key: string;
-  };
-
   /** Does the work. Returns safe metadata (references, counts) or a failure. */
   run(context: JobContext<P>): Promise<Result<Record<string, unknown>>>;
 }
+
+/**
+ * How stale recovery may judge this job type — REQUIRED, one or the other.
+ *
+ * A worker that stops responding leaves a job that may or may not have done its
+ * work. Recovery must never guess: re-running a committed sale would sell
+ * twice. So every type says, at definition time, how its work can be judged:
+ *
+ *   receipt      where the business operation records its receipt (the
+ *                idempotency module). Recovery reads it: committed ⇒ the job is
+ *                marked succeeded and never re-run. The handler MUST claim that
+ *                receipt inside its own transaction.
+ *   retryOnStale re-running cannot duplicate a business effect — the job writes
+ *                nothing, or its writes are idempotent on their own. Recovery
+ *                may queue it again.
+ *
+ * A type that declares neither is unrepresentable (and `defineJob` refuses it),
+ * which is why recovery has no "assume it is safe" branch.
+ */
+type StaleRecoveryRule<P> =
+  | {
+      receipt(job: { readonly idempotencyKey: string; readonly payload: P }): {
+        readonly scope: string;
+        readonly key: string;
+      };
+      readonly retryOnStale?: never;
+    }
+  | {
+      readonly receipt?: never;
+      /** The literal is a sentence the author has to mean: re-running is safe. */
+      readonly retryOnStale: "re-running is safe";
+    };
+
+export type JobDefinition<P> = JobDefinitionBase<P> & StaleRecoveryRule<P>;
 
 /** Any job type, for collections. Method syntax above keeps this assignable. */
 export type AnyJobDefinition = JobDefinition<unknown>;
@@ -59,6 +81,16 @@ const TYPE_FORMAT = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
 export function defineJob<P>(definition: JobDefinition<P>): JobDefinition<P> {
   if (!TYPE_FORMAT.test(definition.type) || definition.type.length > 64) {
     throw new Error(`Invalid job type "${definition.type}"`);
+  }
+
+  /* The type system already says so; this holds for JavaScript callers too. */
+  const declared = [definition.receipt !== undefined, definition.retryOnStale !== undefined];
+
+  if (declared.filter(Boolean).length !== 1) {
+    throw new Error(
+      `Job type "${definition.type}" must declare exactly one of receipt() or retryOnStale: ` +
+        "stale recovery cannot otherwise tell whether its work already committed",
+    );
   }
 
   if (
