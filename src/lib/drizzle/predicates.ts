@@ -139,6 +139,21 @@ export const accountHasNoBlockingProblemSql: SQL = sql`not exists (
 )`;
 
 /**
+ * The positive form: a problem in a blocking status IS open against the account.
+ *
+ * Defined as the negation of the predicate above rather than as a second
+ * `exists` clause, so the blocking status list stays in exactly one place. A
+ * copy here would be the fifth, and the one most likely to be forgotten when
+ * the lifecycle changes.
+ *
+ * Added by M09. Quick Renew needs the answer as a VALUE, not as a filter: it
+ * reads one profile under lock and must then decide, in TypeScript, whether the
+ * account carrying it may sell — the same decision `accountCanAllocate` makes
+ * for every other screen, which takes `hasActiveProblem` as an argument.
+ */
+export const accountHasBlockingProblemSql: SQL = sql`not (${accountHasNoBlockingProblemSql})`;
+
+/**
  * The account may sell.
  *
  * Four conditions, and every one of them is account-level: nothing here looks at

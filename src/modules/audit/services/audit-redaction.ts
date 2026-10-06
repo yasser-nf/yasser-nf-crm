@@ -255,6 +255,15 @@ const EVENT_FIELDS = [
   /* M07 restores: which snapshot was taken first, and rows the orphan rule skipped. */
   "safetySnapshotId",
   "skippedRows",
+  /*
+   * M09 renewals: how many days a renewal added, and which length was chosen
+   * ("3_months", or "custom"). A count and an enum-like string — neither is a
+   * secret, and M09 §19 requires the renewal duration to be auditable. The
+   * previous and new expiry are NOT here: they come from the profile
+   * before/after snapshots, which already carry `expirationDate`.
+   */
+  "renewalDays",
+  "renewalPreset",
 ] as const;
 
 /**

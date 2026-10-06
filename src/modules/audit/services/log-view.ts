@@ -78,6 +78,7 @@ export const EVENT_LABELS: Record<string, string> = {
   password_change_confirmed: "Password change confirmed in Quick Prepare",
   quick_prepare_allocation: "Quick Prepare allocation",
   quick_prepare_replacement: "Quick Replace",
+  profile_renewed: "Subscription renewed",
   profile_slots_changed: "Profile slots changed",
   sale_unassigned: "Sale unassigned",
   session_revoked: "Session revoked",
@@ -130,6 +131,9 @@ const DETAIL_FIELDS = new Set([
   "invitationState",
   "sessionId",
   "count",
+  /* M09: the renewal length, shown as detail rather than as a before → after. */
+  "renewalDays",
+  "renewalPreset",
 ]);
 
 /** Values that name a CRM user; shown as the person's name when it is known. */

@@ -1,4 +1,5 @@
 import {
+  CalendarPlus,
   ChartColumn,
   DatabaseBackup,
   LayoutDashboard,
@@ -44,6 +45,18 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { label: "Accounts", href: ROUTES.ACCOUNTS, icon: Tv },
   { label: "Quick Prepare", href: ROUTES.QUICK_PREPARE, icon: Zap },
   { label: "Quick Replace", href: ROUTES.QUICK_REPLACE, icon: RefreshCcw },
+  {
+    label: "Quick Renew",
+    href: ROUTES.QUICK_RENEW,
+    icon: CalendarPlus,
+    /*
+     * M09. Hidden from a role that cannot renew — and hiding is only the
+     * courtesy: `quickRenewService` refuses both the lookup and the commit
+     * without this permission, because a Server Action is a POST endpoint
+     * anybody holding a session can call directly.
+     */
+    requiredPermission: PERMISSIONS.RENEW_SUBSCRIPTIONS,
+  },
   { label: "Customers", href: ROUTES.CUSTOMERS, icon: Users },
   { label: "Problems", href: ROUTES.PROBLEMS, icon: TriangleAlert },
   {
@@ -90,6 +103,13 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
  * reach /quick-replace at all — the route worked, but only if typed by hand.
  * Six is the ceiling: at 375px each item still gets 62px, comfortably past the
  * 44px minimum touch target.
+ *
+ * M09 takes the sixth slot for Quick Renew rather than making it a seventh.
+ * The same argument that put Quick Replace here applies — a renewal is done
+ * with the customer on the phone — and Problems yields the slot because it is a
+ * review screen rather than something done while standing in front of someone.
+ * Problems stays reachable from the sidebar on desktop, from the notification
+ * bell, and from every account that has one.
  */
 export const MOBILE_NAVIGATION_ITEMS: readonly NavigationItem[] = NAVIGATION_ITEMS.filter((item) =>
   (
@@ -98,8 +118,8 @@ export const MOBILE_NAVIGATION_ITEMS: readonly NavigationItem[] = NAVIGATION_ITE
       ROUTES.ACCOUNTS,
       ROUTES.QUICK_PREPARE,
       ROUTES.QUICK_REPLACE,
+      ROUTES.QUICK_RENEW,
       ROUTES.CUSTOMERS,
-      ROUTES.PROBLEMS,
     ] as readonly string[]
   ).includes(item.href),
 );

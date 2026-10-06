@@ -2,6 +2,38 @@
 
 All notable changes to Yasser NF CRM.
 
+## [Unreleased] — Quick Renew
+
+Named rather than numbered: `CHANGELOG` already uses "M09" for the Dashboard
+milestone below, so this is the "M09 Quick Renewing" brief by its title. See
+[ADR-015](.ai/adr/ADR-015-Quick-Renew-Decisions.md).
+
+### Added
+- **Quick Renew** (`/quick-renew`): find an account by email, pick a profile,
+  review the customer and subscription, choose 1/2/3/6 months, 1 year or custom
+  days, preview the new expiry, confirm. A live subscription extends from its
+  **current expiry**, so renewing early loses no paid day; a lapsed one starts a
+  new term today, per `03_DATABASE.md`'s expired-profile rule.
+- `RENEW_SUBSCRIPTIONS` permission, held by Super Admin and Worker and enforced
+  in the service on all three entry points — including the read-only lookup.
+- `addMonths`, `addMonthsToDateString` and `daysBetween` in `lib/dates`.
+  Presets are calendar months, clamped at month ends; custom durations are exact
+  days. Bounds (1–730) are Quick Prepare's, imported rather than restated.
+- Renewals are atomic, idempotent (M08 receipts, scope `quick_renew.confirm`) and
+  safe when two operators renew the same profile: the quoted expiry is a
+  precondition re-checked under `FOR UPDATE`.
+- History as an existing `extended` profile event, so the Reports extensions
+  aggregate and the customer timeline pick renewals up unchanged.
+- 182 tests: 151 unit (25 of them rendering the screen) and 31 against a real
+  database. docs: QUICK_RENEW_MODULE.
+
+### Fixed
+- `roleHasPermission` threw on a role the permission matrix does not know, inside
+  an authorization check. It now denies. ADR-015 Decision 9.
+
+### Database
+- No migration required.
+
 ## [0.9.0-rc1] — 2026-08-11 — M12 Production Hardening
 
 ### Added

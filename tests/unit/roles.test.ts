@@ -25,6 +25,8 @@ const WORKER_ALLOWED: Permission[] = [
   PERMISSIONS.VIEW_CUSTOMERS,
   PERMISSIONS.PREPARE_SUBSCRIPTIONS,
   PERMISSIONS.REPLACE_ACCOUNTS,
+  /* M09 grants this one, and nothing else, for Quick Renew. */
+  PERMISSIONS.RENEW_SUBSCRIPTIONS,
   PERMISSIONS.EDIT_PROFILE_NAMES,
   PERMISSIONS.EDIT_PROFILE_PINS,
   PERMISSIONS.OPEN_WHATSAPP,
@@ -108,6 +110,22 @@ describe("Permission model integrity", () => {
     expect(administrative.length).toBeGreaterThan(0);
     for (const permission of administrative) {
       expect(roleHasPermission(USER_ROLES.WORKER, permission)).toBe(false);
+    }
+  });
+});
+
+describe("An unknown role", () => {
+  it("is denied every permission rather than throwing", () => {
+    /*
+     * `UserRole` is a closed union, so this cannot happen in typed code — but
+     * the role comes out of a database column, and this used to throw on
+     * `undefined.includes`. A throw inside an authorization check is neither a
+     * grant nor a denial a caller can report, so it fails closed instead.
+     */
+    const unknown = "viewer" as never;
+
+    for (const permission of Object.values(PERMISSIONS)) {
+      expect(roleHasPermission(unknown, permission)).toBe(false);
     }
   });
 });

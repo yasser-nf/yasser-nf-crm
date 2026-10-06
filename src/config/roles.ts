@@ -51,6 +51,21 @@ export const PERMISSIONS = {
    * had to be remembered.
    */
   UNASSIGN_SALES: "unassign_sales",
+  /*
+   * Extending an allocation the customer already holds (M09, Quick Renew).
+   *
+   * Separate from PREPARE_SUBSCRIPTIONS, which allocates stock, and from
+   * REPLACE_ACCOUNTS, which moves a customer between accounts. A renewal does
+   * neither: it adds time to a subscription that exists. Naming it separately
+   * is what lets the capability be withdrawn from a role without also
+   * withdrawing the ability to sell.
+   *
+   * Granted to Workers below. 01_MASTER_RULES.md's "Workers cannot" list is
+   * about deleting accounts, backups, settings and users; renewing a customer's
+   * subscription is day-to-day operational work of exactly the kind a Worker
+   * already does through Quick Prepare and Quick Replace.
+   */
+  RENEW_SUBSCRIPTIONS: "renew_subscriptions",
 
   /* Customers */
   VIEW_CUSTOMERS: "view_customers",
@@ -101,13 +116,16 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
  * silently granted — the direction a mistake should fail in.
  *
  * Adding to this list is a deliberate act, never a detail: M08 grants exactly
- * REPORT_PROBLEMS and VIEW_PROBLEMS, and deliberately not MANAGE_PROBLEMS.
+ * REPORT_PROBLEMS and VIEW_PROBLEMS, and deliberately not MANAGE_PROBLEMS; M09
+ * grants RENEW_SUBSCRIPTIONS and nothing else.
  */
 const WORKER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.VIEW_ACCOUNTS,
   PERMISSIONS.VIEW_CUSTOMERS,
   PERMISSIONS.PREPARE_SUBSCRIPTIONS,
   PERMISSIONS.REPLACE_ACCOUNTS,
+  /* M09: a renewal is operational work, like preparing and replacing. */
+  PERMISSIONS.RENEW_SUBSCRIPTIONS,
   PERMISSIONS.EDIT_PROFILE_NAMES,
   PERMISSIONS.EDIT_PROFILE_PINS,
   PERMISSIONS.EDIT_CUSTOMER_NOTES,
@@ -125,8 +143,19 @@ const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
   [USER_ROLES.WORKER]: WORKER_PERMISSIONS,
 };
 
+/**
+ * Whether a role holds a capability.
+ *
+ * Fails CLOSED for a role the matrix does not know. `UserRole` is a closed
+ * union, so an unrecognised value cannot arrive from typed code — but the role
+ * ultimately comes out of a database column, and before M09 an unexpected
+ * value made this throw on `undefined.includes`. A throw inside an
+ * authorization check is the worst of both answers: it is not a denial a caller
+ * can report, and the surrounding try/catch decides what happens next. Denying
+ * is the only safe reading of "I do not know what this role is".
+ */
 export function roleHasPermission(role: UserRole, permission: Permission): boolean {
-  return ROLE_PERMISSIONS[role].includes(permission);
+  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
 }
 
 /** Every permission a role holds. Used by the users screen to explain access. */

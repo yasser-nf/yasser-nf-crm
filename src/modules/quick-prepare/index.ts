@@ -46,6 +46,13 @@ export {
   confirmReplacementSchema,
   quickPrepareSchema,
   replaceLookupSchema,
+  /*
+   * The duration bounds, exported since M09 so Quick Renew applies the SAME
+   * limits rather than restating them. A renewal that could run longer than a
+   * sale would be a second answer to one question.
+   */
+  MAX_DURATION_DAYS,
+  MIN_DURATION_DAYS,
   type ConfirmReplacementInput,
   type QuickPrepareInput,
   type ReplaceLookupInput,

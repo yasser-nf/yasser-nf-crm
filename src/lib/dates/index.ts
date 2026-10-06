@@ -142,3 +142,70 @@ export function isExpiringSoon(boundary: DateString | null, today: Date): boolea
 
   return days !== null && days >= 0 && days <= EXPIRING_SOON_DAYS;
 }
+
+/**
+ * `from` plus a whole number of CALENDAR months.
+ *
+ * Distinct from `addDays` and deliberately so. A renewal sold as "3 months"
+ * means the same day of the month three months later — 20 October to 20
+ * January — which is not any fixed number of days: those three months are 92
+ * days, while the three after 20 February are 89. Expressing a month as 30 days
+ * would move the date the customer was quoted.
+ *
+ * The day of the month is CLAMPED to the target month's length, because the
+ * alternative is worse. 31 January plus one month has no 31 February to land
+ * on; JavaScript's own `setUTCMonth` silently rolls it forward to 2 or 3 March,
+ * which turns a one-month renewal into a one-month-and-two-days renewal and
+ * depends on whether the year is a leap year. Clamping gives 28 or 29 February
+ * — the last day of the month the customer bought — and never crosses into a
+ * month they did not.
+ *
+ * UTC throughout, like everything else here.
+ */
+export function addMonths(from: Date, months: number): DateString {
+  const day = from.getUTCDate();
+
+  /* Anchored on the 1st so the month arithmetic cannot roll over on its own. */
+  const target = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + months, 1));
+
+  /* Day 0 of the following month is the last day of the target month. */
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+
+  return new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), Math.min(day, lastDay)))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * `addMonths` in the shapes a `date` column deals in.
+ *
+ * The string-in, string-out form, mirroring `addDaysToDateString`: a renewal
+ * extends from a stored `expiration_date` and writes one back, and routing that
+ * through a Date at the call site is where a timezone bug gets in.
+ *
+ * Returns null when the input cannot be parsed, so a malformed value surfaces
+ * as "no date" rather than as `Invalid Date` written to a date column.
+ */
+export function addMonthsToDateString(from: DateString | null, months: number): DateString | null {
+  const parsed = parseDateString(from);
+
+  return parsed === null ? null : addMonths(parsed, months);
+}
+
+/**
+ * Whole days from `from` to `to`. Negative when `to` is earlier.
+ *
+ * `remainingDays` measured against a stored date rather than against the clock,
+ * which is what a renewal needs twice: how many days it added, and how long the
+ * subscription now runs from its sale date. Delegates rather than subtracting
+ * again, so every day count in the application comes out of one function.
+ *
+ * Null when either side is absent or unparseable — "no interval", never zero.
+ */
+export function daysBetween(from: DateString | null, to: DateString | null): number | null {
+  const start = parseDateString(from);
+
+  return start === null ? null : remainingDays(to, start);
+}

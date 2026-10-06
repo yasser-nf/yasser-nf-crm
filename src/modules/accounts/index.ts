@@ -41,6 +41,13 @@ export {
   accountCanAllocate,
   accountEffectiveStatus,
   accountRemainingDays,
+  /*
+   * Exported since M09. Quick Renew writes an absolute expiration date, exactly
+   * as the profile editor does, so it must apply the SAME rule — an allocation
+   * may not outlive the account carrying it (M13 §1) — rather than restating it
+   * against a duration.
+   */
+  allocationFitsAccount,
   canCoverDuration,
   isAccountExpired,
   isAllocationExpired,
