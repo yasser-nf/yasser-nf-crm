@@ -19,6 +19,7 @@ import type { AccountRow } from "@/lib/drizzle/schema";
 import { profileCustomerLabel, type ProfileAllocationWithCustomer } from "@/modules/accounts";
 import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
 import { ReplaceAccountButton } from "@/modules/quick-prepare";
+import { suppliersService } from "@/modules/suppliers";
 import { ErrorState } from "@/shared/feedback/error-state";
 
 export const metadata: Metadata = {
@@ -140,6 +141,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
     activeProblems,
     effectiveStatus,
     remainingValidityDays,
+    supplier,
   } = detail.value;
 
   /*
@@ -150,6 +152,17 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
   const actor = await getCurrentUser();
   const canUnassignSale =
     actor !== null && roleHasPermission(actor.role, PERMISSIONS.UNASSIGN_SALES);
+
+  /*
+   * M10 §7. Decided here so the control is absent, not merely disabled, for
+   * anyone who may not reassign ownership. `accountsService.setAccountSupplier`
+   * checks the same permission — this governs what is offered, never what is
+   * allowed. The options are only read when they can be used.
+   */
+  const canManageSuppliers =
+    actor !== null && roleHasPermission(actor.role, PERMISSIONS.MANAGE_SUPPLIERS);
+
+  const supplierOptions = canManageSuppliers ? await suppliersService.listOptions({ actor }) : null;
 
   const timeline = await accountsService.getAccountTimeline(id, { limit: 25 });
 
@@ -167,6 +180,9 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         account={account}
         remainingValidityDays={remainingValidityDays}
         effectiveStatus={effectiveStatus}
+        supplier={supplier}
+        supplierOptions={supplierOptions?.ok ? supplierOptions.value : []}
+        canManageSuppliers={canManageSuppliers}
       />
 
       {!accountAllowsAllocation ? (

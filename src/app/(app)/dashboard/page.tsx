@@ -11,6 +11,7 @@ import {
   ExpirationWidget,
   HealthWidget,
   OnlineUsersWidget,
+  OwnershipWidget,
   ProblemsCountsWidget,
   ProblemsListWidget,
   ProfilesWidget,
@@ -18,6 +19,7 @@ import {
   ReopenedWidget,
   RevenueWidget,
   StockWidget,
+  SuppliersWidget,
   presentStock,
   UsersCountsWidget,
   WidgetError,
@@ -95,6 +97,14 @@ async function Overview() {
       <div className="grid gap-4 lg:grid-cols-2">
         <AccountsWidget counts={data.counts.accounts} />
         <ProfilesWidget counts={data.counts.profiles} />
+        {/*
+          M10 §14. Beside the account and profile widgets, because it answers the
+          same question from a third angle: where the stock came from. Both read
+          the SAME rows the two above read — `tallySupplierOwnership` groups
+          them, it does not re-query.
+        */}
+        <OwnershipWidget ownership={data.ownership} />
+        <SuppliersWidget ownership={data.ownership} />
         <CustomersWidget counts={data.counts.customers} />
         <ProblemsCountsWidget counts={data.counts.problems} />
         <QuickPrepareWidget counts={data.counts.prepared} />

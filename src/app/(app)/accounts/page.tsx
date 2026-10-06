@@ -16,6 +16,7 @@ import {
   accountsService,
   parseAccountFilter,
 } from "@/modules/accounts";
+import { suppliersService } from "@/modules/suppliers";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -67,12 +68,14 @@ export default async function AccountsPage({
           <div className="flex flex-wrap items-center gap-2">
             <ExportAccountsMenu />
             <BulkAccountsDialog />
-            <CreateAccountDialog />
+            <Suspense fallback={<Skeleton className="h-9 w-32" />}>
+              <NewAccountButton />
+            </Suspense>
           </div>
         </header>
 
         <Suspense fallback={<FiltersSkeleton />}>
-          <AccountsFilters />
+          <FiltersRow />
         </Suspense>
 
         <Suspense key={JSON.stringify(filter)} fallback={<TableSkeleton />}>
@@ -80,6 +83,42 @@ export default async function AccountsPage({
         </Suspense>
       </div>
     </AccountSelectionProvider>
+  );
+}
+
+/**
+ * The create dialog, with the suppliers an account may be attributed to.
+ *
+ * `listOptions` refuses a role without VIEW_SUPPLIERS, so the field simply is
+ * not offered to one — and `createAccount` independently requires
+ * MANAGE_SUPPLIERS before honouring a supplier, so a crafted request cannot
+ * set one either.
+ */
+async function NewAccountButton() {
+  const actor = await getCurrentUser();
+  const options = await suppliersService.listOptions({ actor });
+
+  return <CreateAccountDialog supplierOptions={options.ok ? options.value : []} />;
+}
+
+/**
+ * The filter bar, with the supplier options it may offer. M10 §9.
+ *
+ * The options come from `suppliersService`, which refuses a role without
+ * VIEW_SUPPLIERS — so a Worker without it gets an empty list and no supplier
+ * select at all, rather than a control that returns nothing. A failed read
+ * degrades the same way: the rest of the filters still work.
+ */
+async function FiltersRow() {
+  const actor = await getCurrentUser();
+  const options = await suppliersService.listOptions({ actor });
+
+  return (
+    <AccountsFilters
+      suppliers={
+        options.ok ? options.value.map((option) => ({ id: option.id, name: option.name })) : []
+      }
+    />
   );
 }
 

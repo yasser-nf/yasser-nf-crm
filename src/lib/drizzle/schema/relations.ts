@@ -8,6 +8,7 @@ import { loginHistory } from "./login-history";
 import { profileEvents } from "./profile-events";
 import { profiles } from "./profiles";
 import { settings } from "./settings";
+import { suppliers } from "./suppliers";
 import { users } from "./users";
 
 /**
@@ -39,10 +40,24 @@ export const customersRelations = relations(customers, ({ many }) => ({
   profileEvents: many(profileEvents),
 }));
 
+/** M10: one supplier, many accounts. Profiles reach it through their account. */
+export const suppliersRelations = relations(suppliers, ({ one, many }) => ({
+  accounts: many(accounts),
+  createdByUser: one(users, {
+    fields: [suppliers.createdBy],
+    references: [users.id],
+  }),
+}));
+
 export const accountsRelations = relations(accounts, ({ one, many }) => ({
   createdByUser: one(users, {
     fields: [accounts.createdBy],
     references: [users.id],
+  }),
+  /** Null for an account of ours. M10. */
+  supplier: one(suppliers, {
+    fields: [accounts.supplierId],
+    references: [suppliers.id],
   }),
   /** Exactly five, enforced in the service layer. See profiles.ts. */
   profiles: many(profiles),

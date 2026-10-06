@@ -37,6 +37,8 @@ function account(overrides: Partial<AccountRow> = {}): AccountRow {
     country: "DZ",
     notes: null,
     createdBy: null,
+    /* M10: an account of ours. Null is "My Account". */
+    supplierId: null,
     createdAt: new Date("2026-01-01"),
     updatedAt: new Date("2026-01-01"),
     archivedAt: null,

@@ -33,6 +33,18 @@ export const ACCOUNT_STATUSES: readonly AccountRow["status"][] = [
   "deleted",
 ];
 
+/**
+ * The query-string value meaning "accounts of ours". M10 §9 and §17.
+ *
+ * A literal rather than an empty string, so `?supplier=` (a cleared select)
+ * and `?supplier=mine` (a deliberate choice) are different requests. The
+ * repository turns it into `supplier_id is null`.
+ */
+export const MY_ACCOUNTS_FILTER = "mine";
+
+/** `YYYY-...` shaped; only a uuid or the sentinel may reach the repository. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type RawSearchParams = Record<string, string | string[] | undefined>;
 
 export function readParam(params: RawSearchParams, key: string): string | undefined {
@@ -61,9 +73,23 @@ export function parseAccountFilter(params: RawSearchParams): ParsedAccountFilter
   const sortByRaw = readParam(params, "sortBy");
   const statusRaw = readParam(params, "status");
 
+  const supplierRaw = readParam(params, "supplier");
+
   return {
     search: readParam(params, "search"),
     status: ACCOUNT_STATUSES.find((value) => value === statusRaw),
+    /*
+     * Validated here, like every other value: a query string is user input and
+     * an arbitrary string must never reach a uuid comparison. Anything that is
+     * neither the sentinel nor a uuid is dropped, which shows every account —
+     * the same fallback an unrecognised status takes.
+     */
+    supplierId:
+      supplierRaw === MY_ACCOUNTS_FILTER
+        ? MY_ACCOUNTS_FILTER
+        : supplierRaw && UUID.test(supplierRaw)
+          ? supplierRaw
+          : undefined,
     sortBy: ACCOUNT_SORT_FIELDS.find((field) => field === sortByRaw) ?? "createdAt",
     sortDirection: readParam(params, "sortDirection") === "asc" ? "asc" : "desc",
     offset: Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0,
@@ -77,6 +103,9 @@ export function parseAccountFilter(params: RawSearchParams): ParsedAccountFilter
  * "Export all accounts" means every account, not every account matching what
  * happens to be typed in the search box. Sort order is kept so the file is in a
  * predictable sequence rather than the database's.
+ *
+ * The supplier filter is dropped with the rest, for the same reason: "all"
+ * means all, whoever they came from.
  */
 export function withoutNarrowing(filter: ParsedAccountFilter): ParsedAccountFilter {
   return {

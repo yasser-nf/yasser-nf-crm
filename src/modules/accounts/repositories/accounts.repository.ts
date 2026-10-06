@@ -15,6 +15,7 @@ import {
   customers,
   profileEvents,
   profiles,
+  suppliers,
   type AccountRow,
 } from "@/lib/drizzle/schema";
 import {
@@ -87,6 +88,18 @@ export interface AccountFilter extends PaginationInput {
    * application's screens do.
    */
   readonly includeBlocked?: boolean | undefined;
+  /**
+   * Narrow to one supplier's accounts, or to ours. M10 §9 and §17.
+   *
+   *   undefined    every account, whoever it came from
+   *   "mine"       `supplier_id is null` — ours
+   *   a uuid       that supplier's accounts
+   *
+   * Applied in the WHERE clause, so the page, the total and every later page
+   * are counted over the same set and nothing is filtered in the browser —
+   * which M10 §9 asks for explicitly.
+   */
+  readonly supplierId?: string | "mine" | undefined;
 }
 
 /**
@@ -130,6 +143,18 @@ export interface AccountWithCounts {
    * to invent its own interpretation, which M13 §7 forbids.
    */
   readonly profiles: readonly ProfileWithCustomer[];
+  /**
+   * Who the account was bought from, or null for one of ours. M10 §9 and §10.
+   *
+   * The NAME, carried on the row from a LEFT JOIN in the same query — not a
+   * lookup per account, which on a 25-row page would be 25 extra round trips
+   * (M10 §25). `account.supplierId` is the id; this is what to print.
+   *
+   * Null means "My Account". The UI must say so in words rather than leaving
+   * the cell blank: a blank cell reads as missing data, and ownership is never
+   * missing.
+   */
+  readonly supplierName: string | null;
 }
 
 export interface AccountsRepository {
@@ -188,6 +213,24 @@ export interface AccountsRepository {
   ): Promise<Result<readonly { before: AccountRow; after: AccountRow }[]>>;
   archive(id: string): Promise<Result<AccountRow>>;
   softDelete(id: string): Promise<Result<AccountRow>>;
+  /**
+   * The supplier one account came from, or null for one of ours. M10 §10.
+   *
+   * A separate read rather than a column on `findById`, which twelve callers
+   * use and none of the others needs. One account, one query — there is no N+1
+   * to have here.
+   */
+  supplierFor(accountId: string): Promise<Result<SupplierSummary | null>>;
+  /** Points an account at a supplier, or back at "My Account" with null. M10 §7. */
+  setSupplier(accountId: string, supplierId: string | null): Promise<Result<AccountRow>>;
+}
+
+/** Just enough of a supplier to name it and link to it. */
+export interface SupplierSummary {
+  readonly id: string;
+  readonly name: string;
+  /** Null while active. The caller derives the status through the suppliers module. */
+  readonly deactivatedAt: Date | null;
 }
 
 function buildFilter(filter: AccountFilter) {
@@ -211,6 +254,15 @@ function buildFilter(filter: AccountFilter) {
 
   if (filter.country !== undefined) {
     conditions.push(eq(accounts.country, filter.country));
+  }
+
+  if (filter.supplierId !== undefined) {
+    /* "mine" is NULL, which is how the model spells an account of ours. */
+    conditions.push(
+      filter.supplierId === "mine"
+        ? isNull(accounts.supplierId)
+        : eq(accounts.supplierId, filter.supplierId),
+    );
   }
 
   if (filter.search?.trim()) {
@@ -349,6 +401,51 @@ async function insertAccountWithProfiles(
 }
 
 export const accountsRepository: AccountsRepository = {
+  async supplierFor(accountId) {
+    const rows = await databaseAdapter.query("accounts.supplierFor", (executor) =>
+      executor
+        .select({
+          id: suppliers.id,
+          name: suppliers.name,
+          deactivatedAt: suppliers.deactivatedAt,
+        })
+        .from(accounts)
+        .innerJoin(suppliers, eq(suppliers.id, accounts.supplierId))
+        .where(and(eq(accounts.id, accountId), liveOnly))
+        .limit(1),
+    );
+
+    /*
+     * INNER join with no row means `supplier_id is null` — an account of ours.
+     * Returned as null rather than as an error: "My Account" is the common case
+     * and the most ordinary answer this method gives.
+     */
+    return rows.ok ? ok(rows.value[0] ?? null) : rows;
+  },
+
+  /**
+   * Points an account at a supplier, or back at "My Account".
+   *
+   * A single UPDATE. Nothing else moves: profiles are untouched, and M10 §22 is
+   * explicit that profile history must not change merely because ownership
+   * metadata did. There is no transaction because there is one statement.
+   */
+  async setSupplier(accountId, supplierId) {
+    const rows = await databaseAdapter.query("accounts.setSupplier", (executor) =>
+      executor
+        .update(accounts)
+        .set({ supplierId, updatedAt: sql`now()` })
+        .where(and(eq(accounts.id, accountId), liveOnly))
+        .returning(),
+    );
+
+    if (!rows.ok) {
+      return rows;
+    }
+
+    return requireFound(rows.value[0], ENTITY, accountId);
+  },
+
   async findById(id) {
     const result = await databaseAdapter.query("accounts.findById", (executor) =>
       executor
@@ -416,6 +513,12 @@ export const accountsRepository: AccountsRepository = {
         .select({
           account: accounts,
           /*
+           * The supplier's name, joined once for the whole page. M10 §25: a
+           * per-row lookup would be 25 queries for a full page, and the id
+           * alone cannot be rendered.
+           */
+          supplierName: suppliers.name,
+          /*
            * Sellable AND free AND the account may sell.
            *
            * The first two halves are derived: the slot rule from profile_number
@@ -443,8 +546,10 @@ export const accountsRepository: AccountsRepository = {
         })
         .from(accounts)
         .leftJoin(profiles, eq(profiles.accountId, accounts.id))
+        /* LEFT: an account of ours has no supplier row and must not drop out. */
+        .leftJoin(suppliers, eq(suppliers.id, accounts.supplierId))
         .where(where)
-        .groupBy(accounts.id)
+        .groupBy(accounts.id, suppliers.name)
         .orderBy(resolveOrderBy(filter))
         .limit(limit)
         .offset(offset);

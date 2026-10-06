@@ -67,6 +67,25 @@ export const PERMISSIONS = {
    */
   RENEW_SUBSCRIPTIONS: "renew_subscriptions",
 
+  /*
+   * Suppliers (M10).
+   *
+   * Split in two because the brief is explicit (§19, §20) and because the two
+   * answers differ: a Worker must SEE which supplier an account came from to do
+   * their job, and must not be able to rename or deactivate one.
+   *
+   * VIEW_SUPPLIERS also gates the supplier LOOKUP, not just the badge. The
+   * supplier list and a supplier's metrics are business intelligence about where
+   * stock comes from, and the service checks it on every read — a Server Action
+   * is a POST endpoint anybody holding a session can call.
+   *
+   * MANAGE_SUPPLIERS additionally governs ASSIGNING a supplier to an account and
+   * changing it, which is the same administrative act from the other side: it
+   * decides what the supplier metrics say.
+   */
+  VIEW_SUPPLIERS: "view_suppliers",
+  MANAGE_SUPPLIERS: "manage_suppliers",
+
   /* Customers */
   VIEW_CUSTOMERS: "view_customers",
   EDIT_CUSTOMER_NOTES: "edit_customer_notes",
@@ -117,11 +136,19 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
  *
  * Adding to this list is a deliberate act, never a detail: M08 grants exactly
  * REPORT_PROBLEMS and VIEW_PROBLEMS, and deliberately not MANAGE_PROBLEMS; M09
- * grants RENEW_SUBSCRIPTIONS and nothing else.
+ * grants RENEW_SUBSCRIPTIONS and nothing else; M10 grants VIEW_SUPPLIERS and
+ * deliberately not MANAGE_SUPPLIERS.
  */
 const WORKER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.VIEW_ACCOUNTS,
   PERMISSIONS.VIEW_CUSTOMERS,
+  /*
+   * M10 §20: a Worker sees which supplier an account came from, and the
+   * supplier list behind it. MANAGE_SUPPLIERS is deliberately NOT granted —
+   * creating, renaming and deactivating a supplier, and reassigning an
+   * account's ownership, stay with the Super Admin.
+   */
+  PERMISSIONS.VIEW_SUPPLIERS,
   PERMISSIONS.PREPARE_SUBSCRIPTIONS,
   PERMISSIONS.REPLACE_ACCOUNTS,
   /* M09: a renewal is operational work, like preparing and replacing. */

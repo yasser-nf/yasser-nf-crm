@@ -18,6 +18,7 @@ export {
   toAccountView,
   toProfileView,
   type AccountDetail,
+  type AccountSupplier,
   type AccountListRow,
   type AccountView,
   type AllocationBlockedReason,
@@ -83,10 +84,21 @@ export {
 /* Components consumed by app/ page composition. */
 export { AccountsTable } from "./components/accounts-table";
 export { parseAccountFilter } from "./services/account-filters";
-export { AccountsFilters } from "./components/accounts-filters";
+export { AccountsFilters, type SupplierFilterOption } from "./components/accounts-filters";
 export { ExportAccountsMenu } from "./components/export-accounts-menu";
 export { AccountSelectionProvider } from "./components/account-selection-context";
 export { AccountHeader } from "./components/account-header";
+/*
+ * M10. The account-facing supplier UI lives here rather than in the suppliers
+ * module: a Client Component cannot import that barrel (it re-exports
+ * `server-only` services), and these render ACCOUNT data.
+ */
+export {
+  AccountSupplierCell,
+  AccountSupplierLine,
+  ChangeAccountSupplierDialog,
+  MY_ACCOUNT_LABEL,
+} from "./components/account-supplier";
 export { AccountTimeline } from "./components/account-timeline";
 export { ProfileCard } from "./components/profile-card";
 export { ProfileIndicators, ProfileIndicatorLegend } from "./components/profile-indicators";

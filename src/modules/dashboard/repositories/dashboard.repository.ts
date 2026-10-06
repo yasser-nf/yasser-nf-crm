@@ -82,6 +82,15 @@ export interface AccountStateRow {
   readonly status: AccountRow["status"];
   readonly validUntil: AccountRow["validUntil"];
   readonly deletedAt: AccountRow["deletedAt"];
+  /**
+   * Who it came from, or null for one of ours. M10 §14 and §15.
+   *
+   * Added to the EXISTING projection rather than queried separately, which is
+   * the whole point: the dashboard's supplier figures are grouped from the same
+   * rows `tallyAccountStates` already classifies, so they cost no extra query
+   * and cannot disagree with the account buckets beside them.
+   */
+  readonly supplierId: string | null;
 }
 
 /** One profile, with exactly the account facts `profileCellState` needs. */
@@ -89,6 +98,8 @@ export interface ProfileStateRow {
   readonly profile: ProfileRow;
   readonly account: Pick<AccountRow, "profileSlots" | "validUntil" | "status" | "deletedAt">;
   readonly hasBlockingProblem: boolean;
+  /** The owning account's supplier, or null for one of ours. M10 §14. */
+  readonly supplierId: string | null;
 }
 
 export interface CustomerCounts {
@@ -388,6 +399,8 @@ export const dashboardRepository: DashboardRepository = {
           status: accounts.status,
           validUntil: accounts.validUntil,
           deletedAt: accounts.deletedAt,
+          /* M10: one more column on a query that already runs. No new read. */
+          supplierId: accounts.supplierId,
         })
         .from(accounts)
         .where(accountIsLiveSql),
@@ -409,6 +422,8 @@ export const dashboardRepository: DashboardRepository = {
           validUntil: accounts.validUntil,
           status: accounts.status,
           deletedAt: accounts.deletedAt,
+          /* M10: the owning account's supplier. Same query, one more column. */
+          supplierId: accounts.supplierId,
           /*
            * mapWith: a raw sql fragment carries no column type, so without it
            * Drizzle applies no mapper and the driver's value comes back as
@@ -432,6 +447,7 @@ export const dashboardRepository: DashboardRepository = {
           deletedAt: row.deletedAt,
         },
         hasBlockingProblem: row.hasBlockingProblem,
+        supplierId: row.supplierId,
       }));
     });
   },

@@ -158,6 +158,30 @@ export async function setProfileSlotsAction(id: string, input: unknown) {
 }
 
 /**
+ * Points an account at a supplier, or back at "My Account" with null. M10 §7.
+ *
+ * Lives with the ACCOUNT actions because the account is the row that changes —
+ * and because the alternative put it in the suppliers module, whose barrel a
+ * Client Component cannot import: it re-exports `server-only` services, which
+ * is a build error. The same constraint that moved the profile-state vocabulary
+ * into the design system.
+ *
+ * Authorization is still the suppliers module's: `setAccountSupplier` requires
+ * MANAGE_SUPPLIERS through `assertMayAssignSupplier`, the same function
+ * `createAccount` applies. Where the action file sits changes nothing about who
+ * may call it.
+ *
+ * Revalidates the dashboard too: ownership and the per-supplier table both
+ * move when an account changes hands.
+ */
+export async function setAccountSupplierAction(input: unknown) {
+  return run(
+    async (context) => accountsService.setAccountSupplier(input, context),
+    [ROUTES.ACCOUNTS, ROUTES.SUPPLIERS, ROUTES.DASHBOARD],
+  );
+}
+
+/**
  * Replaces the stored Netflix password.
  *
  * The plaintext travels in the POST body, never in the URL or a query string —

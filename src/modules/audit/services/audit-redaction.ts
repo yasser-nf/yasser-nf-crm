@@ -256,6 +256,14 @@ const EVENT_FIELDS = [
   "safetySnapshotId",
   "skippedRows",
   /*
+   * M10: the name a supplier was known by at the time of the action, so a log
+   * entry reads as "Supplier A deactivated" without a join, and still does
+   * after the supplier is renamed. The entity's own identity, which is already
+   * shown on every account that came from it — not free text in the sense the
+   * Logs page redacts.
+   */
+  "supplierName",
+  /*
    * M09 renewals: how many days a renewal added, and which length was chosen
    * ("3_months", or "custom"). A count and an enum-like string — neither is a
    * secret, and M09 §19 requires the renewal duration to be auditable. The
@@ -285,6 +293,15 @@ const ENTITY_FIELDS: Record<AuditEntity, readonly string[]> = {
     "email",
     "status",
     "profileSlots",
+    /*
+     * M10. Which supplier an account came from, or null for one of ours.
+     * An identifier, never a credential — a supplier row holds neither.
+     *
+     * This is what makes an ownership change auditable out of the before/after
+     * snapshots rather than out of new free-form fields: the previous supplier
+     * is `before.supplierId` and the new one is `after.supplierId`.
+     */
+    "supplierId",
     "validFrom",
     "validUntil",
     "country",
@@ -386,6 +403,17 @@ const ENTITY_FIELDS: Record<AuditEntity, readonly string[]> = {
    * settings module imports this one, so importing back would be a cycle.
    */
   settings: ["general", "company", "security", "notifications", "backup"],
+  /*
+   * M10 suppliers. Every column: a supplier row is a name, a note and two
+   * timestamps. Nothing here is a credential, which is also why the RLS read
+   * policy on this table is `is_crm_user()` rather than admin-only.
+   *
+   * `nameNormalized` is deliberately absent. It is derived from `name` by
+   * `normalizeSupplierName` and would say nothing a reader of `name` does not
+   * already know — and if it ever disagreed with `name`, the audit trail is not
+   * where that should be discovered.
+   */
+  supplier: ["id", "name", "notes", "deactivatedAt", "createdBy", "createdAt", "updatedAt"],
   /*
    * M08 jobs. The lifecycle columns only. Deliberately absent: `payload` and
    * `result` (whatever a job type carries stays out of a second table), and

@@ -31,6 +31,8 @@ const WORKER_ALLOWED: Permission[] = [
   PERMISSIONS.EDIT_PROFILE_PINS,
   PERMISSIONS.OPEN_WHATSAPP,
   PERMISSIONS.SEARCH,
+  /* M10 §20: a Worker sees which supplier an account came from. */
+  PERMISSIONS.VIEW_SUPPLIERS,
 ];
 
 /** Verbatim from the brief's "Workers may NOT" list. */
@@ -42,6 +44,12 @@ const WORKER_DENIED: Permission[] = [
   PERMISSIONS.VIEW_SECURITY,
   PERMISSIONS.ACCESS_DEVELOPER_PAGES,
   PERMISSIONS.MODIFY_PERMISSIONS,
+  /*
+   * M10 §19 and §20: viewing a supplier and managing one are separate, and a
+   * Worker holds only the first. Listed here so granting the second later has
+   * to be a deliberate edit of two files.
+   */
+  PERMISSIONS.MANAGE_SUPPLIERS,
 ];
 
 describe("Worker permissions — allowed", () => {

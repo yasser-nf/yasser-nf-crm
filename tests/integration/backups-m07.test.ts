@@ -308,6 +308,8 @@ describe.skipIf(!local)("a backup", () => {
     expect(Object.keys(document.data)).toEqual([
       "users",
       "customers",
+      /* M10. Before accounts: `accounts.supplier_id` references it. */
+      "suppliers",
       "accounts",
       "profiles",
       "profile_events",

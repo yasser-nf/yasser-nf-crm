@@ -2,6 +2,45 @@
 
 All notable changes to Yasser NF CRM.
 
+## [Unreleased] — Supplier Manager (M10)
+
+See [ADR-016](.ai/adr/ADR-016-Supplier-Decisions.md) and
+[docs/SUPPLIERS_MODULE.md](docs/SUPPLIERS_MODULE.md).
+
+### Added
+- **Suppliers** (`/suppliers`, `/suppliers/[id]`): which accounts were bought
+  from whom. Create, rename, note, deactivate and reactivate; per-supplier
+  account and stock figures; the supplier's own accounts through the existing
+  Accounts table.
+- `accounts.supplier_id`, nullable. **NULL is "My Account"** — no sentinel
+  supplier row, and no account's ownership is invented by the migration.
+- Supplier column and filter on the Accounts list (All / My Accounts / a
+  supplier), applied server-side in the WHERE clause; supplier on the account
+  detail, with a change dialog.
+- Dashboard: ownership (My Accounts / Supplier Accounts / Total) and a
+  per-supplier table — grouped from the two state queries the dashboard already
+  ran, so **no new dashboard query**.
+- `VIEW_SUPPLIERS` (Super Admin + Worker) and `MANAGE_SUPPLIERS` (Super Admin),
+  enforced in the services on every entry point including the reads. Assigning
+  an account's supplier requires MANAGE_SUPPLIERS, at creation and afterwards.
+- Supplier name identity: `name_normalized` plus a unique index, so
+  "Supplier A" and " supplier  a " are one supplier.
+- Audit: supplier created / updated / deactivated / reactivated, and
+  `account_supplier_changed` carrying the previous and new supplier.
+- `suppliers` added to the backup manifest, before `accounts`.
+- 145 tests: 108 unit (18 of them rendering the supplier screens) and 37
+  against a real database.
+
+### Fixed
+- The dashboard's and the supplier page's "available profiles" would have
+  disagreed — one counted display state, the other allocable stock. Both now
+  use the allocable rule; an integration test pins them together.
+
+### Database
+- Migration `0016_suppliers`: `suppliers` table, `accounts.supplier_id`
+  (nullable, `ON DELETE RESTRICT`), four indexes, RLS, and `'supplier'` on the
+  `audit_entity` enum. Additive; nothing backfilled.
+
 ## [Unreleased] — Quick Renew
 
 Named rather than numbered: `CHANGELOG` already uses "M09" for the Dashboard

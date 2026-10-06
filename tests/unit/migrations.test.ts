@@ -133,8 +133,11 @@ describe("the migration history replays from nothing", () => {
     expect(applied.rows[0]!.n).toBe(journal.entries.length);
   });
 
-  /* M05 added `notifications` (0014): twelve became thirteen. */
-  it("produces the fifteen application tables", async () => {
+  /*
+   * M05 added `notifications` (0014): twelve became thirteen. M10 added
+   * `suppliers` (0016): fifteen became sixteen.
+   */
+  it("produces the sixteen application tables", async () => {
     const tables = await db.query<{ table_name: string }>(
       "select table_name from information_schema.tables where table_schema = 'public' order by 1",
     );
@@ -154,8 +157,91 @@ describe("the migration history replays from nothing", () => {
       "profiles",
       "report_presets",
       "settings",
+      "suppliers",
       "users",
     ]);
+  });
+
+  /**
+   * M10. The supplier relationship and its deletion behaviour.
+   *
+   * RESTRICT is the part worth pinning: cascade would delete accounts with
+   * their supplier, and SET NULL would quietly turn them into ours — a rewrite
+   * of history M10 §23 forbids. Neither mistake is visible in application code,
+   * so it is asserted against the catalog.
+   */
+  it("links accounts to suppliers with ON DELETE RESTRICT", async () => {
+    const fk = await db.query<{ confdeltype: string }>(
+      `select confdeltype from pg_constraint
+       where conname = 'accounts_supplier_id_suppliers_id_fk'`,
+    );
+
+    /* 'r' is RESTRICT; 'c' would be cascade and 'n' set null. */
+    expect(fk.rows[0]?.confdeltype).toBe("r");
+  });
+
+  /** M10 §5: one supplier per name, however it was typed. */
+  it("makes the normalized supplier name unique", async () => {
+    const indexes = await db.query<{ indexname: string }>(
+      `select indexname from pg_indexes
+       where tablename = 'suppliers' and indexdef like '%UNIQUE%'`,
+    );
+
+    expect(indexes.rows.map((row) => row.indexname)).toContain("suppliers_name_normalized_unique");
+  });
+
+  /** M10 §26: the table is locked down in the migration that creates it. */
+  it("enables row level security on suppliers, with a read and a write policy", async () => {
+    const rls = await db.query<{ relrowsecurity: boolean }>(
+      "select relrowsecurity from pg_class where oid = 'public.suppliers'::regclass",
+    );
+
+    expect(rls.rows[0]?.relrowsecurity).toBe(true);
+
+    const policies = await db.query<{ policyname: string }>(
+      "select policyname from pg_policies where tablename = 'suppliers' order by 1",
+    );
+
+    expect(policies.rows.map((row) => row.policyname)).toEqual([
+      "suppliers_read",
+      "suppliers_write",
+    ]);
+  });
+
+  /**
+   * M10 §31, asserted on the migration TEXT as well as on the catalog.
+   *
+   * "No historical ownership is invented" is a claim about what the migration
+   * does NOT do, and the catalog cannot show an absence. A nullable column with
+   * no default cannot touch an existing row — but a backfill statement added
+   * later could, and would be invisible to every other test here.
+   */
+  it("backfills nothing: 0016 never writes to accounts", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const migration = await readFile("drizzle/0016_suppliers.sql", "utf8");
+
+    /* Strip the comment lines, which legitimately contain the word UPDATE. */
+    const statements = migration
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n")
+      .toUpperCase();
+
+    expect(statements).not.toMatch(/UPDATE\s+"?ACCOUNTS"?/);
+    expect(statements).not.toMatch(/INSERT\s+INTO\s+"?SUPPLIERS"?/);
+    /* The one thing it does to accounts: add the column and its constraint. */
+    expect(statements).toContain('ALTER TABLE "ACCOUNTS" ADD COLUMN "SUPPLIER_ID"');
+  });
+
+  /** M10 §31: existing accounts default to "My Account" — nothing is backfilled. */
+  it("adds accounts.supplier_id as nullable with no default", async () => {
+    const column = await db.query<{ is_nullable: string; column_default: string | null }>(
+      `select is_nullable, column_default from information_schema.columns
+       where table_name = 'accounts' and column_name = 'supplier_id'`,
+    );
+
+    expect(column.rows[0]?.is_nullable).toBe("YES");
+    expect(column.rows[0]?.column_default).toBeNull();
   });
 
   it("includes 0012, which production has NOT applied", async () => {

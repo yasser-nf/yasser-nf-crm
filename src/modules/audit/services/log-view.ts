@@ -44,6 +44,8 @@ export const AUDIT_ENTITIES = [
   "backup",
   "settings",
   "job",
+  /* M10. Actions on a supplier itself; an account's supplier CHANGE is `account`. */
+  "supplier",
 ] as const;
 export type AuditEntityName = (typeof AUDIT_ENTITIES)[number];
 
@@ -66,6 +68,7 @@ export const ENTITY_LABELS: Record<AuditEntityName, string> = {
   backup: "Backup",
   settings: "Settings",
   job: "Job",
+  supplier: "Supplier",
 };
 
 /**
@@ -79,6 +82,11 @@ export const EVENT_LABELS: Record<string, string> = {
   quick_prepare_allocation: "Quick Prepare allocation",
   quick_prepare_replacement: "Quick Replace",
   profile_renewed: "Subscription renewed",
+  supplier_created: "Supplier created",
+  supplier_updated: "Supplier updated",
+  supplier_deactivated: "Supplier deactivated",
+  supplier_reactivated: "Supplier reactivated",
+  account_supplier_changed: "Account supplier changed",
   profile_slots_changed: "Profile slots changed",
   sale_unassigned: "Sale unassigned",
   session_revoked: "Session revoked",
@@ -134,6 +142,9 @@ const DETAIL_FIELDS = new Set([
   /* M09: the renewal length, shown as detail rather than as a before → after. */
   "renewalDays",
   "renewalPreset",
+  /* M10: the supplier an action concerned, named rather than left as a uuid. */
+  "supplierName",
+  "supplierId",
 ]);
 
 /** Values that name a CRM user; shown as the person's name when it is known. */

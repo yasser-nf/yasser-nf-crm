@@ -65,6 +65,13 @@ export interface BackupTableSpec {
 export const BACKUP_TABLES: readonly BackupTableSpec[] = [
   { table: "users", policy: "reconcile" },
   { table: "customers", policy: "reconcile" },
+  /*
+   * M10. BEFORE accounts, because `accounts.supplier_id` references it and
+   * restore inserts in this order — a supplier has to exist before an account
+   * can point at it. Reconcile, like every other business table: a supplier is
+   * a record an operator edits, not an append-only history.
+   */
+  { table: "suppliers", policy: "reconcile" },
   { table: "accounts", policy: "reconcile" },
   { table: "profiles", policy: "reconcile" },
   { table: "profile_events", policy: "append_only" },
@@ -125,7 +132,10 @@ export interface Relationship {
 }
 
 export const RELATIONSHIPS: readonly Relationship[] = [
+  { table: "suppliers", column: "created_by", parent: "users", nullable: true },
   { table: "accounts", column: "created_by", parent: "users", nullable: true },
+  /* M10. Nullable: NULL is "My Account", the majority of the table. */
+  { table: "accounts", column: "supplier_id", parent: "suppliers", nullable: true },
   { table: "profiles", column: "account_id", parent: "accounts", nullable: false },
   { table: "profiles", column: "customer_id", parent: "customers", nullable: true },
   { table: "profiles", column: "worker_id", parent: "users", nullable: true },

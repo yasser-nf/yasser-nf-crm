@@ -190,6 +190,63 @@ export function rawAccountCanAllocate(accountAlias: string): SQL {
 }
 
 /**
+ * The four buckets an account's effective status falls into, in SQL.
+ *
+ * The SQL twin of `accountBucket(accountEffectiveStatus(...))` in
+ * `dashboard/services/account-state-counts.ts`, which is itself built on
+ * `accountEffectiveStatus` — the one derivation behind every account badge
+ * since M03.
+ *
+ * M10 needs these as a COUNT per supplier, and counting means SQL: the
+ * alternative is loading every account to classify it in TypeScript, which the
+ * dashboard can afford on one screen but a per-supplier list cannot (M10 §25).
+ * So this is the second spelling of one rule, exactly as `accountCanAllocateSql`
+ * is the second spelling of `accountCanAllocate` — and
+ * `tests/integration/suppliers-m10.test.ts` asserts the two agree over a matrix
+ * of accounts rather than trusting that they do.
+ *
+ * The precedence is the rule, and it is `accountEffectiveStatus`':
+ *
+ *   1. a stored non-healthy status names itself — so an ARCHIVED account with
+ *      an open problem counts as archived, exactly as its badge reads
+ *   2. then a blocking problem makes a healthy-stored account a problem
+ *   3. then its own coverage decides healthy from expired
+ *
+ * Over LIVE accounts the four are disjoint and exhaustive: every live row
+ * matches exactly one, so they sum to the total by construction. Callers must
+ * apply `accountIsLiveSql` themselves — `'deleted'` is a fifth effective status
+ * and is not a bucket here, the same omission `accountBucket` makes.
+ */
+export type AccountEffectiveBucket = "healthy" | "problems" | "expired" | "archived";
+
+export function accountEffectiveBucketSql(bucket: AccountEffectiveBucket): SQL {
+  const storedFault = sql`${accounts.status} in ('payment_problem', 'incorrect_password', 'invalid_email', 'something_went_wrong')`;
+  const storedHealthy = eq(accounts.status, "healthy");
+
+  switch (bucket) {
+    case "healthy":
+      /* Identical to accountMatchesStatusSql('healthy'), reused rather than restated. */
+      return accountMatchesStatusSql("healthy");
+
+    case "expired":
+      /*
+       * Healthy on paper and unblocked, but its own coverage has run out. The
+       * negation of `accountStillCoveredSql`, so NULL stays open-ended rather
+       * than expired — the load-bearing null check of ADR-013 Decision 3.
+       */
+      return sql`(${storedHealthy} and ${accountHasNoBlockingProblemSql} and not ${accountStillCoveredSql})`;
+
+    case "problems":
+      /* A fault recorded on the account, or a blocking problem raised against it. */
+      return sql`(${storedFault} or (${storedHealthy} and ${accountHasBlockingProblemSql}))`;
+
+    case "archived":
+      /* Lifecycle, not fault. Outranks a problem, as the badge does. */
+      return eq(accounts.status, "archived");
+  }
+}
+
+/**
  * The four statuses that name a fault, and are also the four problem types.
  *
  * `account_status` and `issue_type` share these values by design — 03_DATABASE

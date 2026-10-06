@@ -34,6 +34,12 @@ import { BulkSelectionBar } from "./bulk-selection-bar";
 import { CopyCredentials } from "./copy-credentials";
 import { ProfileIndicators, ProfileIndicatorLegend } from "./profile-indicators";
 import { AccountStatusBadge } from "./status-badge";
+/*
+ * M10 §9. One component produces the words "My Account", here and on the
+ * account detail page, so a NULL supplier never renders as a blank cell —
+ * which would read as missing data rather than as ownership.
+ */
+import { AccountSupplierCell } from "./account-supplier";
 
 /**
  * Accounts list.
@@ -293,6 +299,14 @@ export function AccountsTable({
                   </TableHead>
                 );
               })}
+              {/*
+                Not sortable, deliberately. `SORT_COLUMNS` in the repository is
+                an allow-list of real columns, and sorting by a joined name
+                would need a new entry there plus an index to be worth offering.
+                The supplier FILTER is the useful control, and it is in the
+                filter bar.
+              */}
+              <TableHead className="text-caption text-foreground-muted">Supplier</TableHead>
               <TableHead className="text-caption text-foreground-muted">Profiles</TableHead>
               <TableHead className="text-caption text-foreground-muted">Validity</TableHead>
               <TableHead className="text-caption text-foreground-muted">Notes</TableHead>
@@ -377,6 +391,11 @@ export function AccountsTable({
                     </TableCell>
                     <TableCell className="text-foreground-muted">
                       {formatDate(row.account.createdAt)}
+                    </TableCell>
+
+                    {/* M10 §9. Null is "My Account", said in words. */}
+                    <TableCell>
+                      <AccountSupplierCell supplierName={row.supplierName} />
                     </TableCell>
 
                     {/* All five, on the same row. M13 §1. */}
@@ -519,6 +538,8 @@ export function AccountsTable({
                 {validityLabel(row.remainingValidityDays, row.account.validUntil)}
               </span>
               <span>{row.account.profileSlots} of 5 sellable</span>
+              {/* M10 §29: ownership is on the card too, not desktop-only. */}
+              <AccountSupplierCell supplierName={row.supplierName} />
               <span>{row.account.country ?? "—"}</span>
               <span>{formatDate(row.account.createdAt)}</span>
             </div>

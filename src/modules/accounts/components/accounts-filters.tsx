@@ -12,6 +12,24 @@ import { ACCOUNT_STATUS_OPTIONS } from "./status-badge";
 /** Sentinel for "no status filter". A Radix SelectItem cannot hold an empty value. */
 const ALL_STATUSES = "all";
 
+/** Sentinels for the supplier filter. M10 §9 and §17. */
+const ALL_SUPPLIERS = "all";
+const MY_ACCOUNTS = "mine";
+
+/**
+ * The suppliers this filter may offer.
+ *
+ * Passed in from the page rather than fetched here: the list is a server read
+ * behind VIEW_SUPPLIERS, and a Client Component cannot make it — nor should it,
+ * since the page already knows whether the viewer may see suppliers at all.
+ * Empty means "do not offer the filter", which is what a role without the
+ * permission gets.
+ */
+export interface SupplierFilterOption {
+  readonly id: string;
+  readonly name: string;
+}
+
 /**
  * Accounts list filters.
  *
@@ -21,13 +39,18 @@ const ALL_STATUSES = "all";
  * change and re-run the query, which on a slow connection produces a stream of
  * in-flight requests whose responses arrive out of order.
  */
-export function AccountsFilters() {
+export function AccountsFilters({
+  suppliers = [],
+}: {
+  readonly suppliers?: readonly SupplierFilterOption[];
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const currentSearch = searchParams.get("search") ?? "";
   const currentStatus = searchParams.get("status") ?? ALL_STATUSES;
+  const currentSupplier = searchParams.get("supplier") ?? ALL_SUPPLIERS;
 
   const [searchInput, setSearchInput] = useState(currentSearch);
 
@@ -74,7 +97,29 @@ export function AccountsFilters() {
     router.push(`${pathname}?${params.toString()}`);
   }
 
-  const hasFilters = currentSearch !== "" || currentStatus !== ALL_STATUSES;
+  /**
+   * Narrows to one supplier, or to accounts of ours.
+   *
+   * The value travels as `?supplier=` — `mine` for ours, a uuid for a supplier
+   * — and `parseAccountFilter` validates it before it reaches the repository,
+   * which applies it in the WHERE clause. Nothing is filtered in the browser
+   * (M10 §9).
+   */
+  function setSupplier(value: string) {
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (value === ALL_SUPPLIERS) {
+      params.delete("supplier");
+    } else {
+      params.set("supplier", value);
+    }
+
+    params.set("offset", "0");
+    router.push(`${pathname}?${params.toString()}`);
+  }
+
+  const hasFilters =
+    currentSearch !== "" || currentStatus !== ALL_STATUSES || currentSupplier !== ALL_SUPPLIERS;
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -105,6 +150,25 @@ export function AccountsFilters() {
           ))}
         </SelectContent>
       </Select>
+
+      {/* Offered only when the viewer may see suppliers — the page decides. */}
+      {suppliers.length > 0 ? (
+        <Select value={currentSupplier} onValueChange={setSupplier}>
+          <SelectTrigger className="h-11 sm:w-56" aria-label="Filter by supplier">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_SUPPLIERS}>All suppliers</SelectItem>
+            {/* NULL, said in words. M10 §7. */}
+            <SelectItem value={MY_ACCOUNTS}>My Accounts</SelectItem>
+            {suppliers.map((supplier) => (
+              <SelectItem key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
 
       {hasFilters ? (
         <Button

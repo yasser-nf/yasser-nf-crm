@@ -18,6 +18,7 @@ export * from "./enums";
 
 export * from "./users";
 export * from "./customers";
+export * from "./suppliers";
 export * from "./accounts";
 export * from "./profiles";
 export * from "./profile-events";

@@ -8,6 +8,8 @@ import { fail, ok } from "@/utils/result";
 import { evaluateAllocation } from "@/modules/accounts";
 import { problemsService, type ProblemListEntry } from "@/modules/problems";
 import { quickPrepareService } from "@/modules/quick-prepare";
+/* M10. Names for the supplier ids the ownership tally groups by. */
+import { suppliersService } from "@/modules/suppliers";
 import { usersService, type UserListEntry } from "@/modules/users";
 import type { IssueRow } from "@/lib/drizzle/schema";
 import {
@@ -20,6 +22,7 @@ import {
 } from "../repositories/dashboard.repository";
 import { tallyAccountStates } from "./account-state-counts";
 import { expirationBuckets, resellableExpired, tallyProfileStates } from "./profile-state-counts";
+import { tallySupplierOwnership, type OwnershipTally } from "./supplier-ownership";
 import { assessHealth, type HealthReport } from "./system-health";
 
 /**
@@ -74,6 +77,27 @@ export interface DashboardData {
   };
   /** True when the caller may see users, backups and health. */
   readonly canSeeAdminMetrics: boolean;
+  /**
+   * Ownership and per-supplier figures. M10 §14 and §15.
+   *
+   * `null` for a role that may not see suppliers — absent from the payload
+   * rather than hidden in the markup, the same treatment administrative
+   * metrics get. A Worker holds VIEW_SUPPLIERS today, so in practice this is
+   * present for both roles; it is null-able so that withdrawing the permission
+   * withdraws the data, not just the widget.
+   */
+  readonly ownership: SupplierOwnership | null;
+}
+
+/** The ownership tally with each supplier named. M10 §14. */
+export interface SupplierOwnership extends OwnershipTally {
+  /**
+   * Supplier id to display name, for the rows above. Only ACTIVE suppliers get
+   * a name here plus any inactive one that still owns accounts, because the
+   * widget lists what exists rather than what is current — M10 §23 keeps a
+   * deactivated supplier's accounts visible and attributed.
+   */
+  readonly names: Readonly<Record<string, string>>;
 }
 
 function canSeeAdminMetrics(actor: AppUser): boolean {
@@ -193,6 +217,41 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
 
   const profileTally = tallyProfileStates(profileStates.value, today);
 
+  /*
+   * M10 §14. Grouped from the rows above — no further query, and no second
+   * definition of healthy, problem, expired or available: the same
+   * `accountEffectiveStatus` and `profileCellState` calls, over the same
+   * inputs, grouped by `supplier_id`.
+   */
+  const canSeeSuppliers = roleHasPermission(actor.role, PERMISSIONS.VIEW_SUPPLIERS);
+
+  const ownershipTally = canSeeSuppliers
+    ? tallySupplierOwnership(
+        accountStates.value.map((row) => ({
+          account: row,
+          blockingProblemTypes: problemTypes.value.get(row.id) ?? [],
+          supplierId: row.supplierId,
+        })),
+        profileStates.value,
+        today,
+      )
+    : null;
+
+  /*
+   * Names for the ids in that tally. One read, and only when the viewer may see
+   * suppliers at all. A failed read degrades to ids with no names rather than
+   * failing the page — ownership is supplementary to everything else on it.
+   */
+  const supplierOptions = canSeeSuppliers ? await suppliersService.listOptions({ actor }) : null;
+
+  const supplierNames: Record<string, string> = {};
+
+  if (supplierOptions?.ok) {
+    for (const option of supplierOptions.value) {
+      supplierNames[option.id] = option.name;
+    }
+  }
+
   const dashboardCounts: DashboardCounts = {
     ...counts.value,
     accounts: accountTally,
@@ -255,6 +314,8 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
       backupsOverTime: backupsOverTime === null ? [] : orNull(backupsOverTime),
     },
     canSeeAdminMetrics: isAdmin,
+    /* M10 §14 and §15. Null for a role without VIEW_SUPPLIERS. */
+    ownership: ownershipTally === null ? null : { ...ownershipTally, names: supplierNames },
   });
 }
 

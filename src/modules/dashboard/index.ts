@@ -11,7 +11,25 @@
  * counts a caller is allowed to see.
  */
 export { dashboardService, LOW_STOCK_THRESHOLD } from "./services/dashboard.service";
-export type { DashboardData, StockEntry, StockSummary } from "./services/dashboard.service";
+export type {
+  DashboardData,
+  StockEntry,
+  StockSummary,
+  /* M10 §14. */
+  SupplierOwnership,
+} from "./services/dashboard.service";
+
+/* M10. Pure and clock-injected, so a unit test can pin the date. */
+export {
+  tallySupplierOwnership,
+  type OwnershipTally,
+  type SupplierAccountInput,
+  type SupplierOwnershipRow,
+  type SupplierProfileInput,
+} from "./services/supplier-ownership";
+
+/* M10 §14. Ownership and per-supplier figures, in the existing widget vocabulary. */
+export { OwnershipWidget, SuppliersWidget } from "./components/ownership-widgets";
 export { presentStock, type StockPresentation } from "./services/stock-presentation";
 
 export {

@@ -137,6 +137,16 @@ export const auditEntityEnum = pgEnum("audit_entity", [
   "issue",
   /* M08 jobs: created, cancelled, finished and recovered jobs are traceable in the Logs. */
   "job",
+  /*
+   * M10. Supplier creation, renaming and deactivation are auditable (M10 §21),
+   * and `audit_logs.entity` is this enum — so the label has to exist before a
+   * supplier action can be recorded against it.
+   *
+   * An account's supplier CHANGE is audited under `account`, not here: the row
+   * that changed is the account, and its before/after snapshots already carry
+   * `supplierId`. This value is for actions on the supplier itself.
+   */
+  "supplier",
 ]);
 
 /**

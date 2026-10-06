@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { accountStatusEnum } from "./enums";
+import { suppliers } from "./suppliers";
 import { users } from "./users";
 
 /**
@@ -89,6 +90,24 @@ export const accounts = pgTable(
     country: text("country"),
     notes: text("notes"),
 
+    /**
+     * Who this account was bought from, or NULL for one of ours. M10.
+     *
+     * NULL is "My Account" and is the default for every account that already
+     * exists — the migration adds the column nullable with no backfill, so no
+     * historical ownership is invented (M10 §8 and §31).
+     *
+     * RESTRICT, not cascade and not set null. Deleting a supplier that still
+     * owns accounts would either delete the accounts (absurd) or silently turn
+     * them into ours (a quiet rewrite of history, which M10 §23 forbids). The
+     * application offers no delete at all; this is the database refusing the
+     * same thing from any other writer.
+     *
+     * The relationship lives HERE and only here. Profiles reach their supplier
+     * through `profiles.account_id` — see suppliers.ts.
+     */
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
+
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -116,6 +135,16 @@ export const accounts = pgTable(
     index("accounts_created_at_idx").on(table.createdAt),
     index("accounts_created_by_idx").on(table.createdBy),
     index("accounts_country_idx").on(table.country),
+
+    /*
+     * The supplier filter and every per-supplier metric read this. Partial on
+     * the non-null side: "My Account" is the majority of the table and is found
+     * by `supplier_id IS NULL`, which an index on the whole column would bloat
+     * for no gain. Follows 0010, which added the project's other FK indexes.
+     */
+    index("accounts_supplier_id_idx")
+      .on(table.supplierId)
+      .where(sql`${table.supplierId} is not null`),
 
     /*
      * Partial index for the Smart Stock Engine hot path: the live accounts it

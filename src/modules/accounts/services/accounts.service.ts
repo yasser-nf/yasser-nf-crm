@@ -10,6 +10,19 @@ import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { auditService, type AuditContext } from "@/modules/audit";
 import { problemsService } from "@/modules/problems";
+/*
+ * M10. One direction only: suppliers knows nothing about accounts, so there is
+ * no cycle. `deriveSupplierStatus` is pure, and `requireAssignable` is the
+ * single rule for "may this supplier receive an account" — applied here rather
+ * than restated, so creating an account and reassigning one cannot disagree.
+ */
+import {
+  accountSupplierSchema,
+  assertMayAssignSupplier,
+  deriveSupplierStatus,
+  suppliersService,
+  type SupplierStatus,
+} from "@/modules/suppliers";
 import type { Page, PaginationInput } from "@/lib/database";
 import type { Result } from "@/types/result";
 import { fail, ok } from "@/utils/result";
@@ -179,6 +192,21 @@ export interface AccountDetail {
   readonly remainingValidityDays: number | null;
   /** True when the profile count is not exactly five. Signals corrupt data. */
   readonly hasProfileCountAnomaly: boolean;
+  /**
+   * Who this account was bought from, or null for one of ours. M10 §10.
+   *
+   * Null is "My Account" and the page says so in words. A blank field would
+   * read as missing data, and ownership is never missing.
+   */
+  readonly supplier: AccountSupplier | null;
+}
+
+/** The supplier an account came from, as the detail page shows it. M10 §10. */
+export interface AccountSupplier {
+  readonly id: string;
+  readonly name: string;
+  /** Derived through the suppliers module, so one rule decides it. */
+  readonly status: SupplierStatus;
 }
 
 /**
@@ -554,6 +582,18 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
     return accountResult;
   }
 
+  /*
+   * M10 §10. One account, one extra query — there is no N+1 to have here, and
+   * the alternative (a column on `findById`) would widen a read twelve other
+   * callers make and none of them needs.
+   *
+   * A failed read must not blank the page: ownership is supplementary to
+   * everything else on it, so it degrades to "unknown" rather than an error.
+   * `null` from the repository is the ordinary answer — an account of ours.
+   */
+  const supplierResult = await accountsRepository.supplierFor(id);
+  const supplierRow = supplierResult.ok ? supplierResult.value : null;
+
   const profilesResult = await profilesRepository.listByAccount(id);
 
   if (!profilesResult.ok) {
@@ -621,6 +661,14 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
      * page should say so instead of silently rendering four cards.
      */
     hasProfileCountAnomaly: profilesResult.value.length !== PROFILES_PER_ACCOUNT,
+    /* M10 §10. Status through the suppliers module, so one rule decides it. */
+    supplier: supplierRow
+      ? {
+          id: supplierRow.id,
+          name: supplierRow.name,
+          status: deriveSupplierStatus(supplierRow),
+        }
+      : null,
   });
 }
 
@@ -635,6 +683,30 @@ async function createAccount(input: unknown, context: AuditContext): Promise<Res
 
   if (!parsed.success) {
     return fail(toValidationError(parsed.error.issues, "Account input failed validation"));
+  }
+
+  /*
+   * M10 §7 and §19. Naming a supplier at creation is the same administrative
+   * act as changing one later, so it requires the same permission and passes
+   * the same eligibility rule — an unknown or inactive supplier is refused
+   * (§23). Omitting the field creates an account of ours, which is what every
+   * caller that predates M10 does, so nothing already working changes.
+   *
+   * Checked here rather than in the schema because a permission depends on who
+   * is asking, which a schema cannot see.
+   */
+  if (parsed.data.supplierId != null) {
+    const mayAssign = assertMayAssignSupplier(context);
+
+    if (!mayAssign.ok) {
+      return mayAssign;
+    }
+
+    const assignable = await suppliersService.requireAssignable(parsed.data.supplierId);
+
+    if (!assignable.ok) {
+      return assignable;
+    }
   }
 
   const created = await accountsRepository.create(parsed.data, context.actor?.id ?? null);
@@ -956,6 +1028,103 @@ async function updateAccount(
       action: "update",
       before: before.value,
       after: updated.value,
+    },
+    context,
+  );
+
+  return updated;
+}
+
+/**
+ * Points an account at a supplier, or back at "My Account". M10 §7 and §22.
+ *
+ * Its own method rather than a field on `updateAccount`, for three reasons the
+ * generic path cannot serve:
+ *
+ *   - PERMISSION. Ownership is supplier management (MANAGE_SUPPLIERS), not
+ *     account editing (EDIT_ACCOUNTS). Both are Super Admin today, so this
+ *     changes nothing for a real user — it means the capability can be moved
+ *     later without the other moving with it.
+ *   - AUDIT. §22 wants the previous and the new supplier recorded as an
+ *     ownership change. Through `updateAccount` it would be "account updated"
+ *     among whatever else was in the same payload.
+ *   - ELIGIBILITY. An unknown or inactive supplier is refused (§23), which a
+ *     partial update has no place to check.
+ *
+ * Profiles are deliberately untouched. §22: profile history must not change
+ * because ownership metadata did. A profile reaches its supplier through its
+ * account, so there is nothing on a profile to update.
+ */
+async function setAccountSupplier(
+  input: unknown,
+  context: AuditContext,
+): Promise<Result<AccountRow>> {
+  const permitted = assertMayAssignSupplier(context);
+
+  if (!permitted.ok) {
+    return permitted;
+  }
+
+  const parsed = accountSupplierSchema.safeParse(input);
+
+  if (!parsed.success) {
+    return fail(toValidationError(parsed.error.issues, "Supplier assignment failed validation"));
+  }
+
+  const { accountId, supplierId } = parsed.data;
+
+  const before = await accountsRepository.findById(accountId);
+
+  if (!before.ok) {
+    return before;
+  }
+
+  /*
+   * The name of the supplier being assigned, for the audit entry — and the
+   * eligibility check in the same read. Null is "My Account", which is always
+   * assignable: an account can always become ours again.
+   */
+  let supplierName: string | null = null;
+
+  if (supplierId !== null) {
+    const assignable = await suppliersService.requireAssignable(supplierId);
+
+    if (!assignable.ok) {
+      return assignable;
+    }
+
+    supplierName = assignable.value.name;
+  }
+
+  /* Already there. Answered without a write, so the audit log has no empty entry. */
+  if ((before.value.supplierId ?? null) === supplierId) {
+    return ok(before.value);
+  }
+
+  const updated = await accountsRepository.setSupplier(accountId, supplierId);
+
+  if (!updated.ok) {
+    return updated;
+  }
+
+  /*
+   * Audited as an ACCOUNT change, because the account is the row that changed.
+   * The before/after snapshots already carry `supplierId` (it is on the audit
+   * allow-list), so "from whom, to whom" is answerable from the entry itself;
+   * `supplierName` names the new owner so the Logs page needs no join.
+   */
+  await auditService.recordOrWarn(
+    {
+      entity: "account",
+      entityId: accountId,
+      action: "update",
+      before: before.value,
+      after: {
+        ...updated.value,
+        event: "account_supplier_changed",
+        supplierName,
+        changedFields: ["supplierId"],
+      },
     },
     context,
   );
@@ -1427,6 +1596,8 @@ function toValidationError(
 }
 
 export const accountsService = {
+  /* M10 §7 and §22. The ONE path that changes an account's ownership. */
+  setAccountSupplier,
   listAccounts,
   getAccountDetail,
   createAccount,

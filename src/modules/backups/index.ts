@@ -41,7 +41,14 @@ export {
   BACKUP_TABLE_NAMES,
   checkCompatibility,
   policyFor,
+  /*
+   * Exported since M10 so a module adding a table can assert its own place in
+   * the restore graph. A new foreign key between backed-up tables that is
+   * missing here makes a restore reject a file it should accept.
+   */
+  RELATIONSHIPS,
   type BackupManifest,
+  type Relationship,
   type RestorePolicy,
 } from "./services/backup-format";
 

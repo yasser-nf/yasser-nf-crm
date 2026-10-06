@@ -37,6 +37,10 @@ import { EditAccountDialog } from "./account-dialogs";
 import { CopyCredentials } from "./copy-credentials";
 import type { AccountEffectiveStatus } from "../services/account-validity";
 import { AccountStatusBadge } from "./status-badge";
+import { AccountSupplierLine, ChangeAccountSupplierDialog } from "./account-supplier";
+/* Type-only: erased, so the suppliers barrel never reaches the client bundle. */
+import type { SupplierOption } from "@/modules/suppliers";
+import type { AccountSupplier } from "../services/accounts.service";
 
 /**
  * Account detail header.
@@ -65,6 +69,9 @@ export function AccountHeader({
   account,
   remainingValidityDays,
   effectiveStatus,
+  supplier,
+  supplierOptions,
+  canManageSuppliers = false,
 }: {
   account: AccountView;
   /**
@@ -81,6 +88,17 @@ export function AccountHeader({
    * from the one the allocation engine used on the server.
    */
   remainingValidityDays: number | null;
+  /**
+   * Who this account was bought from, or null for one of ours. M10 §10.
+   *
+   * Resolved by the service. `null` is rendered as "My Account" in words, never
+   * as a blank — ownership is never missing.
+   */
+  supplier: AccountSupplier | null;
+  /** Suppliers that may be chosen. Empty unless the viewer may reassign. */
+  supplierOptions?: readonly SupplierOption[];
+  /** Decided on the server; `setAccountSupplier` enforces the same permission. */
+  canManageSuppliers?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
@@ -190,6 +208,20 @@ export function AccountHeader({
 
         <Field label="Remaining validity">
           <RemainingValidity remainingDays={remainingValidityDays} />
+        </Field>
+
+        {/* M10 §10. Beside the account's own facts, because that is what it is. */}
+        <Field label="Supplier">
+          <div className="flex flex-wrap items-center gap-2">
+            <AccountSupplierLine supplier={supplier} />
+            {canManageSuppliers ? (
+              <ChangeAccountSupplierDialog
+                accountId={account.id}
+                currentSupplierId={supplier?.id ?? null}
+                options={supplierOptions ?? []}
+              />
+            ) : null}
+          </div>
         </Field>
       </div>
 

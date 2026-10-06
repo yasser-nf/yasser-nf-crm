@@ -83,6 +83,18 @@ const baseAccountInsert = createInsertSchema(accounts, {
   /* Both nullable columns: absent means open-ended, which is not the same as expired. */
   validFrom: calendarDate.optional(),
   validUntil: calendarDate.optional(),
+  /**
+   * Who the account was bought from, or absent / null for one of ours. M10 §7.
+   *
+   * Optional, so every existing caller — the create form, the bulk importer,
+   * every test — keeps working unchanged and creates a "My Account" account,
+   * which is what M10 §8 requires of existing behaviour.
+   *
+   * Supplying it is an act of supplier management: `accountsService.createAccount`
+   * checks MANAGE_SUPPLIERS before honouring it, and refuses an unknown or
+   * inactive supplier. Validation here only says it is a uuid.
+   */
+  supplierId: z.uuid().nullable().optional(),
 }).omit({
   id: true,
   passwordEncrypted: true,
@@ -180,6 +192,17 @@ export const accountUpdateSchema = createUpdateSchema(accounts, {
      * transactional and separately audited.
      */
     profileSlots: true,
+    /*
+     * Not editable here either, and for the same shape of reason. M10 §22
+     * requires an ownership change to be auditable as its own event carrying
+     * the previous and the new supplier, and §19 puts it behind
+     * MANAGE_SUPPLIERS rather than EDIT_ACCOUNTS. A field on a generic partial
+     * update could satisfy neither: it would be audited as "account updated"
+     * among whatever else changed, and gated by whoever may edit an account.
+     *
+     * It goes through accountsService.setAccountSupplier.
+     */
+    supplierId: true,
   })
   .extend({
     /** Optional plaintext replacement. Omit to leave the stored password alone. */

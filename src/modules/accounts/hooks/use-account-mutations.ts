@@ -13,6 +13,7 @@ import {
   deleteAccountsAction,
   restoreAccountAction,
   revealAccountPasswordAction,
+  setAccountSupplierAction,
   updateAccountAction,
   unassignSaleAction,
   updateProfileAction,
@@ -230,6 +231,34 @@ export function useUnassignSale(accountId: string, profileId: string) {
       toast.error("Could not remove the sale", { description: error.userMessage });
       /* Whatever happened, the server knows the truth about this profile. */
       router.refresh();
+    },
+  });
+}
+
+/**
+ * Points an account at a supplier, or back at "My Account". M10 §7 and §22.
+ *
+ * `router.refresh()` rather than a local patch: the Supplier cell, the supplier
+ * metrics and the dashboard's ownership figures are all derived on the server,
+ * and a locally updated name beside stale counts is worse than a short wait.
+ */
+export function useSetAccountSupplier() {
+  const router = useRouter();
+
+  return useMutation({
+    mutationFn: async (input: { accountId: string; supplierId: string | null }) =>
+      unwrapAction(await setAccountSupplierAction(input)),
+    onSuccess: () => {
+      toast.success("Supplier updated for this account");
+      router.refresh();
+    },
+    onError: (error) => {
+      /* A field error renders on the dialog; only the rest need a toast. */
+      if (!(error instanceof ActionError) || !error.fieldErrors) {
+        toast.error("Could not change the supplier", {
+          description: error instanceof ActionError ? error.userMessage : undefined,
+        });
+      }
     },
   });
 }

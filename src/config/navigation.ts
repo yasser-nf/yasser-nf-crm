@@ -1,4 +1,5 @@
 import {
+  Building2,
   CalendarPlus,
   ChartColumn,
   DatabaseBackup,
@@ -56,6 +57,17 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
      * anybody holding a session can call directly.
      */
     requiredPermission: PERMISSIONS.RENEW_SUBSCRIPTIONS,
+  },
+  {
+    label: "Suppliers",
+    href: ROUTES.SUPPLIERS,
+    icon: Building2,
+    /*
+     * M10 §19 and §20. A Worker sees suppliers; only a Super Admin may change
+     * one, which the page and the service decide separately — hiding the item
+     * from a role without even view access is the courtesy, not the control.
+     */
+    requiredPermission: PERMISSIONS.VIEW_SUPPLIERS,
   },
   { label: "Customers", href: ROUTES.CUSTOMERS, icon: Users },
   { label: "Problems", href: ROUTES.PROBLEMS, icon: TriangleAlert },

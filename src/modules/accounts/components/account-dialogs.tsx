@@ -15,6 +15,7 @@ import {
 } from "@/shared/ui/dialog";
 import { useCreateAccount, useUpdateAccount } from "../hooks/use-account-mutations";
 import { AccountForm } from "./account-form";
+import type { SupplierOption } from "@/modules/suppliers";
 
 /**
  * Create and edit dialogs.
@@ -28,7 +29,12 @@ import { AccountForm } from "./account-form";
  * server rejected it.
  */
 
-export function CreateAccountDialog() {
+export function CreateAccountDialog({
+  supplierOptions = [],
+}: {
+  /** M10 §7. Read on the server behind VIEW_SUPPLIERS; empty hides the field. */
+  readonly supplierOptions?: readonly SupplierOption[];
+}) {
   const [open, setOpen] = useState(false);
   const create = useCreateAccount();
 
@@ -58,6 +64,7 @@ export function CreateAccountDialog() {
 
         <AccountForm
           mode="create"
+          supplierOptions={supplierOptions}
           isSubmitting={create.isPending}
           error={create.error}
           onSubmit={(values) =>

@@ -13,6 +13,7 @@ import { Label } from "@/shared/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Textarea } from "@/shared/ui/textarea";
 import { ACCOUNT_STATUS_OPTIONS } from "./status-badge";
+import type { SupplierOption } from "@/modules/suppliers";
 
 /**
  * Account create and edit form.
@@ -69,7 +70,24 @@ const createAccountFormSchema = z.object({
   validFrom: z.string().optional(),
   validUntil: z.string().optional(),
   durationDays: z.string().optional(),
+
+  /**
+   * Who the account was bought from. M10 §7.
+   *
+   * The sentinel `__mine__` is "My Account", because a Radix SelectItem cannot
+   * hold null and the model stores NULL (M10 §3). Translated back to null in
+   * `submit`, so the payload says what the column means.
+   *
+   * Create only. Changing an existing account's supplier goes through the
+   * dedicated dialog on the account page: M10 §22 wants that change audited as
+   * its own event with the previous and new supplier, and this form submits a
+   * generic update.
+   */
+  supplierId: z.string().optional(),
 });
+
+/** "My Account" as a <select> value. The payload sends null. */
+const MY_ACCOUNT_VALUE = "__mine__";
 
 const editAccountFormSchema = z.object({
   ...baseFields,
@@ -91,6 +109,14 @@ export type EditAccountFormValues = z.infer<typeof editAccountFormSchema>;
 
 interface AccountFormProps {
   readonly mode: "create" | "edit";
+  /**
+   * Suppliers the operator may choose at creation. M10 §7.
+   *
+   * Passed in because the list is a server read behind VIEW_SUPPLIERS and this
+   * is a Client Component. Empty means the field is not offered at all — which
+   * is what a role that may not assign ownership gets.
+   */
+  readonly supplierOptions?: readonly SupplierOption[];
   /* A projection without the credential — this form never edits a password hash. */
   readonly account?: AccountView | undefined;
   readonly isSubmitting: boolean;
@@ -102,6 +128,7 @@ interface AccountFormProps {
 export function AccountForm({
   mode,
   account,
+  supplierOptions = [],
   isSubmitting,
   error,
   onSubmit,
@@ -122,6 +149,8 @@ export function AccountForm({
         : {
             /* Five and open-ended: exactly how every pre-M13 account behaves. */
             profileSlots: 5,
+            /* Ours unless the operator says otherwise, which is M10 §8's default. */
+            supplierId: MY_ACCOUNT_VALUE,
             validityMode: "open" as ValidityMode,
             validFrom: "",
             validUntil: "",
@@ -163,6 +192,7 @@ export function AccountForm({
     "notes",
     "status",
     "profileSlots",
+    "supplierId",
     "validFrom",
     "validUntil",
     "durationDays",
@@ -190,6 +220,16 @@ export function AccountForm({
 
       payload["password"] = values.password;
       payload["profileSlots"] = Number(created.profileSlots);
+
+      /*
+       * The sentinel becomes null — an account of ours. Sent explicitly rather
+       * than omitted so the payload states the ownership that was chosen, and
+       * the service's MANAGE_SUPPLIERS gate only engages for a real supplier.
+       */
+      payload["supplierId"] =
+        created.supplierId === undefined || created.supplierId === MY_ACCOUNT_VALUE
+          ? null
+          : created.supplierId;
 
       /*
        * Only the fields the chosen mode actually means are sent. The service
@@ -232,6 +272,7 @@ export function AccountForm({
    * `status` already gets two lines above.
    */
   const profileSlots = Number(useWatch({ control, name: "profileSlots" as never }) ?? 5);
+  const supplierId = String(useWatch({ control, name: "supplierId" as never }) ?? MY_ACCOUNT_VALUE);
   const validityMode = String(
     useWatch({ control, name: "validityMode" as never }) ?? "open",
   ) as ValidityMode;
@@ -321,6 +362,50 @@ export function AccountForm({
               </p>
             ) : null}
           </div>
+
+          {/* M10 §7. Offered only when the viewer may assign ownership. */}
+          {supplierOptions.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <Label
+                htmlFor="account-supplier"
+                className="text-description font-medium text-foreground"
+              >
+                Supplier
+              </Label>
+              <Select
+                value={supplierId}
+                onValueChange={(value) => setValue("supplierId" as never, value as never)}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger id="account-supplier" className="h-11 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={MY_ACCOUNT_VALUE}>My Account</SelectItem>
+                  {/*
+                    Active suppliers only. M10 §23 forbids assigning a new
+                    account to an inactive one, and the service refuses it —
+                    so offering it here would only produce a refusal.
+                  */}
+                  {supplierOptions
+                    .filter((option) => option.status === "active")
+                    .map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-caption text-foreground-subtle">
+                Leave as My Account for an account of your own.
+              </p>
+              {fieldError("supplierId") ? (
+                <p role="alert" className="text-caption text-danger">
+                  {fieldError("supplierId")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-2">
             <Label
