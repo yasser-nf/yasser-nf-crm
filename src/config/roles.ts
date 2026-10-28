@@ -37,6 +37,8 @@ export const PERMISSIONS = {
   /* Allocation */
   PREPARE_SUBSCRIPTIONS: "prepare_subscriptions",
   REPLACE_ACCOUNTS: "replace_accounts",
+  /* M09A. Extending a period someone already holds — not a new sale. */
+  RENEW_SUBSCRIPTIONS: "renew_subscriptions",
   /*
    * Removing a sale, leaving the customer with nothing.
    *
@@ -108,6 +110,7 @@ const WORKER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.VIEW_CUSTOMERS,
   PERMISSIONS.PREPARE_SUBSCRIPTIONS,
   PERMISSIONS.REPLACE_ACCOUNTS,
+  PERMISSIONS.RENEW_SUBSCRIPTIONS,
   PERMISSIONS.EDIT_PROFILE_NAMES,
   PERMISSIONS.EDIT_PROFILE_PINS,
   PERMISSIONS.EDIT_CUSTOMER_NOTES,

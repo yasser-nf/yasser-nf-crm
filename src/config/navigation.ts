@@ -1,4 +1,5 @@
 import {
+  CalendarPlus,
   ChartColumn,
   DatabaseBackup,
   LayoutDashboard,
@@ -44,6 +45,12 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
   { label: "Accounts", href: ROUTES.ACCOUNTS, icon: Tv },
   { label: "Quick Prepare", href: ROUTES.QUICK_PREPARE, icon: Zap },
   { label: "Quick Replace", href: ROUTES.QUICK_REPLACE, icon: RefreshCcw },
+  {
+    label: "Quick Renewing",
+    href: ROUTES.QUICK_RENEW,
+    icon: CalendarPlus,
+    requiredPermission: PERMISSIONS.RENEW_SUBSCRIPTIONS,
+  },
   { label: "Customers", href: ROUTES.CUSTOMERS, icon: Users },
   { label: "Problems", href: ROUTES.PROBLEMS, icon: TriangleAlert },
   {

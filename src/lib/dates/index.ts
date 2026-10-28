@@ -119,6 +119,78 @@ export function addDaysToDateString(from: DateString | null, days: number): Date
 }
 
 /**
+ * Whole days from `from` to `to`, both `YYYY-MM-DD`. Negative when `to` is earlier.
+ *
+ * The string-in form of the subtraction `remainingDays` performs against a
+ * clock. M09A needs it to keep a renewed profile's `duration_days` honest:
+ * expiration is derived from sale date plus duration (profile-dates.ts), so a
+ * renewal that moves the expiry must restate the duration or the next edit of
+ * that profile silently recomputes the old date back.
+ *
+ * Returns null when either side is absent or unparseable, so a missing date
+ * surfaces as "cannot compute" rather than as a plausible wrong number.
+ */
+export function daysBetweenDateStrings(
+  from: DateString | null,
+  to: DateString | null,
+): number | null {
+  const start = parseDateString(from);
+  const end = parseDateString(to);
+
+  if (start === null || end === null) {
+    return null;
+  }
+
+  return Math.round((end.getTime() - start.getTime()) / 86_400_000);
+}
+
+/** Days in a given UTC month. `month` is 0-based, as Date.UTC takes it. */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+/**
+ * `from` plus a whole number of CALENDAR months, clamped to the month's end.
+ *
+ * A subscription sold as "one month" is a calendar month, not thirty days —
+ * 31 January plus one month is 28 February, and a customer who renews on the
+ * 31st does not expect a different answer from one who renews on the 1st.
+ * `addDays` cannot express that, and multiplying months by 30 drifts five days
+ * a year, which is why this is a separate function rather than a conversion.
+ *
+ * Month-end is CLAMPED, never rolled over. The naive form — setUTCMonth on a
+ * date whose day does not exist in the target month — silently rolls into the
+ * following month: 31 January plus one month becomes 3 March, which hands the
+ * customer three free days and reads as a correct date in every screen. The
+ * day is therefore clamped to the target month's length before the date is
+ * built, so 31 Jan + 1 → 28 Feb, and in a leap year → 29 Feb.
+ *
+ * Clamping is not reversible, and deliberately so: 31 Jan + 1 month − 1 month
+ * is 28 Feb, not 31 Jan. Renewals only ever move forward, and a renewal chain
+ * is computed from the stored expiry each time rather than from the original
+ * sale date, so the clamp applies at most once per renewal.
+ */
+export function addMonthsToDateString(from: DateString | null, months: number): DateString | null {
+  const parsed = parseDateString(from);
+
+  if (parsed === null || !Number.isInteger(months)) {
+    return null;
+  }
+
+  const year = parsed.getUTCFullYear();
+  const month = parsed.getUTCMonth();
+  const day = parsed.getUTCDate();
+
+  /* Normalised through Date.UTC so a month index beyond 11 rolls the year. */
+  const target = new Date(Date.UTC(year, month + months, 1));
+  const clampedDay = Math.min(day, daysInMonth(target.getUTCFullYear(), target.getUTCMonth()));
+
+  return new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), clampedDay))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
  * How close to expiry counts as "expiring soon".
  *
  * Three days, which is the highlight M05 specifies and the window
