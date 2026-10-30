@@ -14,14 +14,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { useReplacementAlternatives } from "../hooks/use-alternatives";
 import {
   replacementIdentity,
   useConfirmReplacement,
   useOperationId,
   usePreviewReplacement,
 } from "../hooks/use-quick-prepare";
+import { NO_ALTERNATIVE_MESSAGE } from "../services/alternative-messages";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type { ReplacementPreview } from "../services/quick-replace.service";
+import { SuggestAnother } from "./suggest-another";
 
 /**
  * Replace Account.
@@ -66,6 +69,14 @@ function blockedMessage(preview: ReplacementPreview): string | null {
       return "Nobody holds a profile on this account, so there is nothing to replace.";
     case "no_stock":
       return "No healthy account has a free profile right now.";
+    /*
+     * M09C. Only reachable on a first lookup that was itself scoped, which this
+     * dialog never sends — "another" answers keep the current proposal and say
+     * so beside it instead. Listed so the switch names every reason.
+     */
+    case "no_other_account":
+    case "proposal_unavailable":
+      return NO_ALTERNATIVE_MESSAGE;
     case "insufficient_validity": {
       const best = preview.bestAvailableDays;
       const needed = preview.selected?.remainingDays ?? 0;
@@ -103,7 +114,19 @@ export function ReplaceAccountButton({
   const confirmReplacement = useConfirmReplacement();
   const operationIdFor = useOperationId();
 
-  const busy = previewReplacement.isPending || confirmReplacement.isPending;
+  /** M09C: a different replacement for this same customer and these same profiles. */
+  const alternatives = useReplacementAlternatives({
+    accountEmail: account.email,
+    current: preview,
+    onChange: (next) => {
+      setPreview(next);
+      setPasswordChanged(false);
+      confirmReplacement.reset();
+    },
+  });
+
+  const busy =
+    previewReplacement.isPending || confirmReplacement.isPending || alternatives.isSearching;
 
   if (!canReplaceAllocation(account.status)) {
     return null;
@@ -117,7 +140,12 @@ export function ReplaceAccountButton({
 
     previewReplacement.mutate(
       { accountEmail: account.email, customerId },
-      { onSuccess: setPreview },
+      {
+        onSuccess: (next) => {
+          setPreview(next);
+          alternatives.begin(next);
+        },
+      },
     );
   }
 
@@ -125,6 +153,7 @@ export function ReplaceAccountButton({
     setPreview(null);
     setResult(null);
     setPasswordChanged(false);
+    alternatives.begin(null);
     previewReplacement.reset();
     confirmReplacement.reset();
   }
@@ -262,6 +291,15 @@ export function ReplaceAccountButton({
                   </dd>
                 </div>
               </dl>
+
+              <SuggestAnother
+                onSuggest={alternatives.suggestAnother}
+                isSearching={alternatives.isSearching}
+                disabled={confirmReplacement.isPending}
+                notice={alternatives.notice}
+                earlier={alternatives.earlier}
+                onReturnTo={alternatives.returnTo}
+              />
 
               {preview?.problems.length ? (
                 <p className="text-caption text-foreground-muted">

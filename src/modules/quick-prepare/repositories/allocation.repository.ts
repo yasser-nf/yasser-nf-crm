@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql, type SQL } from "drizzle-orm";
 
 import { databaseAdapter, type DatabaseExecutor } from "@/lib/database";
 import {
@@ -87,15 +87,64 @@ const eligibleAccount = accountCanAllocateSql;
  */
 const allocatableProfile = and(isSellableSlotSql, profileIsFreeSql);
 
+/** Accounts read per scan. Profile rows are capped at five times this. */
+const CANDIDATE_ACCOUNT_LIMIT = 40;
+
+/**
+ * Which accounts a scan may consider (M09C).
+ *
+ * NARROWING ONLY. Both fields remove accounts from the eligible set; neither
+ * can add one, because they are ANDed onto the eligibility rule rather than
+ * replacing any part of it. A scope can therefore never make an ineligible
+ * account a candidate — the worst a hostile or stale scope can do is find
+ * nothing.
+ *
+ *   onlyAccountIds     the accounts an operator reviewed. Confirmation sells
+ *                      these or refuses; it never substitutes others.
+ *   excludeAccountIds  suggestions the operator has turned down in this
+ *                      workflow. Scoped to one request — nothing is stored, so
+ *                      no account is blacklisted beyond the page that asked.
+ *
+ * Applied in the WHERE clause, ahead of the row limit, on purpose. Filtering
+ * after the read would let the limit fill with excluded rows and report "no
+ * other account" while eligible stock sat past the cut-off — and under lock it
+ * would hold rows this scan then discards.
+ */
+export interface CandidateScope {
+  readonly onlyAccountIds?: readonly string[] | undefined;
+  readonly excludeAccountIds?: readonly string[] | undefined;
+}
+
+function scopeCondition(scope: CandidateScope): SQL | undefined {
+  const conditions: SQL[] = [];
+
+  if (scope.onlyAccountIds !== undefined) {
+    /* An empty "only these" means none — never "no restriction". */
+    conditions.push(
+      scope.onlyAccountIds.length === 0
+        ? sql`false`
+        : inArray(accounts.id, [...scope.onlyAccountIds]),
+    );
+  }
+
+  if (scope.excludeAccountIds !== undefined && scope.excludeAccountIds.length > 0) {
+    conditions.push(notInArray(accounts.id, [...scope.excludeAccountIds]));
+  }
+
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
 /**
  * Reads candidates without locking. Preview only.
  *
  * ADR-007 Decision 4: the preview is advisory. Taking locks here would hold them
  * across the worker's thinking time, and abandoning the tab would strand stock.
  */
-async function findCandidates(limit = 40): Promise<Result<readonly AllocationCandidate[]>> {
+async function findCandidates(
+  scope: CandidateScope = {},
+): Promise<Result<readonly AllocationCandidate[]>> {
   return databaseAdapter.query("allocation.findCandidates", async (executor) =>
-    readCandidates(executor, limit, false),
+    readCandidates(executor, scope, false),
   );
 }
 
@@ -113,16 +162,19 @@ async function findCandidates(limit = 40): Promise<Result<readonly AllocationCan
  */
 async function lockCandidates(
   executor: DatabaseExecutor,
-  limit = 40,
+  scope: CandidateScope = {},
 ): Promise<readonly AllocationCandidate[]> {
-  return readCandidates(executor, limit, true);
+  return readCandidates(executor, scope, true);
 }
 
 async function readCandidates(
   executor: DatabaseExecutor,
-  limit: number,
+  scope: CandidateScope,
   lock: boolean,
 ): Promise<readonly AllocationCandidate[]> {
+  const limit = CANDIDATE_ACCOUNT_LIMIT;
+  const where = and(allocatableProfile, eligibleAccount, scopeCondition(scope));
+
   /*
    * Two queries rather than one join.
    *
@@ -140,7 +192,7 @@ async function readCandidates(
         })
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
-        .where(and(allocatableProfile, eligibleAccount))
+        .where(where)
         .orderBy(asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5)
         /* Lock the profile rows only; the account row is read for context. */
@@ -154,7 +206,7 @@ async function readCandidates(
         })
         .from(profiles)
         .innerJoin(accounts, eq(profiles.accountId, accounts.id))
-        .where(and(allocatableProfile, eligibleAccount))
+        .where(where)
         .orderBy(asc(accounts.createdAt), asc(profiles.profileNumber))
         .limit(limit * 5);
 

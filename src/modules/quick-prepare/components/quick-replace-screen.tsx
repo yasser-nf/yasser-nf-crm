@@ -18,6 +18,7 @@ import {
   type ProfileSlotState,
 } from "@/shared/ui/profile-state";
 import { cn } from "@/utils/cn";
+import { useReplacementAlternatives } from "../hooks/use-alternatives";
 import {
   replacementIdentity,
   useConfirmReplacement,
@@ -25,6 +26,7 @@ import {
   usePreviewReplacement,
 } from "../hooks/use-quick-prepare";
 import { CredentialResult } from "./credential-result";
+import { SuggestAnother } from "./suggest-another";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type {
   AccountProfileSlot,
@@ -460,6 +462,30 @@ export function QuickReplaceScreen() {
   const confirm = useConfirmReplacement();
   const operationIdFor = useOperationId();
 
+  /**
+   * M09C. A different proposed replacement for the SAME customer and profiles.
+   *
+   * The operation id needs no handling here: `operationIdFor` already keys on
+   * the replacement account, so a new proposal gets a new id on its own.
+   */
+  function adoptReplacement(next: ReplacementPreview) {
+    setPreview(next);
+    setPasswordChanged(false);
+    confirm.reset();
+  }
+
+  const alternatives = useReplacementAlternatives({
+    accountEmail,
+    current: preview,
+    onChange: adoptReplacement,
+  });
+
+  /** A lookup or a customer choice starts a new workflow, with nothing excluded yet. */
+  function showLookup(next: ReplacementPreview) {
+    setPreview(next);
+    alternatives.begin(next);
+  }
+
   const form = useForm<LookupForm>({
     resolver: zodResolver(lookupFormSchema),
     defaultValues: { accountEmail: "" },
@@ -482,7 +508,7 @@ export function QuickReplaceScreen() {
     setAccountEmail(values.accountEmail);
     confirm.reset();
 
-    lookup.mutate({ accountEmail: values.accountEmail }, { onSuccess: setPreview });
+    lookup.mutate({ accountEmail: values.accountEmail }, { onSuccess: showLookup });
   }
 
   function startOver() {
@@ -491,6 +517,7 @@ export function QuickReplaceScreen() {
     setPasswordChanged(false);
     setResult(null);
     setAccountEmail(null);
+    alternatives.begin(null);
     lookup.reset();
     confirm.reset();
   }
@@ -555,7 +582,7 @@ export function QuickReplaceScreen() {
     setPasswordChanged(false);
     confirm.reset();
 
-    lookup.mutate({ accountEmail, customerId }, { onSuccess: setPreview });
+    lookup.mutate({ accountEmail, customerId }, { onSuccess: showLookup });
   }
 
   /*
@@ -638,6 +665,20 @@ export function QuickReplaceScreen() {
 
                   <section className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-5">
                     {/*
+                      M09C. Asks for a different replacement for this same
+                      customer and these same profiles. The proposal above is
+                      kept until another is actually found.
+                    */}
+                    <SuggestAnother
+                      onSuggest={alternatives.suggestAnother}
+                      isSearching={alternatives.isSearching}
+                      disabled={confirm.isPending}
+                      notice={alternatives.notice}
+                      earlier={alternatives.earlier}
+                      onReturnTo={alternatives.returnTo}
+                    />
+
+                    {/*
                       M13 §7 and §8. Shown only when the SERVER says this
                       replacement account previously served a customer whose
                       subscription lapsed — that person still knows the password.
@@ -696,7 +737,9 @@ export function QuickReplaceScreen() {
                         loadingLabel="Replacing"
                         /* The password gate is a precondition, not a pending request. */
                         disabled={
-                          confirm.isPending || (preview.requiresPasswordChange && !passwordChanged)
+                          confirm.isPending ||
+                          alternatives.isSearching ||
+                          (preview.requiresPasswordChange && !passwordChanged)
                         }
                         className="min-w-48 gap-2"
                       >

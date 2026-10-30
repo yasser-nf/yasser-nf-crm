@@ -9,7 +9,7 @@ import { UnauthorizedError, ValidationError, isAppError, type AppError } from "@
 import type { AuditContext } from "@/modules/audit";
 import { quickPrepareService } from "../services/quick-prepare.service";
 import { quickReplaceService } from "../services/quick-replace.service";
-import { operationIdSchema } from "../validation/quick-prepare.schema";
+import { operationIdSchema, reviewedAccountsSchema } from "../validation/quick-prepare.schema";
 
 /**
  * Quick Prepare server actions.
@@ -125,6 +125,19 @@ export async function confirmPreparationAction(input: unknown) {
 
   if (missing) {
     return toFailure(missing);
+  }
+
+  /*
+   * M09C: a browser confirms the order it reviewed. Without the reviewed
+   * accounts the service would fall back to selling whatever ranks first,
+   * which is exactly the substitution the review step exists to prevent.
+   */
+  if (!reviewedAccountsSchema.safeParse(input).success) {
+    return toFailure(
+      new ValidationError("Confirmation without reviewed accounts", {
+        userMessage: "This page is out of date. Reload it and try again.",
+      }),
+    );
   }
 
   return run(

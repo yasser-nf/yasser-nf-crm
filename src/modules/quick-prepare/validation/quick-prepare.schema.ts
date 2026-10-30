@@ -23,6 +23,33 @@ const MAX_PROFILES_PER_PREPARATION = PROFILES_PER_ACCOUNT * 4;
 const MIN_DURATION_DAYS = 1;
 const MAX_DURATION_DAYS = 730;
 
+/**
+ * The accounts an operator reviewed (M09C).
+ *
+ * At most one account per profile, so the preparation limit bounds it.
+ * Deduplicated, so the same account listed twice cannot change the
+ * idempotency hash of an otherwise identical order.
+ */
+const reviewedAccountIds = z
+  .array(z.uuid())
+  .min(1, "No account was reviewed")
+  .max(MAX_PROFILES_PER_PREPARATION)
+  .transform((ids) => [...new Set(ids)]);
+
+/**
+ * Suggestions turned down in this workflow (M09C).
+ *
+ * Bounded so a runaway client cannot send an unbounded NOT IN list. A hundred
+ * is far beyond what an operator clicks through for one order; past it, the
+ * page should start over rather than keep excluding.
+ */
+const MAX_EXCLUDED_ACCOUNTS = 100;
+
+const excludedAccountIds = z
+  .array(z.uuid())
+  .max(MAX_EXCLUDED_ACCOUNTS, "Too many accounts have been turned down for this order. Start over.")
+  .transform((ids) => [...new Set(ids)]);
+
 export const quickPrepareSchema = z.object({
   profileCount: z
     .number({ error: "Enter how many profiles are needed" })
@@ -59,6 +86,21 @@ export const quickPrepareSchema = z.object({
   passwordChangeConfirmed: z.boolean().optional(),
 
   /**
+   * M09C. The account(s) the operator reviewed, and therefore the only ones
+   * this confirmation may sell from.
+   *
+   * Confirmation still re-selects under lock and re-applies every eligibility
+   * rule; this narrows that selection to the reviewed accounts and refuses if
+   * they can no longer cover the order. It never substitutes another account —
+   * an operator who asked for an alternative must get the alternative, and one
+   * who named an account to the customer must not be handed a different one.
+   *
+   * Optional here so server code can still prepare without a review step; the
+   * Server Action requires it.
+   */
+  accountIds: reviewedAccountIds.optional(),
+
+  /**
    * M08 jobs: identifies this ORDER, not this request. The page creates it
    * once per reviewed order and sends the same value on every attempt — a
    * double click or a retry after a lost response — so the server can tell a
@@ -90,10 +132,23 @@ export type QuickPrepareInput = z.infer<typeof quickPrepareSchema>;
  * The two fields deliberately mirror `quickPrepareSchema`, so the pair cannot
  * drift apart in bounds either.
  */
-export const previewAllocationSchema = quickPrepareSchema.pick({
-  profileCount: true,
-  durationDays: true,
-});
+export const previewAllocationSchema = quickPrepareSchema
+  .pick({
+    profileCount: true,
+    durationDays: true,
+  })
+  .extend({
+    /**
+     * M09C "Suggest another account": the accounts already suggested and
+     * turned down in this workflow. The engine plans from what remains.
+     */
+    excludeAccountIds: excludedAccountIds.optional(),
+    /**
+     * M09C: re-check one earlier suggestion exactly, so an operator can go
+     * back to it. Narrows to these accounts; never widens.
+     */
+    accountIds: reviewedAccountIds.optional(),
+  });
 
 export type PreviewAllocationInput = z.infer<typeof previewAllocationSchema>;
 
@@ -130,6 +185,17 @@ export const replaceLookupSchema = z.object({
    * pressing back.
    */
   customerId: z.uuid().optional(),
+  /**
+   * M09C "Suggest another account": replacement accounts already proposed and
+   * turned down for this customer. The failing account is always excluded
+   * too, whether or not it is listed here.
+   */
+  excludeAccountIds: excludedAccountIds.optional(),
+  /**
+   * M09C: re-check one earlier proposal exactly, so an operator can go back
+   * to it. Narrows to this account; the commit re-checks it again under lock.
+   */
+  replacementAccountId: z.uuid().optional(),
 });
 
 export type ReplaceLookupInput = z.infer<typeof replaceLookupSchema>;
@@ -175,4 +241,19 @@ export const operationIdSchema = z.object({
   operationId: z.uuid({ error: "Missing confirmation id" }),
 });
 
-export { MAX_PROFILES_PER_PREPARATION, MIN_DURATION_DAYS, MAX_DURATION_DAYS };
+/**
+ * M09C: what the Quick Prepare Server Action additionally requires — the
+ * reviewed accounts. A browser confirming an order always has a review on
+ * screen, so a request without one is refused rather than allowed to sell
+ * whatever happens to rank first.
+ */
+export const reviewedAccountsSchema = z.object({
+  accountIds: z.array(z.uuid()).min(1, "Review the suggested account before confirming"),
+});
+
+export {
+  MAX_EXCLUDED_ACCOUNTS,
+  MAX_PROFILES_PER_PREPARATION,
+  MIN_DURATION_DAYS,
+  MAX_DURATION_DAYS,
+};

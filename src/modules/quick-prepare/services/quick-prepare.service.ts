@@ -25,6 +25,7 @@ import {
   type AllocationPlan,
   type AllocationSlice,
 } from "./allocation-engine";
+import { NO_ALTERNATIVE_MESSAGE } from "./alternative-messages";
 import { quickReplaceService } from "./quick-replace.service";
 import {
   confirmReplacementSchema,
@@ -319,6 +320,35 @@ function shortStockError(plan: AllocationPlan): ValidationError {
 }
 
 /**
+ * M09C: every remaining account was already suggested and turned down.
+ *
+ * Its own message, deliberately, rather than the short-stock one: there may be
+ * plenty of stock — the operator has simply been shown all of it. Saying "only
+ * 3 profiles available" here would read as a stock problem that does not exist.
+ */
+function noAlternativeError(): ValidationError {
+  return new ValidationError("No eligible account outside the excluded set", {
+    userMessage: NO_ALTERNATIVE_MESSAGE,
+  });
+}
+
+/**
+ * M09C: the reviewed account can no longer serve this order.
+ *
+ * Raised when the operator returns to an earlier suggestion, and by
+ * confirmation, under lock, when the reviewed account was sold, broke, or ran
+ * short of validity after it was shown. Refusing is the point: confirmation
+ * must never quietly sell a different account from the one on screen.
+ */
+function reviewedAccountGoneError(): ValidationError {
+  return new ValidationError("Reviewed account can no longer cover the order", {
+    userMessage:
+      "The account you reviewed is no longer available — it may have just been sold, " +
+      "developed a problem, or run short of validity. Ask for a new suggestion.",
+  });
+}
+
+/**
  * Shows what the engine would allocate, without taking anything.
  *
  * No locks and no writes, so an abandoned preview costs nothing and strands no
@@ -333,9 +363,18 @@ async function preview(input: unknown): Promise<Result<PreparationPreview>> {
     return fail(toValidationError(parsed.error.issues));
   }
 
-  const { profileCount, durationDays } = parsed.data;
+  const { profileCount, durationDays, excludeAccountIds, accountIds } = parsed.data;
 
-  const candidates = await allocationRepository.findCandidates();
+  /*
+   * M09C. The scope only narrows the eligible set (see `CandidateScope`): an
+   * exclusion list or a pinned account can make the engine find less, never
+   * something it would otherwise refuse. Nothing is stored — the list lives in
+   * the page that sent it, so no account is turned away beyond this order.
+   */
+  const candidates = await allocationRepository.findCandidates({
+    onlyAccountIds: accountIds,
+    excludeAccountIds,
+  });
 
   if (!candidates.ok) {
     return candidates;
@@ -356,6 +395,19 @@ async function preview(input: unknown): Promise<Result<PreparationPreview>> {
   });
 
   if (plan.isShort) {
+    /*
+     * Say WHY there is nothing to show. A pinned account that can no longer
+     * serve, a workflow that has seen every account, and genuinely short stock
+     * are three different situations for the operator.
+     */
+    if (accountIds !== undefined) {
+      return fail(reviewedAccountGoneError());
+    }
+
+    if (excludeAccountIds !== undefined && excludeAccountIds.length > 0) {
+      return fail(noAlternativeError());
+    }
+
     return fail(shortStockError(plan));
   }
 
@@ -442,6 +494,12 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
       phone: phone.value.normalized,
       notes: request.notes ?? null,
       passwordChangeConfirmed: request.passwordChangeConfirmed === true,
+      /*
+       * M09C: the order is for THESE accounts. Sorted, so the same review in a
+       * different order hashes the same. A different account is a different
+       * order, so reusing a key across an alternative is refused, not replayed.
+       */
+      accountIds: request.accountIds ? [...request.accountIds].sort() : null,
     },
   );
 
@@ -485,8 +543,16 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
     /*
      * Re-select under lock. The preview the worker saw may be stale, and the
      * only stock that matters is the stock this transaction actually holds.
+     *
+     * M09C: narrowed to the reviewed accounts when the order names them. Every
+     * eligibility rule still runs, under lock, on exactly those rows — the
+     * narrowing decides WHICH eligible accounts may be sold from, never
+     * whether an account is eligible. And it locks only the reviewed stock,
+     * not the whole candidate pool.
      */
-    const candidates = await allocationRepository.lockCandidates(executor);
+    const candidates = await allocationRepository.lockCandidates(executor, {
+      onlyAccountIds: request.accountIds,
+    });
 
     /*
      * The duration rule is enforced HERE, under lock, not only in the preview.
@@ -500,7 +566,24 @@ async function confirm(input: unknown, context: AuditContext): Promise<Result<Pr
 
     if (plan.isShort) {
       /* Throwing rolls the transaction back and releases every lock. */
-      throw shortStockError(plan);
+      throw request.accountIds ? reviewedAccountGoneError() : shortStockError(plan);
+    }
+
+    /*
+     * M09C, asserted rather than assumed: every account sold is one the
+     * operator reviewed. The narrowed read already guarantees it, so this can
+     * only fire if that read is ever widened — exactly when a silent
+     * substitution would otherwise come back. Same guard as Quick Replace.
+     */
+    const reviewed = request.accountIds;
+
+    if (
+      reviewed !== undefined &&
+      plan.slices.some((slice) => !reviewed.includes(slice.account.id))
+    ) {
+      throw new ValidationError("Allocation drifted from the reviewed accounts", {
+        userMessage: "Something went wrong selecting the account. Ask for a new suggestion.",
+      });
     }
 
     /*
@@ -970,7 +1053,16 @@ async function commitReplacement(
        */
       const remainingForCustomer = Math.max(remainingDays(expirationDate, now) ?? durationDays, 0);
 
-      const candidates = await allocationRepository.lockCandidates(executor);
+      /*
+       * M09C: the lock is scoped to the approved account in SQL. The read is
+       * capped, and filtering a capped read afterwards could miss an eligible
+       * approved account that sat past the cut-off — refusing a valid
+       * replacement. Scoping also means only the approved stock is locked.
+       */
+      const candidates = await allocationRepository.lockCandidates(executor, {
+        onlyAccountIds: [replacementAccountId],
+        excludeAccountIds: [accountId],
+      });
 
       /* Never replace like for like — the failing account must not win again. */
       const eligible = candidates.filter((candidate) => candidate.account.id !== accountId);

@@ -15,8 +15,10 @@ import { CredentialResult } from "./credential-result";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Textarea } from "@/shared/ui/textarea";
+import { usePreparationAlternatives } from "../hooks/use-alternatives";
 import { useConfirmPreparation, usePreviewAllocation } from "../hooks/use-quick-prepare";
 import type { PreparationPreview, PreparationResult } from "../services/quick-prepare.service";
+import { SuggestAnother } from "./suggest-another";
 
 /**
  * Quick Prepare wizard.
@@ -57,6 +59,29 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
 
   const preview = usePreviewAllocation();
   const confirm = useConfirmPreparation();
+
+  /**
+   * The suggestion on screen, and the one confirmation will sell (M09C).
+   *
+   * Held here rather than read from `preview.data`: a mutation clears its data
+   * when a later call fails, and "Suggest another account" must leave the
+   * current suggestion in place when it finds nothing.
+   */
+  const [current, setCurrent] = useState<PreparationPreview | null>(null);
+
+  /**
+   * A different suggestion is a different order: a fresh password decision,
+   * a fresh operation id (so a retry of the old one cannot be mistaken for
+   * this one), and no refusal from the previous attempt left on screen.
+   */
+  function adopt(next: PreparationPreview) {
+    setCurrent(next);
+    setPasswordChanged(false);
+    setOperationId(crypto.randomUUID());
+    confirm.reset();
+  }
+
+  const alternatives = usePreparationAlternatives({ current, onChange: adopt });
 
   /** Latched for the duration of one confirmation. See `submitConfirmation`. */
   const inFlight = useRef(false);
@@ -109,10 +134,14 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         durationDays: Number(values.durationDays),
       },
       {
-        onSuccess: () => {
-          /* A fresh preview means a fresh decision about the password. */
-          setPasswordChanged(false);
-          setOperationId(crypto.randomUUID());
+        onSuccess: (data) => {
+          /*
+           * A preview from the form is a new order — possibly a different count
+           * or duration — so the accounts turned down for the last one no
+           * longer apply. `begin` starts a fresh exclusion list.
+           */
+          adopt(data);
+          alternatives.begin(data);
           setStage("review");
         },
       },
@@ -134,15 +163,24 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
      * different stock or none. This is the cheap guard in front of both — and
      * it is a latch rather than a delay, so nothing is ever merely slowed down.
      */
-    if (inFlight.current) return;
+    if (inFlight.current || !current) return;
     inFlight.current = true;
 
     const values = getValues();
 
     confirm.mutate(
       {
-        profileCount: Number(values.profileCount),
-        durationDays: Number(values.durationDays),
+        /*
+         * The order as the server planned it, not as the form now reads: the
+         * suggestion on screen is what the operator approved.
+         */
+        profileCount: current.requested,
+        durationDays: current.durationDays,
+        /*
+         * M09C: sell exactly these accounts, or refuse. Confirmation re-checks
+         * them under lock and never substitutes another — see `confirm`.
+         */
+        accountIds: current.accounts.map((account) => account.accountId),
         phone: values.phone,
         notes: values.notes || undefined,
         /*
@@ -176,6 +214,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
   function startOver() {
     inFlight.current = false;
     setOperationId(null);
+    setCurrent(null);
     reset();
     setResult(null);
     preview.reset();
@@ -284,12 +323,23 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         </motion.form>
       ) : null}
 
-      {stage === "review" && preview.data ? (
+      {stage === "review" && current ? (
         <ReviewStep
-          preview={preview.data}
+          preview={current}
           phone={getValues("phone")}
           notes={getValues("notes") ?? ""}
           isConfirming={confirm.isPending}
+          isSearching={alternatives.isSearching}
+          alternatives={
+            <SuggestAnother
+              onSuggest={alternatives.suggestAnother}
+              isSearching={alternatives.isSearching}
+              disabled={confirm.isPending}
+              notice={alternatives.notice}
+              earlier={alternatives.earlier}
+              onReturnTo={alternatives.returnTo}
+            />
+          }
           passwordChanged={passwordChanged}
           onPasswordChangedChange={setPasswordChanged}
           confirmError={confirm.error}
@@ -341,6 +391,8 @@ function ReviewStep({
   phone,
   notes,
   isConfirming,
+  isSearching,
+  alternatives,
   passwordChanged,
   onPasswordChangedChange,
   confirmError,
@@ -351,6 +403,10 @@ function ReviewStep({
   phone: string;
   notes: string;
   isConfirming: boolean;
+  /** M09C: an alternative is being fetched; nothing may be confirmed meanwhile. */
+  isSearching: boolean;
+  /** M09C: the "Suggest another account" control, placed under the accounts. */
+  alternatives: React.ReactNode;
   passwordChanged: boolean;
   onPasswordChangedChange: (next: boolean) => void;
   confirmError: unknown;
@@ -364,6 +420,9 @@ function ReviewStep({
 
   /* The server refuses without this; the button mirrors that rather than owning it. */
   const blocked = preview.requiresPasswordChange && !passwordChanged;
+
+  /* Confirming while the suggestion is being swapped would race the swap. */
+  const busy = isConfirming || isSearching;
 
   return (
     <motion.div
@@ -443,6 +502,8 @@ function ReviewStep({
             </li>
           ))}
         </ul>
+
+        {alternatives}
       </div>
 
       {/*
@@ -530,7 +591,7 @@ function ReviewStep({
         <Button
           variant="outline"
           onClick={onBack}
-          disabled={isConfirming}
+          disabled={busy}
           className="h-11 w-full gap-2 sm:w-auto"
         >
           <ArrowLeft className="size-4" aria-hidden="true" />
@@ -542,7 +603,7 @@ function ReviewStep({
           loading={isConfirming}
           loadingLabel="Allocating"
           /* `blocked` is the password gate, not a pending request. */
-          disabled={isConfirming || blocked}
+          disabled={busy || blocked}
           className="h-11 w-full gap-2 sm:w-auto sm:min-w-44"
         >
           <Check className="size-4" aria-hidden="true" />

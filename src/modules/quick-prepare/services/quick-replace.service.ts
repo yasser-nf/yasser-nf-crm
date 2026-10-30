@@ -112,7 +112,15 @@ export interface ReplacementPreview {
    * Distinguishes "no stock at all" from "stock exists but none of it lasts
    * long enough", which have completely different answers for the operator.
    */
-  readonly blockedReason: "no_stock" | "insufficient_validity" | "nothing_to_replace" | null;
+  readonly blockedReason:
+    | "no_stock"
+    | "insufficient_validity"
+    | "nothing_to_replace"
+    /** M09C: every eligible account was already proposed and turned down. */
+    | "no_other_account"
+    /** M09C: the earlier proposal the operator went back to can no longer serve. */
+    | "proposal_unavailable"
+    | null;
   /** How short the best near-miss was, so the UI can quote numbers. */
   readonly bestAvailableDays: number | null;
   /**
@@ -313,7 +321,19 @@ async function preview(input: unknown): Promise<Result<ReplacementPreview>> {
    */
   const needed = selected.remainingDays;
 
-  const candidatesResult = await allocationRepository.findCandidates();
+  /*
+   * M09C: proposals the operator turned down for this customer are excluded,
+   * and so is the failing account — in SQL, ahead of the read's row limit.
+   * Narrowing only: nothing excluded here can make an ineligible account
+   * eligible, and the commit re-checks the chosen one under lock.
+   */
+  const excluded = parsed.data.excludeAccountIds ?? [];
+  const pinned = parsed.data.replacementAccountId;
+
+  const candidatesResult = await allocationRepository.findCandidates({
+    onlyAccountIds: pinned === undefined ? undefined : [pinned],
+    excludeAccountIds: [...excluded, oldAccount.id],
+  });
 
   if (!candidatesResult.ok) {
     return candidatesResult;
@@ -340,7 +360,14 @@ async function preview(input: unknown): Promise<Result<ReplacementPreview>> {
   if (plan.isShort) {
     return ok({
       ...base,
-      blockedReason: plan.excludedForValidity > 0 ? "insufficient_validity" : "no_stock",
+      blockedReason:
+        pinned !== undefined
+          ? "proposal_unavailable"
+          : excluded.length > 0
+            ? "no_other_account"
+            : plan.excludedForValidity > 0
+              ? "insufficient_validity"
+              : "no_stock",
       bestAvailableDays,
     });
   }
