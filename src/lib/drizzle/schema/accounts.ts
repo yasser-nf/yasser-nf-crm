@@ -11,7 +11,8 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { accountStatusEnum } from "./enums";
+import { accountOwnershipEnum, accountStatusEnum } from "./enums";
+import { suppliers } from "./suppliers";
 import { users } from "./users";
 
 /**
@@ -89,6 +90,29 @@ export const accounts = pgTable(
     country: text("country"),
     notes: text("notes"),
 
+    /**
+     * Where this account came from (M09B).
+     *
+     * Defaulted to `unknown` at the column level so a row can never be written
+     * without an answer, but migration 0016 classifies every account that
+     * predates the column as `owned` explicitly — it does not lean on this
+     * default, because "we never asked" and "the business owns it" are
+     * different facts and only one of them was true for those rows.
+     */
+    ownership: accountOwnershipEnum("ownership").notNull().default("unknown"),
+
+    /**
+     * Which supplier, when this account came from one.
+     *
+     * Nullable on purpose: an operator may know an account came from outside
+     * before they know, or have recorded, which supplier. Those are surfaced
+     * on the Suppliers page for triage rather than being blocked at the door.
+     * `restrict` on delete, so a supplier cannot be removed out from under the
+     * accounts that name it — the check below keeps it attached to the right
+     * kind of account.
+     */
+    supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "restrict" }),
+
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -113,6 +137,8 @@ export const accounts = pgTable(
       .where(sql`${table.deletedAt} is null`),
 
     index("accounts_status_idx").on(table.status),
+    index("accounts_ownership_idx").on(table.ownership),
+    index("accounts_supplier_idx").on(table.supplierId),
     index("accounts_created_at_idx").on(table.createdAt),
     index("accounts_created_by_idx").on(table.createdBy),
     index("accounts_country_idx").on(table.country),
@@ -128,6 +154,19 @@ export const accounts = pgTable(
     index("accounts_stock_selection_idx")
       .on(table.status)
       .where(sql`${table.deletedAt} is null`),
+
+    /*
+     * Only a supplied account may name a supplier.
+     *
+     * Without this, an account could read "owned" and still point at a
+     * supplier, and the two figures the Suppliers page reports — how many
+     * accounts a supplier has, and how many accounts are supplied — would
+     * disagree with each other while both looked correct.
+     */
+    check(
+      "accounts_supplier_requires_supplied",
+      sql`${table.supplierId} is null or ${table.ownership} = 'supplied'`,
+    ),
 
     /*
      * Allocation reads this on every Quick Prepare and Quick Replace. Partial,

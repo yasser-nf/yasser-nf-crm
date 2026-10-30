@@ -255,6 +255,9 @@ const EVENT_FIELDS = [
   /* M07 restores: which snapshot was taken first, and rows the orphan rule skipped. */
   "safetySnapshotId",
   "skippedRows",
+  /* M09B: an account's provenance, recorded when it is set or changed. */
+  "ownership",
+  "supplierId",
 ] as const;
 
 /**
@@ -275,6 +278,9 @@ const ENTITY_FIELDS: Record<AuditEntity, readonly string[]> = {
     "id",
     "email",
     "status",
+    /* M09B: where the account came from. Neither is a secret. */
+    "ownership",
+    "supplierId",
     "profileSlots",
     "validFrom",
     "validUntil",
@@ -383,6 +389,8 @@ const ENTITY_FIELDS: Record<AuditEntity, readonly string[]> = {
    * `claimToken` — the proof of ownership a worker presents; recording it would
    * let anyone who can read the log act as that worker.
    */
+  /* M09B. A supplier is a name and a way to reach them — no secret among them. */
+  supplier: ["id", "name", "contact", "archivedAt", "deletedAt", "createdAt", "updatedAt"],
   job: [
     "id",
     "type",

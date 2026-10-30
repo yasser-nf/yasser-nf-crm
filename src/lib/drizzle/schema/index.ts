@@ -17,6 +17,7 @@
 export * from "./enums";
 
 export * from "./users";
+export * from "./suppliers";
 export * from "./customers";
 export * from "./accounts";
 export * from "./profiles";

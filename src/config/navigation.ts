@@ -6,6 +6,7 @@ import {
   ListChecks,
   RefreshCcw,
   ScrollText,
+  Truck,
   Settings,
   TriangleAlert,
   Tv,
@@ -64,6 +65,12 @@ export const NAVIGATION_ITEMS: readonly NavigationItem[] = [
     requiredPermission: PERMISSIONS.RENEW_SUBSCRIPTIONS,
   },
   { label: "Customers", href: ROUTES.CUSTOMERS, icon: Users },
+  {
+    label: "Suppliers",
+    href: ROUTES.SUPPLIERS,
+    icon: Truck,
+    requiredPermission: PERMISSIONS.VIEW_SUPPLIERS,
+  },
   { label: "Problems", href: ROUTES.PROBLEMS, icon: TriangleAlert },
   {
     label: "Users",

@@ -113,6 +113,20 @@
       "when": 1790871825869,
       "tag": "0015_jobs_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793282715428,
+      "tag": "0016_suppliers",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793283060102,
+      "tag": "0017_suppliers_audit_entity",
+      "breakpoints": true
     }
   ]
 }

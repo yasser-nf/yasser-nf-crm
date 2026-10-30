@@ -55,6 +55,10 @@ export const PERMISSIONS = {
   UNASSIGN_SALES: "unassign_sales",
 
   /* Customers */
+  /* M09B. Who an account came from — a commercial relationship, not stock. */
+  VIEW_SUPPLIERS: "view_suppliers",
+  MANAGE_SUPPLIERS: "manage_suppliers",
+
   VIEW_CUSTOMERS: "view_customers",
   EDIT_CUSTOMER_NOTES: "edit_customer_notes",
   BLOCK_CUSTOMERS: "block_customers",

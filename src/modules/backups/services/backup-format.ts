@@ -65,6 +65,8 @@ export interface BackupTableSpec {
 export const BACKUP_TABLES: readonly BackupTableSpec[] = [
   { table: "users", policy: "reconcile" },
   { table: "customers", policy: "reconcile" },
+  /* Before accounts: an account names its supplier (M09B). */
+  { table: "suppliers", policy: "reconcile" },
   { table: "accounts", policy: "reconcile" },
   { table: "profiles", policy: "reconcile" },
   { table: "profile_events", policy: "append_only" },
@@ -125,7 +127,9 @@ export interface Relationship {
 }
 
 export const RELATIONSHIPS: readonly Relationship[] = [
+  { table: "suppliers", column: "created_by", parent: "users", nullable: true },
   { table: "accounts", column: "created_by", parent: "users", nullable: true },
+  { table: "accounts", column: "supplier_id", parent: "suppliers", nullable: true },
   { table: "profiles", column: "account_id", parent: "accounts", nullable: false },
   { table: "profiles", column: "customer_id", parent: "customers", nullable: true },
   { table: "profiles", column: "worker_id", parent: "users", nullable: true },

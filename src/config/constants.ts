@@ -30,6 +30,7 @@ export const ROUTES = {
   QUICK_REPLACE: "/quick-replace",
   QUICK_RENEW: "/quick-renew",
   CUSTOMERS: "/customers",
+  SUPPLIERS: "/suppliers",
   PROBLEMS: "/problems",
   USERS: "/users",
   REPORTS: "/reports",

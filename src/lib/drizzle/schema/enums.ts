@@ -61,6 +61,24 @@ export const profileStatusEnum = pgEnum("profile_status", [
 ]);
 
 /** 01_MASTER_RULES.md. Mirrors config/roles.ts, which already used these values. */
+/**
+ * Where an account came from (M09B).
+ *
+ *   owned     the business's own account
+ *   supplied  obtained from an outside supplier, named by accounts.supplier_id
+ *   unknown   not yet classified
+ *
+ * `unknown` exists so the column can be added without declaring an answer for
+ * rows that predate it. The migration that introduces this classifies every
+ * existing account explicitly rather than leaving it to a default, and the
+ * Suppliers page surfaces anything still unknown for a human to resolve.
+ */
+export const accountOwnershipEnum = pgEnum("account_ownership", [
+  "owned",
+  "supplied",
+  "unknown",
+]);
+
 export const userRoleEnum = pgEnum("user_role", ["super_admin", "worker"]);
 
 /**
@@ -137,6 +155,8 @@ export const auditEntityEnum = pgEnum("audit_entity", [
   "issue",
   /* M08 jobs: created, cancelled, finished and recovered jobs are traceable in the Logs. */
   "job",
+  /* M09B: who an account came from is a commercial record worth a trail. */
+  "supplier",
 ]);
 
 /**

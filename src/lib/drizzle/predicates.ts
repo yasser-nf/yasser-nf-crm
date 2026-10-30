@@ -1,4 +1,6 @@
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
+
+import type { AccountSource } from "@/lib/account-source";
 
 import { accounts, issues, profiles } from "./schema";
 import type { AccountRow } from "./schema";
@@ -242,4 +244,27 @@ export function accountMatchesStatusSql(status: AccountRow["status"]): SQL {
 
   /* archived and deleted are lifecycle, not fault. Nothing derives them. */
   return eq(accounts.status, status);
+}
+
+/**
+ * The account came from where the filter says (M09B).
+ *
+ * Here for the same reason as the predicates above: the Accounts list and the
+ * Problems list both filter on it, and neither repository may import the
+ * other. Both queries already have `accounts` in scope — Problems joins it for
+ * the email column — so the condition reads the same columns in each.
+ */
+export function accountMatchesSourceSql(source: AccountSource): SQL {
+  switch (source.kind) {
+    case "owned":
+      return eq(accounts.ownership, "owned");
+    case "unknown":
+      return eq(accounts.ownership, "unknown");
+    case "supplied":
+      return eq(accounts.ownership, "supplied");
+    case "unassigned":
+      return and(eq(accounts.ownership, "supplied"), isNull(accounts.supplierId)) as SQL;
+    case "supplier":
+      return eq(accounts.supplierId, source.supplierId);
+  }
 }
