@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ROUTES } from "@/config/constants";
+import { ACCOUNT_SOURCE_PARAM, accountSourceOptions } from "@/lib/account-source";
 import { DURATION, EASING } from "@/config/theme";
 import { EmptyState } from "@/shared/feedback/empty-state";
 import { Button } from "@/shared/ui/button";
@@ -68,7 +69,17 @@ interface Props {
   readonly canDelete?: boolean;
 }
 
-export function ProblemsFilters({ workers }: { workers: readonly { id: string; name: string }[] }) {
+export function ProblemsFilters({
+  workers,
+  suppliers = null,
+}: {
+  workers: readonly { id: string; name: string }[];
+  /**
+   * Live suppliers for the source filter (M09B). `null` hides it, for a role
+   * that may not list suppliers.
+   */
+  suppliers?: readonly { readonly id: string; readonly name: string }[] | null;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -110,8 +121,14 @@ export function ProblemsFilters({ workers }: { workers: readonly { id: string; n
   const status = searchParams.get("status");
   const assignedTo = searchParams.get("assignedTo");
   const issueType = searchParams.get("type");
+  const source = searchParams.get(ACCOUNT_SOURCE_PARAM);
 
-  const hasFilters = current !== "" || status !== null || assignedTo !== null || issueType !== null;
+  const hasFilters =
+    current !== "" ||
+    status !== null ||
+    assignedTo !== null ||
+    issueType !== null ||
+    source !== null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -176,6 +193,22 @@ export function ProblemsFilters({ workers }: { workers: readonly { id: string; n
             </option>
           ))}
         </select>
+
+        {suppliers ? (
+          <select
+            value={source ?? ""}
+            onChange={(event) => setParam(ACCOUNT_SOURCE_PARAM, event.target.value || null)}
+            aria-label="Filter by account source"
+            className="h-10 rounded-md border border-border bg-surface px-3 text-caption text-foreground"
+          >
+            <option value="">All sources</option>
+            {accountSourceOptions(suppliers).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
 
         <input
           type="date"

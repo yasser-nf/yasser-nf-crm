@@ -4,6 +4,7 @@ import { Suspense } from "react";
 
 import { PAGINATION } from "@/config/constants";
 import { PERMISSIONS, USER_ROLES, roleHasPermission } from "@/config/roles";
+import { ACCOUNT_SOURCE_PARAM, parseAccountSource } from "@/lib/account-source";
 import { getCurrentUser } from "@/lib/auth/session";
 import { ForbiddenError } from "@/lib/errors";
 import {
@@ -12,6 +13,7 @@ import {
   problemsService,
   type ProblemFilter,
 } from "@/modules/problems";
+import { suppliersService } from "@/modules/suppliers";
 import { usersService } from "@/modules/users";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -56,6 +58,7 @@ function parseSearchParams(params: Record<string, string | string[] | undefined>
     severity: SEVERITIES.find((severity) => severity === read("severity")),
     issueType: TYPES.find((type) => type === read("type")),
     assignedTo: read("assignedTo"),
+    source: parseAccountSource(read(ACCOUNT_SOURCE_PARAM)),
     ...(createdAfter && !Number.isNaN(createdAfter.getTime()) ? { createdAfter } : {}),
     sortBy: SORTS.find((sort) => sort === read("sortBy")) ?? "createdAt",
     sortDirection: read("dir") === "asc" ? "asc" : "desc",
@@ -101,13 +104,22 @@ export default async function ProblemsPage({
  */
 async function FiltersRow() {
   const actor = await getCurrentUser();
-  const result = await usersService.list({ limit: 100, offset: 0 }, actor);
+  const [result, supplierOptions] = await Promise.all([
+    usersService.list({ limit: 100, offset: 0 }, actor),
+    suppliersService.options(actor),
+  ]);
 
   const workers = result.ok
     ? result.value.items.map((entry) => ({ id: entry.user.id, name: entry.user.name }))
     : [];
 
-  return <ProblemsFilters workers={workers} />;
+  /* Suppliers are Super Admin data: a refusal hides the source filter. */
+  return (
+    <ProblemsFilters
+      workers={workers}
+      suppliers={supplierOptions.ok ? supplierOptions.value : null}
+    />
+  );
 }
 
 async function ProblemsList({ filter }: { filter: ProblemFilter }) {

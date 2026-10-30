@@ -8,6 +8,7 @@ import {
   Layers,
   ShoppingCart,
   TriangleAlert,
+  Truck,
   Users as UsersIcon,
   Wallet,
   Zap,
@@ -17,6 +18,7 @@ import Link from "next/link";
 import { ROUTES } from "@/config/constants";
 import type { IssueRow } from "@/lib/drizzle/schema";
 import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, type ProblemListEntry } from "@/modules/problems";
+import type { SupplierMetrics } from "@/modules/suppliers";
 import { PresenceDot, type UserListEntry } from "@/modules/users";
 import { cn } from "@/utils/cn";
 import type {
@@ -95,6 +97,52 @@ export function AccountsWidget({ counts }: { counts: DashboardCounts["accounts"]
           hint="own validity ended"
         />
         <Metric label="Archived" value={counts.archived} tone="muted" />
+      </MetricGrid>
+    </Widget>
+  );
+}
+
+/**
+ * Where the stock came from (M09B).
+ *
+ * "Supplied" counts accounts explicitly classified as coming from an outside
+ * supplier — the business's exposure to someone else's accounts. An account
+ * whose provenance has not been decided is NOT folded in: it is reported
+ * separately as Unclassified, because the two need different work. Adding them
+ * together would turn a number you can act on into one you cannot.
+ */
+export function SuppliersWidget({ metrics }: { metrics: SupplierMetrics }) {
+  return (
+    <Widget
+      title="Suppliers"
+      icon={Truck}
+      description="Accounts the business does not own"
+      action={
+        <Link href={ROUTES.SUPPLIERS} className="text-caption text-primary hover:underline">
+          Manage
+        </Link>
+      }
+    >
+      <MetricGrid>
+        <Metric label="Suppliers" value={metrics.totalSuppliers} hint="active" />
+        <Metric
+          label="Supplied"
+          value={metrics.suppliedAccounts}
+          hint="not our own stock"
+          tone={metrics.suppliedAccounts > 0 ? "default" : "muted"}
+        />
+        <Metric
+          label="With problems"
+          value={metrics.accountsWithProblems}
+          hint="supplied, blocked now"
+          tone={metrics.accountsWithProblems > 0 ? "danger" : "muted"}
+        />
+        <Metric
+          label="Unclassified"
+          value={metrics.unknownOwnership}
+          hint="provenance not decided"
+          tone={metrics.unknownOwnership > 0 ? "warning" : "muted"}
+        />
       </MetricGrid>
     </Widget>
   );

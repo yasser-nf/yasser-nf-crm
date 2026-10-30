@@ -16,6 +16,7 @@ import {
   accountsService,
   parseAccountFilter,
 } from "@/modules/accounts";
+import { suppliersService } from "@/modules/suppliers";
 import { ErrorState } from "@/shared/feedback/error-state";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -41,6 +42,18 @@ export default async function AccountsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const filter = parseAccountFilter(await searchParams);
+  const actor = await getCurrentUser();
+
+  /*
+   * Suppliers for the two creation dialogs' provenance picker (M09B). Read
+   * here so neither dialog fetches from the browser; a role that may not list
+   * suppliers gets an empty list, and the server refuses the write anyway.
+   */
+  const supplierOptions = await suppliersService.options(actor);
+  const suppliers = supplierOptions.ok ? supplierOptions.value : [];
+
+  /* The source filter is offered only to a role that may list suppliers. */
+  const sourceSuppliers = supplierOptions.ok ? supplierOptions.value : null;
 
   return (
     <AccountSelectionProvider>
@@ -66,13 +79,13 @@ export default async function AccountsPage({
           {/* flex-wrap so three controls stack rather than overflow on a phone. */}
           <div className="flex flex-wrap items-center gap-2">
             <ExportAccountsMenu />
-            <BulkAccountsDialog />
-            <CreateAccountDialog />
+            <BulkAccountsDialog suppliers={suppliers} />
+            <CreateAccountDialog suppliers={suppliers} />
           </div>
         </header>
 
         <Suspense fallback={<FiltersSkeleton />}>
-          <AccountsFilters />
+          <AccountsFilters suppliers={sourceSuppliers} />
         </Suspense>
 
         <Suspense key={JSON.stringify(filter)} fallback={<TableSkeleton />}>

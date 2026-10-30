@@ -9,6 +9,7 @@ import {
   type Page,
   type PaginationInput,
 } from "@/lib/database";
+import type { AccountSource } from "@/lib/account-source";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import {
   accounts,
@@ -21,6 +22,7 @@ import {
   accountCanAllocateSql,
   accountHasNoBlockingProblemSql,
   accountIsLiveSql,
+  accountMatchesSourceSql,
   accountMatchesStatusSql,
   isSellableSlotSql,
   profileIsFreeSql,
@@ -71,6 +73,8 @@ export interface AccountFilter extends PaginationInput {
   readonly country?: string | undefined;
   /** Matches email, notes, or country. Never the password — it is encrypted. */
   readonly search?: string | undefined;
+  /** Where the account came from (M09B). */
+  readonly source?: AccountSource | undefined;
   readonly sortBy?: AccountSortField | undefined;
   readonly sortDirection?: "asc" | "desc" | undefined;
   /**
@@ -211,6 +215,10 @@ function buildFilter(filter: AccountFilter) {
 
   if (filter.country !== undefined) {
     conditions.push(eq(accounts.country, filter.country));
+  }
+
+  if (filter.source !== undefined) {
+    conditions.push(accountMatchesSourceSql(filter.source));
   }
 
   if (filter.search?.trim()) {

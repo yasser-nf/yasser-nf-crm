@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import type { AccountView } from "../services/accounts.service";
+import type { SupplierOption } from "@/shared/forms/ownership-fields";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -28,7 +29,12 @@ import { AccountForm } from "./account-form";
  * server rejected it.
  */
 
-export function CreateAccountDialog() {
+export function CreateAccountDialog({
+  suppliers = [],
+}: {
+  /** Live suppliers, read on the server. Empty for a role that may not list them. */
+  readonly suppliers?: readonly SupplierOption[];
+}) {
   const [open, setOpen] = useState(false);
   const create = useCreateAccount();
 
@@ -58,6 +64,7 @@ export function CreateAccountDialog() {
 
         <AccountForm
           mode="create"
+          suppliers={suppliers}
           isSubmitting={create.isPending}
           error={create.error}
           onSubmit={(values) =>
@@ -74,11 +81,13 @@ export function CreateAccountDialog() {
 
 export function EditAccountDialog({
   account,
+  suppliers = [],
   open,
   onOpenChange,
 }: {
   /* Never the full row: this is a Client Component. See AccountHeader. */
   account: AccountView;
+  suppliers?: readonly SupplierOption[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -102,6 +111,7 @@ export function EditAccountDialog({
         <AccountForm
           mode="edit"
           account={account}
+          suppliers={suppliers}
           isSubmitting={update.isPending}
           error={update.error}
           onSubmit={(values) =>

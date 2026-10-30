@@ -2,12 +2,18 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { LoaderCircle } from "lucide-react";
+import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { ActionError } from "@/lib/errors";
 import type { AccountView } from "../services/accounts.service";
 import { FormField } from "@/shared/forms/form-field";
+import {
+  OwnershipFields,
+  type OwnershipValue,
+  type SupplierOption,
+} from "@/shared/forms/ownership-fields";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
@@ -93,6 +99,13 @@ interface AccountFormProps {
   readonly mode: "create" | "edit";
   /* A projection without the credential — this form never edits a password hash. */
   readonly account?: AccountView | undefined;
+  /**
+   * Live suppliers for the provenance picker (M09B).
+   *
+   * Read on the server by `suppliersService.options` and passed down, so this
+   * form fetches nothing and a Worker is simply handed an empty list.
+   */
+  readonly suppliers?: readonly SupplierOption[] | undefined;
   readonly isSubmitting: boolean;
   readonly error?: unknown;
   readonly onSubmit: (values: Record<string, unknown>) => void;
@@ -102,12 +115,43 @@ interface AccountFormProps {
 export function AccountForm({
   mode,
   account,
+  suppliers = [],
   isSubmitting,
   error,
   onSubmit,
   onCancel,
 }: AccountFormProps) {
   const isEdit = mode === "edit";
+
+  /**
+   * Where the account came from (M09B).
+   *
+   * Outside React Hook Form on purpose: the two controls are one answer, and
+   * the rule binding them — a supplied account names a supplier — is a
+   * cross-field condition the resolver would have to express as a union over
+   * the whole form. The server's `checkOwnership` is the real rule either way.
+   *
+   * A new account defaults to "our own", which is what the overwhelming
+   * majority are; the request always states it, so nothing falls through to
+   * the column default of `unknown`.
+   */
+  const storedOwnership: OwnershipValue = account?.ownership ?? "owned";
+  const storedSupplierId = account?.supplierId ?? null;
+
+  const [ownership, setOwnership] = useState<OwnershipValue>(storedOwnership);
+  const [supplierId, setSupplierId] = useState<string | null>(storedSupplierId);
+  const [supplierIssue, setSupplierIssue] = useState<string | undefined>(undefined);
+
+  /*
+   * On edit, provenance is sent only when it actually changed.
+   *
+   * An account awaiting triage is stored as supplied with no supplier. If the
+   * form resent that pair every time, editing its notes would fail validation
+   * on a field the operator never touched — so an untouched answer is left
+   * entirely out of the update.
+   */
+  const ownershipChanged = ownership !== storedOwnership || supplierId !== storedSupplierId;
+  const sendsOwnership = !isEdit || ownershipChanged;
 
   const form = useForm({
     resolver: zodResolver(isEdit ? editAccountFormSchema : createAccountFormSchema),
@@ -166,6 +210,8 @@ export function AccountForm({
     "validFrom",
     "validUntil",
     "durationDays",
+    "ownership",
+    "supplierId",
   ];
 
   const unmappedErrors = Object.entries(serverFieldErrors).filter(
@@ -173,11 +219,31 @@ export function AccountForm({
   );
 
   const submit = handleSubmit((values) => {
+    /*
+     * The one rule this form answers before the round trip: a supplied account
+     * must name its supplier. The server repeats it, and so does the database.
+     */
+    if (sendsOwnership && ownership === "supplied" && supplierId === null) {
+      setSupplierIssue("Choose the supplier this account came from");
+      return;
+    }
+
+    setSupplierIssue(undefined);
+
     const payload: Record<string, unknown> = {
       email: values.email,
       country: values.country === "" ? undefined : values.country,
       notes: values.notes === "" ? undefined : values.notes,
     };
+
+    if (sendsOwnership) {
+      payload["ownership"] = ownership;
+
+      /* Only a supplied account carries the key at all. */
+      if (ownership === "supplied") {
+        payload["supplierId"] = supplierId;
+      }
+    }
 
     if (isEdit) {
       payload["status"] = (values as EditAccountFormValues).status;
@@ -284,6 +350,21 @@ export function AccountForm({
         error={fieldError("country")}
         hint="Two-letter code. Optional."
         {...register("country")}
+      />
+
+      <OwnershipFields
+        idPrefix="account"
+        ownership={ownership}
+        supplierId={supplierId}
+        suppliers={suppliers}
+        onOwnershipChange={setOwnership}
+        onSupplierChange={(next) => {
+          setSupplierId(next);
+          setSupplierIssue(undefined);
+        }}
+        disabled={isSubmitting}
+        ownershipError={fieldError("ownership")}
+        supplierError={supplierIssue ?? fieldError("supplierId")}
       />
 
       {!isEdit ? (

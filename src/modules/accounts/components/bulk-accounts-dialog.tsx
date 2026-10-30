@@ -7,6 +7,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { ActionError } from "@/lib/errors";
+import {
+  OwnershipFields,
+  type OwnershipValue,
+  type SupplierOption,
+} from "@/shared/forms/ownership-fields";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -46,6 +51,11 @@ import type { BulkCreateResult } from "../services/accounts.service";
  * nothing else about it — the operator can already see their own paste in the
  * textarea above, so echoing credentials into a second surface would add risk
  * without adding information.
+ *
+ * Provenance is asked ONCE for the whole paste (M09B). The pasted columns are
+ * the ones an operator already copies from a spreadsheet; adding a per-row
+ * supplier column would break every existing paste, and a batch bought in one
+ * go came from one place anyway.
  */
 
 const TEMPLATE = "email,password,country,duration,profiles";
@@ -64,7 +74,12 @@ function unwrap<T>(result: ActionResult<T>): T {
   throw new ActionError(result.message, result.code, result.fieldErrors);
 }
 
-export function BulkAccountsDialog() {
+export function BulkAccountsDialog({
+  suppliers = [],
+}: {
+  /** Live suppliers, read on the server. Empty for a role that may not list them. */
+  readonly suppliers?: readonly SupplierOption[];
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -91,17 +106,26 @@ export function BulkAccountsDialog() {
         </DialogHeader>
 
         {/* Remounted per opening, so a finished import never greets the next one. */}
-        {open ? <BulkForm onDone={() => setOpen(false)} /> : null}
+        {open ? <BulkForm suppliers={suppliers} onDone={() => setOpen(false)} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
-function BulkForm({ onDone }: { onDone: () => void }) {
+function BulkForm({
+  suppliers,
+  onDone,
+}: {
+  readonly suppliers: readonly SupplierOption[];
+  readonly onDone: () => void;
+}) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<BulkPreview | null>(null);
   const [result, setResult] = useState<BulkCreateResult | null>(null);
+  const [ownership, setOwnership] = useState<OwnershipValue>("owned");
+  const [supplierId, setSupplierId] = useState<string | null>(null);
+  const [supplierIssue, setSupplierIssue] = useState<string | undefined>(undefined);
 
   const parse = useMutation({
     mutationFn: async (input: string) => unwrap(await previewBulkAccountsAction(input)),
@@ -109,8 +133,17 @@ function BulkForm({ onDone }: { onDone: () => void }) {
     onError: (error) => toast.error("Could not read that", { description: error.message }),
   });
 
+  /*
+   * The import envelope, not a bare string: one provenance answer applied to
+   * every row the parser accepts. The preview still sends the text alone —
+   * reading a paste says nothing about where the accounts came from.
+   */
   const submit = useMutation({
-    mutationFn: async (input: string) => unwrap(await createAccountsInBulkAction(input)),
+    mutationFn: async (input: {
+      rows: string;
+      ownership: OwnershipValue;
+      supplierId: string | null;
+    }) => unwrap(await createAccountsInBulkAction(input)),
     onSuccess: (data) => {
       setResult(data);
 
@@ -186,6 +219,21 @@ function BulkForm({ onDone }: { onDone: () => void }) {
         </p>
       </div>
 
+      <OwnershipFields
+        idPrefix="bulk"
+        label="Where did these accounts come from?"
+        ownership={ownership}
+        supplierId={supplierId}
+        suppliers={suppliers}
+        onOwnershipChange={setOwnership}
+        onSupplierChange={(next) => {
+          setSupplierId(next);
+          setSupplierIssue(undefined);
+        }}
+        disabled={isBusy}
+        supplierError={supplierIssue}
+      />
+
       {preview ? <BulkPreviewTable preview={preview} /> : null}
 
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
@@ -210,7 +258,15 @@ function BulkForm({ onDone }: { onDone: () => void }) {
         </Button>
 
         <Button
-          onClick={() => submit.mutate(text)}
+          onClick={() => {
+            if (ownership === "supplied" && supplierId === null) {
+              setSupplierIssue("Choose the supplier these accounts came from");
+              return;
+            }
+
+            setSupplierIssue(undefined);
+            submit.mutate({ rows: text, ownership, supplierId });
+          }}
           /*
            * Requires a preview first: an operator should see what the server
            * read before it writes anything. Also blocks a second click while

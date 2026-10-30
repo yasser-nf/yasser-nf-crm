@@ -18,6 +18,7 @@ import {
   ReopenedWidget,
   RevenueWidget,
   StockWidget,
+  SuppliersWidget,
   presentStock,
   UsersCountsWidget,
   WidgetError,
@@ -105,6 +106,17 @@ async function Overview() {
             counts={data.counts.users}
             online={Array.isArray(data.onlineUsers) ? data.onlineUsers.length : null}
           />
+        ) : null}
+
+        {/*
+          Rendered only when the role may see it: `suppliers` is null for
+          anyone without `view_suppliers`, so the numbers are absent from the
+          payload rather than hidden in the markup.
+        */}
+        {data.suppliers === "error" ? (
+          <WidgetError message="Supplier figures could not be read." />
+        ) : data.suppliers ? (
+          <SuppliersWidget metrics={data.suppliers} />
         ) : null}
 
         <RevenueWidget />

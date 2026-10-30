@@ -9,6 +9,8 @@ import {
   type Page,
   type PaginationInput,
 } from "@/lib/database";
+import type { AccountSource } from "@/lib/account-source";
+import { accountMatchesSourceSql } from "@/lib/drizzle/predicates";
 import {
   accounts,
   auditLogs,
@@ -46,6 +48,8 @@ export interface ProblemFilter extends PaginationInput {
   readonly issueType?: IssueRow["issueType"] | undefined;
   readonly assignedTo?: string | undefined;
   readonly accountId?: string | undefined;
+  /** Where the problem's account came from (M09B). */
+  readonly source?: AccountSource | undefined;
   readonly createdAfter?: Date | undefined;
   readonly createdBefore?: Date | undefined;
   readonly sortBy?: "createdAt" | "updatedAt" | "severity" | "status" | undefined;
@@ -130,6 +134,8 @@ function buildWhere(filter: ProblemFilter): SQL | undefined {
     filter.issueType ? eq(issues.issueType, filter.issueType) : undefined,
     filter.assignedTo ? eq(issues.assignedTo, filter.assignedTo) : undefined,
     filter.accountId ? eq(issues.accountId, filter.accountId) : undefined,
+    /* Every query using this WHERE joins `accounts`, which the predicate reads. */
+    filter.source ? accountMatchesSourceSql(filter.source) : undefined,
     filter.createdAfter ? sql`${issues.createdAt} >= ${filter.createdAfter}` : undefined,
     filter.createdBefore ? sql`${issues.createdAt} <= ${filter.createdBefore}` : undefined,
   ];

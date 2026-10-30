@@ -1,4 +1,5 @@
 import { PAGINATION } from "@/config/constants";
+import { ACCOUNT_SOURCE_PARAM, parseAccountSource } from "@/lib/account-source";
 import type { AccountRow } from "@/lib/drizzle/schema";
 import type { AccountFilter, AccountSortField } from "../repositories/accounts.repository";
 
@@ -64,6 +65,7 @@ export function parseAccountFilter(params: RawSearchParams): ParsedAccountFilter
   return {
     search: readParam(params, "search"),
     status: ACCOUNT_STATUSES.find((value) => value === statusRaw),
+    source: parseAccountSource(readParam(params, ACCOUNT_SOURCE_PARAM)),
     sortBy: ACCOUNT_SORT_FIELDS.find((field) => field === sortByRaw) ?? "createdAt",
     sortDirection: readParam(params, "sortDirection") === "asc" ? "asc" : "desc",
     offset: Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0,
@@ -72,7 +74,7 @@ export function parseAccountFilter(params: RawSearchParams): ParsedAccountFilter
 }
 
 /**
- * The same filter with search and status dropped.
+ * The same filter with search, status and source dropped.
  *
  * "Export all accounts" means every account, not every account matching what
  * happens to be typed in the search box. Sort order is kept so the file is in a

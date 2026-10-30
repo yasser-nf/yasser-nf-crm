@@ -4,6 +4,7 @@ import { Search, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { ACCOUNT_SOURCE_PARAM, accountSourceOptions } from "@/lib/account-source";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
@@ -11,6 +12,9 @@ import { ACCOUNT_STATUS_OPTIONS } from "./status-badge";
 
 /** Sentinel for "no status filter". A Radix SelectItem cannot hold an empty value. */
 const ALL_STATUSES = "all";
+
+/** The same sentinel for the source filter. */
+const ALL_SOURCES = "all";
 
 /**
  * Accounts list filters.
@@ -21,13 +25,24 @@ const ALL_STATUSES = "all";
  * change and re-run the query, which on a slow connection produces a stream of
  * in-flight requests whose responses arrive out of order.
  */
-export function AccountsFilters() {
+export function AccountsFilters({
+  suppliers = null,
+}: {
+  /**
+   * Live suppliers for the source filter (M09B), read on the server.
+   *
+   * `null` hides the filter: suppliers are Super Admin data, and a role that
+   * may not list them is not offered a control built from them.
+   */
+  readonly suppliers?: readonly { readonly id: string; readonly name: string }[] | null;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const currentSearch = searchParams.get("search") ?? "";
   const currentStatus = searchParams.get("status") ?? ALL_STATUSES;
+  const currentSource = searchParams.get(ACCOUNT_SOURCE_PARAM) ?? ALL_SOURCES;
 
   const [searchInput, setSearchInput] = useState(currentSearch);
 
@@ -61,20 +76,21 @@ export function AccountsFilters() {
     return () => clearTimeout(timer);
   }, [searchInput, currentSearch, pathname, router, searchParams]);
 
-  function setStatus(value: string) {
+  function setFilter(key: string, value: string, all: string) {
     const params = new URLSearchParams(searchParams.toString());
 
-    if (value === ALL_STATUSES) {
-      params.delete("status");
+    if (value === all) {
+      params.delete(key);
     } else {
-      params.set("status", value);
+      params.set(key, value);
     }
 
     params.set("offset", "0");
     router.push(`${pathname}?${params.toString()}`);
   }
 
-  const hasFilters = currentSearch !== "" || currentStatus !== ALL_STATUSES;
+  const hasFilters =
+    currentSearch !== "" || currentStatus !== ALL_STATUSES || currentSource !== ALL_SOURCES;
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -92,7 +108,10 @@ export function AccountsFilters() {
         />
       </div>
 
-      <Select value={currentStatus} onValueChange={setStatus}>
+      <Select
+        value={currentStatus}
+        onValueChange={(value) => setFilter("status", value, ALL_STATUSES)}
+      >
         <SelectTrigger className="h-11 sm:w-56" aria-label="Filter by status">
           <SelectValue />
         </SelectTrigger>
@@ -105,6 +124,25 @@ export function AccountsFilters() {
           ))}
         </SelectContent>
       </Select>
+
+      {suppliers ? (
+        <Select
+          value={currentSource}
+          onValueChange={(value) => setFilter(ACCOUNT_SOURCE_PARAM, value, ALL_SOURCES)}
+        >
+          <SelectTrigger className="h-11 sm:w-56" aria-label="Filter by source">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_SOURCES}>All sources</SelectItem>
+            {accountSourceOptions(suppliers).map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
 
       {hasFilters ? (
         <Button

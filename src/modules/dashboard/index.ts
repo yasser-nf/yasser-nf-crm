@@ -58,5 +58,6 @@ export {
   ReopenedWidget,
   RevenueWidget,
   StockWidget,
+  SuppliersWidget,
   UsersCountsWidget,
 } from "./components/dashboard-widgets";

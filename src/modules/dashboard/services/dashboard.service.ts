@@ -8,6 +8,7 @@ import { fail, ok } from "@/utils/result";
 import { evaluateAllocation } from "@/modules/accounts";
 import { problemsService, type ProblemListEntry } from "@/modules/problems";
 import { quickPrepareService } from "@/modules/quick-prepare";
+import { suppliersService, type SupplierMetrics } from "@/modules/suppliers";
 import { usersService, type UserListEntry } from "@/modules/users";
 import type { IssueRow } from "@/lib/drizzle/schema";
 import {
@@ -72,6 +73,12 @@ export interface DashboardData {
     readonly problemsBySeverity: readonly LabelledCount[] | null;
     readonly backupsOverTime: readonly SeriesPoint[] | null;
   };
+  /**
+   * Where the stock came from (M09B). `null` for a role that may not see
+   * suppliers; "error" when the read failed — never zeros standing in for one,
+   * since a zero here reads as "we depend on no outside supplier".
+   */
+  readonly suppliers: SupplierMetrics | "error" | null;
   /** True when the caller may see users, backups and health. */
   readonly canSeeAdminMetrics: boolean;
 }
@@ -131,6 +138,7 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     problemsByType,
     problemsBySeverity,
     backupsOverTime,
+    supplierMetrics,
   ] = await Promise.all([
     dashboardRepository.counts(),
     dashboardRepository.accountStateInputs(),
@@ -153,6 +161,12 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
     dashboardRepository.problemsByType(),
     dashboardRepository.problemsBySeverity(),
     isAdmin ? dashboardRepository.backupsByDay(30) : Promise.resolve(null),
+    /*
+     * Through the suppliers module's public API, which checks
+     * `view_suppliers` itself. Asked for unconditionally and refused for a
+     * Worker, so there is one definition of who may see these figures.
+     */
+    suppliersService.metrics(actor),
   ]);
 
   if (!counts.ok) {
@@ -254,6 +268,11 @@ async function load(actor: AppUser | null): Promise<Result<DashboardData>> {
       problemsBySeverity: orNull(problemsBySeverity),
       backupsOverTime: backupsOverTime === null ? [] : orNull(backupsOverTime),
     },
+    suppliers: supplierMetrics.ok
+      ? supplierMetrics.value
+      : supplierMetrics.error instanceof ForbiddenError
+        ? null
+        : "error",
     canSeeAdminMetrics: isAdmin,
   });
 }

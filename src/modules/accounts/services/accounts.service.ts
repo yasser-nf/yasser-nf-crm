@@ -20,9 +20,10 @@ import {
 } from "../repositories/accounts.repository";
 import { profilesRepository } from "../repositories/profiles.repository";
 import {
-  accountInsertSchema,
   accountUpdateSchema,
+  createAccountSchema,
   changePasswordSchema,
+  checkOwnership,
   profileSlotsSchema,
 } from "../validation/account.schema";
 import { PROFILES_PER_ACCOUNT } from "../validation/profile.schema";
@@ -631,7 +632,7 @@ async function getAccountDetail(id: string): Promise<Result<AccountDetail>> {
  * validation and the audit entry.
  */
 async function createAccount(input: unknown, context: AuditContext): Promise<Result<AccountRow>> {
-  const parsed = accountInsertSchema.safeParse(input);
+  const parsed = createAccountSchema.safeParse(input);
 
   if (!parsed.success) {
     return fail(toValidationError(parsed.error.issues, "Account input failed validation"));
@@ -698,11 +699,53 @@ export interface BulkCreateResult {
  *   4. EVERY submitted row comes back either created or rejected with a reason
  *      and a line number. `submitted` is the arithmetic check on that claim.
  */
+/**
+ * What a bulk import says about where its accounts came from (M09B).
+ *
+ * One answer for the whole paste. The pasted rows are emails and passwords —
+ * adding a per-row supplier column would change a format operators already
+ * paste from elsewhere — so the dialog asks once and it applies to the batch.
+ */
+const bulkOwnershipSchema = z
+  .object({
+    rows: z.string().min(1),
+    ownership: z.enum(["owned", "supplied", "unknown"], {
+      error: "Say where these accounts came from",
+    }),
+    supplierId: z.uuid().nullable().optional(),
+  })
+  .superRefine(checkOwnership);
+
 async function createAccountsInBulk(
   input: unknown,
   context: AuditContext,
 ): Promise<Result<BulkCreateResult>> {
-  if (typeof input !== "string" || input.trim() === "") {
+  const envelope = bulkOwnershipSchema.safeParse(input);
+
+  if (!envelope.success) {
+    const issue = envelope.error.issues[0];
+
+    return fail(
+      new ValidationError("Bulk import failed validation", {
+        userMessage: issue?.message ?? "Check the import details and try again.",
+        ...(issue?.path[0] === "supplierId"
+          ? { fieldErrors: { supplierId: issue.message } }
+          : issue?.path[0] === "ownership"
+            ? { fieldErrors: { ownership: issue.message } }
+            : {}),
+      }),
+    );
+  }
+
+  const ownership = {
+    ownership: envelope.data.ownership,
+    supplierId: envelope.data.ownership === "supplied" ? (envelope.data.supplierId ?? null) : null,
+  };
+
+  const rows = envelope.data.rows;
+
+  /* The schema rejects an empty string; this catches a paste of only spaces. */
+  if (rows.trim() === "") {
     return fail(
       new ValidationError("Bulk import received no text", {
         userMessage: "Paste at least one account first.",
@@ -711,7 +754,7 @@ async function createAccountsInBulk(
     );
   }
 
-  const parsed = parseBulkAccounts(input);
+  const parsed = parseBulkAccounts(rows);
   const submitted = parsed.valid.length + parsed.errors.length;
 
   if (submitted === 0) {
@@ -738,7 +781,10 @@ async function createAccountsInBulk(
   let created: readonly AccountView[] = [];
 
   if (parsed.valid.length > 0) {
-    const write = await accountsRepository.createMany(parsed.valid, context.actor?.id ?? null);
+    const write = await accountsRepository.createMany(
+      parsed.valid.map((row) => ({ ...row, ...ownership })),
+      context.actor?.id ?? null,
+    );
 
     if (!write.ok) {
       return write;
@@ -943,7 +989,25 @@ async function updateAccount(
     return before;
   }
 
-  const updated = await accountsRepository.update(id, parsed.data);
+  /*
+   * Ownership and supplier are written as a pair or not at all (M09B).
+   *
+   * An update that said `ownership: "owned"` without mentioning the supplier
+   * would leave the stored supplier_id behind, and
+   * `accounts_supplier_requires_supplied` would then reject the write with a
+   * database error. So whenever ownership is stated, the supplier column is
+   * stated too — null unless the account is supplied.
+   */
+  const fields =
+    parsed.data.ownership === undefined
+      ? parsed.data
+      : {
+          ...parsed.data,
+          supplierId:
+            parsed.data.ownership === "supplied" ? (parsed.data.supplierId ?? null) : null,
+        };
+
+  const updated = await accountsRepository.update(id, fields);
 
   if (!updated.ok) {
     return updated;

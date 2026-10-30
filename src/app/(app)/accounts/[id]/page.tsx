@@ -19,6 +19,7 @@ import type { AccountRow } from "@/lib/drizzle/schema";
 import { profileCustomerLabel, type ProfileAllocationWithCustomer } from "@/modules/accounts";
 import { PROBLEM_TYPE_LABELS, ProblemStatusBadge, ReportProblemDialog } from "@/modules/problems";
 import { ReplaceAccountButton } from "@/modules/quick-prepare";
+import { suppliersService } from "@/modules/suppliers";
 import { ErrorState } from "@/shared/feedback/error-state";
 
 export const metadata: Metadata = {
@@ -151,7 +152,11 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
   const canUnassignSale =
     actor !== null && roleHasPermission(actor.role, PERMISSIONS.UNASSIGN_SALES);
 
-  const timeline = await accountsService.getAccountTimeline(id, { limit: 25 });
+  /* The edit dialog's provenance picker needs the live suppliers (M09B). */
+  const [timeline, supplierOptions] = await Promise.all([
+    accountsService.getAccountTimeline(id, { limit: 25 }),
+    suppliersService.options(actor),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -167,6 +172,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
         account={account}
         remainingValidityDays={remainingValidityDays}
         effectiveStatus={effectiveStatus}
+        suppliers={supplierOptions.ok ? supplierOptions.value : []}
       />
 
       {!accountAllowsAllocation ? (

@@ -100,6 +100,44 @@ const baseAccountInsert = createInsertSchema(accounts, {
  * it to `valid_until` — see `resolveValidity`. Storing both would be duplicate
  * state that drifts the moment either is edited, which 03_DATABASE.md forbids.
  */
+/**
+ * Where an account came from, as a request may state it (M09B).
+ *
+ * Required on create: an account written without saying would fall to the
+ * column default `unknown`, and an unclassified account is one somebody has
+ * to come back to. The pair of rules below is what the database's own
+ * `accounts_supplier_requires_supplied` check enforces underneath.
+ */
+const ownershipValue = z.enum(["owned", "supplied", "unknown"], {
+  error: "Say whether this account is your own or from a supplier",
+});
+
+/** A supplied account names its supplier; anything else names none. */
+export function checkOwnership(
+  value: { ownership?: string | undefined; supplierId?: string | null | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.ownership === "supplied") {
+    if (!value.supplierId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["supplierId"],
+        message: "Choose the supplier this account came from",
+      });
+    }
+
+    return;
+  }
+
+  if (value.ownership !== undefined && value.supplierId) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["supplierId"],
+      message: "Only an account from a supplier can name one",
+    });
+  }
+}
+
 export const accountInsertSchema = baseAccountInsert
   .extend({
     /** Plaintext. Encrypted by the repository, never stored as given. */
@@ -124,6 +162,21 @@ export const accountInsertSchema = baseAccountInsert
       value.validUntil >= value.validFrom,
     { message: "Coverage cannot end before it starts", path: ["validUntil"] },
   );
+
+/**
+ * One account, created through the form (M09B).
+ *
+ * Ownership is required HERE rather than on `accountInsertSchema`, because
+ * that schema also validates each row of a bulk paste — and a pasted row is an
+ * email and a password, with no column saying where the account came from. The
+ * bulk flow states it once for the whole batch instead.
+ */
+export const createAccountSchema = accountInsertSchema
+  .safeExtend({
+    ownership: ownershipValue,
+    supplierId: z.uuid().nullable().optional(),
+  })
+  .superRefine(checkOwnership);
 
 /**
  * Changing how many profiles an account sells.
@@ -184,10 +237,14 @@ export const accountUpdateSchema = createUpdateSchema(accounts, {
   .extend({
     /** Optional plaintext replacement. Omit to leave the stored password alone. */
     password: z.string().min(1).max(200).optional(),
+    /* Optional on edit — an update that does not mention it leaves it alone. */
+    ownership: z.enum(["owned", "supplied", "unknown"]).optional(),
+    supplierId: z.uuid().nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: "An update must change at least one field",
-  });
+  })
+  .superRefine(checkOwnership);
 
 export type AccountSelect = z.infer<typeof accountSelectSchema>;
 export type AccountInsert = z.infer<typeof accountInsertSchema>;

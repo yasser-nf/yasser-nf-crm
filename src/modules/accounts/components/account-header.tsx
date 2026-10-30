@@ -15,6 +15,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import type { AccountView } from "../services/accounts.service";
+import type { SupplierOption } from "@/shared/forms/ownership-fields";
 import { Button } from "@/shared/ui/button";
 import {
   AlertDialog,
@@ -65,8 +66,11 @@ export function AccountHeader({
   account,
   remainingValidityDays,
   effectiveStatus,
+  suppliers = [],
 }: {
   account: AccountView;
+  /** Live suppliers for the edit dialog's provenance picker (M09B). */
+  suppliers?: readonly SupplierOption[];
   /**
    * `accountEffectiveStatus`, from the service — the same derivation the
    * accounts list uses. It cannot say "Healthy" for an account allocation
@@ -215,7 +219,12 @@ export function AccountHeader({
         />
       </Field>
 
-      <EditAccountDialog account={account} open={isEditing} onOpenChange={setIsEditing} />
+      <EditAccountDialog
+        account={account}
+        suppliers={suppliers}
+        open={isEditing}
+        onOpenChange={setIsEditing}
+      />
 
       <AlertDialog open={confirmingArchive} onOpenChange={setConfirmingArchive}>
         <AlertDialogContent>
