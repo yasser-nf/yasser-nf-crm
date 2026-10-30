@@ -1214,8 +1214,17 @@ async function softDeleteAccounts(
  * reading a credential is an event worth recording.
  *
  * The plaintext must never be logged and must never enter an audit snapshot.
+ *
+ * `reason` (M09D) records WHERE it was read — `quick_prepare` or
+ * `quick_replace` — beside the event, so the log can tell a review-step reveal
+ * from one on the account page. A label, never data: it goes through the
+ * audit allow-list's existing `reason` field.
  */
-async function revealPassword(id: string, context: AuditContext): Promise<Result<string>> {
+async function revealPassword(
+  id: string,
+  context: AuditContext,
+  reason?: "quick_prepare" | "quick_replace",
+): Promise<Result<string>> {
   const permitted = assertMayViewCredentials(context.actor);
 
   if (!permitted.ok) {
@@ -1233,7 +1242,7 @@ async function revealPassword(id: string, context: AuditContext): Promise<Result
       entity: "account",
       entityId: id,
       action: "update",
-      after: { event: "password_revealed" },
+      after: { event: "password_revealed", ...(reason ? { reason } : {}) },
     },
     context,
   );

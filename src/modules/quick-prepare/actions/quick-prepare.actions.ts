@@ -9,6 +9,7 @@ import { UnauthorizedError, ValidationError, isAppError, type AppError } from "@
 import type { AuditContext } from "@/modules/audit";
 import { quickPrepareService } from "../services/quick-prepare.service";
 import { quickReplaceService } from "../services/quick-replace.service";
+import { selectedCredentialsService } from "../services/selected-credentials.service";
 import { operationIdSchema, reviewedAccountsSchema } from "../validation/quick-prepare.schema";
 
 /**
@@ -184,4 +185,21 @@ export async function confirmReplacementAction(input: unknown) {
     async (context) => quickPrepareService.confirmReplacement(input, context),
     [ROUTES.ACCOUNTS, ROUTES.QUICK_PREPARE],
   );
+}
+
+/**
+ * M09D: the credentials of an account in the Quick Prepare review.
+ *
+ * Read-only and revalidates nothing. A POST action rather than a cached read,
+ * so the plaintext is never stored by a route cache; the service checks both
+ * permissions and that the account is still the current selection before it
+ * decrypts anything. Called only on an explicit click — never on page load.
+ */
+export async function revealPreparationCredentialsAction(input: unknown) {
+  return run(async (context) => selectedCredentialsService.forPreparation(input, context));
+}
+
+/** M09D: the credentials of the proposed REPLACEMENT account. Never the failing one. */
+export async function revealReplacementCredentialsAction(input: unknown) {
+  return run(async (context) => selectedCredentialsService.forReplacement(input, context));
 }

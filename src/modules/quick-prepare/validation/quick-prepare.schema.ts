@@ -236,6 +236,40 @@ export const confirmReplacementSchema = z.object({
 
 export type ConfirmReplacementInput = z.infer<typeof confirmReplacementSchema>;
 
+/**
+ * M09D: revealing the credentials of an account in the Quick Prepare review.
+ *
+ * Carries the whole selection, not just the account: the order and every
+ * account in the suggestion. The server re-plans that exact order on exactly
+ * those accounts and reveals only if `accountId` is still one of them — so a
+ * stale suggestion, an account that broke, or an id the page never showed
+ * cannot be used to read a password through this route.
+ */
+export const revealPreparationCredentialsSchema = previewAllocationSchema
+  .pick({ profileCount: true, durationDays: true })
+  .extend({
+    accountIds: reviewedAccountIds,
+    accountId: z.uuid(),
+  })
+  .refine((value) => value.accountIds.includes(value.accountId), {
+    message: "That account is not part of this suggestion",
+    path: ["accountId"],
+  });
+
+/**
+ * M09D: revealing the credentials of the proposed REPLACEMENT account.
+ *
+ * Names the failing account by email and the customer being moved, exactly as
+ * the lookup does, so the server can re-derive the proposal. The replacement
+ * is the only account whose password this can return — never the failing one.
+ */
+export const revealReplacementCredentialsSchema = replaceLookupSchema
+  .pick({ accountEmail: true })
+  .extend({
+    customerId: z.uuid(),
+    replacementAccountId: z.uuid(),
+  });
+
 /** What the Server Actions require on top of the service schemas: the operation id. */
 export const operationIdSchema = z.object({
   operationId: z.uuid({ error: "Missing confirmation id" }),

@@ -123,13 +123,33 @@ describe("the unguarded replacement path stays deleted", () => {
       (match) => match[1],
     );
 
-    /* Read-only lookups and the two Quick Prepare steps may remain. */
+    /*
+     * Read-only lookups and the two Quick Prepare steps may remain — plus the
+     * M09D credential reveals, which read the selected account's password and
+     * commit nothing (checked below, not assumed).
+     */
     expect(exported).toEqual([
       "previewAllocationAction",
       "confirmPreparationAction",
       "previewReplacementAction",
       "confirmReplacementAction",
+      "revealPreparationCredentialsAction",
+      "revealReplacementCredentialsAction",
     ]);
+
+    /* The two reveals reach the credential service and nothing that writes. */
+    const body = code(actions.text);
+    for (const name of [
+      "revealPreparationCredentialsAction",
+      "revealReplacementCredentialsAction",
+    ]) {
+      const start = body.indexOf(`export async function ${name}`);
+      const end = body.indexOf("\n}", start);
+      const action = body.slice(start, end);
+
+      expect(action, name).toMatch(/selectedCredentialsService\.for(Preparation|Replacement)\(/);
+      expect(action, name).not.toMatch(/confirm|commit|quickPrepareService|revalidate/i);
+    }
   });
 
   it("routes the account detail button through preview and confirm", () => {

@@ -18,6 +18,7 @@ import {
   type ProfileSlotState,
 } from "@/shared/ui/profile-state";
 import { cn } from "@/utils/cn";
+import { revealReplacementCredentialsAction } from "../actions/quick-prepare.actions";
 import { useReplacementAlternatives } from "../hooks/use-alternatives";
 import {
   replacementIdentity,
@@ -26,6 +27,7 @@ import {
   usePreviewReplacement,
 } from "../hooks/use-quick-prepare";
 import { CredentialResult } from "./credential-result";
+import { SelectedAccountCredentials } from "./selected-account-credentials";
 import { SuggestAnother } from "./suggest-another";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type {
@@ -457,6 +459,8 @@ export function QuickReplaceScreen() {
   /* M13 §8. Reset whenever a new preview arrives, so it is never carried over. */
   const [passwordChanged, setPasswordChanged] = useState(false);
   const [result, setResult] = useState<PreparationResult | null>(null);
+  /* M09D. Bumped on a refused replacement, so revealed credentials are discarded. */
+  const [credentialsEpoch, setCredentialsEpoch] = useState(0);
 
   const lookup = usePreviewReplacement();
   const confirm = useConfirmReplacement();
@@ -559,7 +563,10 @@ export function QuickReplaceScreen() {
           }),
         ),
       },
-      { onSuccess: setResult },
+      {
+        onSuccess: setResult,
+        onError: () => setCredentialsEpoch((epoch) => epoch + 1),
+      },
     );
   }
 
@@ -677,6 +684,30 @@ export function QuickReplaceScreen() {
                       earlier={alternatives.earlier}
                       onReturnTo={alternatives.returnTo}
                     />
+
+                    {/*
+                      M09D. The REPLACEMENT account's credentials — never the
+                      failing one's. Keyed by the proposal and the customer, so
+                      choosing another replacement discards what was revealed.
+                    */}
+                    {accountEmail ? (
+                      <div className="flex flex-col gap-2">
+                        <h3 className="text-card-title text-foreground">Account credentials</h3>
+                        <SelectedAccountCredentials
+                          key={`${replacementAccountId}:${selectedCandidate.customer.id}:${credentialsEpoch}`}
+                          accountId={replacementAccountId}
+                          email={preview.replacement?.account.email ?? ""}
+                          disabled={confirm.isPending || alternatives.isSearching}
+                          reveal={() =>
+                            revealReplacementCredentialsAction({
+                              accountEmail,
+                              customerId: selectedCandidate.customer.id,
+                              replacementAccountId,
+                            })
+                          }
+                        />
+                      </div>
+                    ) : null}
 
                     {/*
                       M13 §7 and §8. Shown only when the SERVER says this

@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { revealReplacementCredentialsAction } from "../actions/quick-prepare.actions";
 import { useReplacementAlternatives } from "../hooks/use-alternatives";
 import {
   replacementIdentity,
@@ -24,6 +25,7 @@ import {
 import { NO_ALTERNATIVE_MESSAGE } from "../services/alternative-messages";
 import type { PreparationResult } from "../services/quick-prepare.service";
 import type { ReplacementPreview } from "../services/quick-replace.service";
+import { SelectedAccountCredentials } from "./selected-account-credentials";
 import { SuggestAnother } from "./suggest-another";
 
 /**
@@ -109,6 +111,8 @@ export function ReplaceAccountButton({
   const [passwordChanged, setPasswordChanged] = useState(false);
   const [result, setResult] = useState<PreparationResult | null>(null);
   const [copied, setCopied] = useState(false);
+  /* M09D. Bumped on a refused replacement, so revealed credentials are discarded. */
+  const [credentialsEpoch, setCredentialsEpoch] = useState(0);
 
   const previewReplacement = usePreviewReplacement();
   const confirmReplacement = useConfirmReplacement();
@@ -301,6 +305,21 @@ export function ReplaceAccountButton({
                 onReturnTo={alternatives.returnTo}
               />
 
+              {/* M09D. The replacement account's credentials, before "Replace now". */}
+              <SelectedAccountCredentials
+                key={`${replacement.account.id}:${customerId}:${credentialsEpoch}`}
+                accountId={replacement.account.id}
+                email={replacement.account.email}
+                disabled={busy}
+                reveal={() =>
+                  revealReplacementCredentialsAction({
+                    accountEmail: account.email,
+                    customerId,
+                    replacementAccountId: replacement.account.id,
+                  })
+                }
+              />
+
               {preview?.problems.length ? (
                 <p className="text-caption text-foreground-muted">
                   {preview.problems.length} open problem
@@ -346,7 +365,10 @@ export function ReplaceAccountButton({
                           }),
                         ),
                       },
-                      { onSuccess: setResult },
+                      {
+                        onSuccess: setResult,
+                        onError: () => setCredentialsEpoch((epoch) => epoch + 1),
+                      },
                     )
                   }
                   disabled={busy || !canConfirm}

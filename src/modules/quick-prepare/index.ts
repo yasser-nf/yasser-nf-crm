@@ -22,6 +22,12 @@ export type {
 
 /* Quick Replace. The preview writes nothing; the commit is on quickPrepareService. */
 export { quickReplaceService } from "./services/quick-replace.service";
+
+/* M09D. The selected account's credentials, re-checked before every reveal. */
+export {
+  selectedCredentialsService,
+  type SelectedCredentials,
+} from "./services/selected-credentials.service";
 export type {
   AccountProfileSlot,
   ReplacementCandidate,

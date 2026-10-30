@@ -15,9 +15,11 @@ import { CredentialResult } from "./credential-result";
 import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Textarea } from "@/shared/ui/textarea";
+import { revealPreparationCredentialsAction } from "../actions/quick-prepare.actions";
 import { usePreparationAlternatives } from "../hooks/use-alternatives";
 import { useConfirmPreparation, usePreviewAllocation } from "../hooks/use-quick-prepare";
 import type { PreparationPreview, PreparationResult } from "../services/quick-prepare.service";
+import { SelectedAccountCredentials } from "./selected-account-credentials";
 import { SuggestAnother } from "./suggest-another";
 
 /**
@@ -68,6 +70,14 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
    * current suggestion in place when it finds nothing.
    */
   const [current, setCurrent] = useState<PreparationPreview | null>(null);
+
+  /**
+   * M09D. Bumped when a confirmation is refused, so the credentials blocks
+   * remount empty: a refusal may mean the reviewed account is gone, and its
+   * password must not stay on screen next to an order that can no longer use
+   * it. A new suggestion needs no bump — it brings a new operation id.
+   */
+  const [credentialsEpoch, setCredentialsEpoch] = useState(0);
 
   /**
    * A different suggestion is a different order: a fresh password decision,
@@ -205,6 +215,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
         onError: () => {
           /* Released, so a worker can retry after a refusal they have fixed. */
           inFlight.current = false;
+          setCredentialsEpoch((epoch) => epoch + 1);
           setStage("review");
         },
       },
@@ -330,6 +341,7 @@ export function QuickPrepareWizard({ availableStock }: { availableStock: number 
           notes={getValues("notes") ?? ""}
           isConfirming={confirm.isPending}
           isSearching={alternatives.isSearching}
+          credentialsKey={`${operationId ?? "none"}:${credentialsEpoch}`}
           alternatives={
             <SuggestAnother
               onSuggest={alternatives.suggestAnother}
@@ -392,6 +404,7 @@ function ReviewStep({
   notes,
   isConfirming,
   isSearching,
+  credentialsKey,
   alternatives,
   passwordChanged,
   onPasswordChangedChange,
@@ -405,6 +418,12 @@ function ReviewStep({
   isConfirming: boolean;
   /** M09C: an alternative is being fetched; nothing may be confirmed meanwhile. */
   isSearching: boolean;
+  /**
+   * M09D. Identifies this selection. The credentials blocks are keyed by it,
+   * so a change of selection unmounts them and their state — the password
+   * with it — is discarded rather than carried over.
+   */
+  credentialsKey: string;
   /** M09C: the "Suggest another account" control, placed under the accounts. */
   alternatives: React.ReactNode;
   passwordChanged: boolean;
@@ -505,6 +524,37 @@ function ReviewStep({
 
         {alternatives}
       </div>
+
+      {/*
+        M09D. The credentials of exactly the account(s) above, before the
+        confirmation. Nothing is fetched until the operator asks.
+      */}
+      <section className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-6">
+        <div className="flex flex-col gap-1">
+          <h3 className="text-card-title text-foreground">Account credentials</h3>
+          <p className="text-caption text-foreground-subtle">
+            {preview.accounts.length === 1 ? "The account above" : "Each account above"}. The
+            password stays hidden until you show or copy it.
+          </p>
+        </div>
+
+        {preview.accounts.map((account) => (
+          <SelectedAccountCredentials
+            key={`${credentialsKey}:${account.accountId}`}
+            accountId={account.accountId}
+            email={account.email}
+            disabled={busy}
+            reveal={() =>
+              revealPreparationCredentialsAction({
+                profileCount: preview.requested,
+                durationDays: preview.durationDays,
+                accountIds: preview.accounts.map((entry) => entry.accountId),
+                accountId: account.accountId,
+              })
+            }
+          />
+        ))}
+      </section>
 
       {/*
         M13 §7. Shown only when the SERVER flagged reuse, so it keeps its force:

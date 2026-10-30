@@ -85,6 +85,29 @@ export function formatEmailAndPassword(email: string, password: string): string 
 }
 
 /**
+ * What separates the email from the password in `formatCredentialPair` (M09D).
+ *
+ * Four spaces. One line, so it pastes into a chat message or a login form's
+ * first field without a stray newline submitting anything; four spaces rather
+ * than one so the boundary is visible to a person reading it back, while still
+ * being whitespace — an email cannot contain a space, so splitting on the
+ * first run of spaces always recovers both halves.
+ */
+export const CREDENTIAL_PAIR_SEPARATOR = "    ";
+
+/**
+ * Email and password on one line, for Quick Prepare and Quick Replace (M09D).
+ *
+ * Deliberately not `formatEmailAndPassword`, which is the labelled multi-line
+ * block the accounts screens copy. The M09D brief asks for exactly:
+ *
+ *   someone@example.com    the-password
+ */
+export function formatCredentialPair(email: string, password: string): string {
+  return `${email}${CREDENTIAL_PAIR_SEPARATOR}${password}`;
+}
+
+/**
  * Several accounts' credentials, for the accounts list's bulk Copy Credentials.
  *
  * Each account is exactly `formatEmailAndPassword` — the existing format, not a
