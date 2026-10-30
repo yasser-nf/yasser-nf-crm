@@ -48,7 +48,7 @@ async function makeAccount(label: string) {
   counter += 1;
   const email = `${TAG}-${label}-${counter}@example.invalid`;
   const created = await accountsService.createAccount(
-    { email, password: "not-a-real-password", country: "DZ", profileSlots: 5 },
+    { ownership: "owned", email, password: "not-a-real-password", country: "DZ", profileSlots: 5 },
     { actor: superAdmin },
   );
   if (!created.ok) throw new Error(created.error.message);

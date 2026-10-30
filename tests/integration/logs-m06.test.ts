@@ -260,6 +260,7 @@ describe.skipIf(!local)("new audit coverage: customer creation", () => {
     const { accountsService, quickPrepareService } = await services();
     const account = await accountsService.createAccount(
       {
+        ownership: "owned",
         email: `m06-${Date.now()}@example.invalid`,
         password: "not-a-real-password",
         country: "DZ",

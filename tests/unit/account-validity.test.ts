@@ -41,6 +41,9 @@ function account(overrides: Partial<AccountRow> = {}): AccountRow {
     updatedAt: new Date("2026-01-01"),
     archivedAt: null,
     deletedAt: null,
+    /* M09B: every account now records where it came from. */
+    ownership: "owned" as const,
+    supplierId: null,
     ...overrides,
   };
 }

@@ -42,7 +42,7 @@ async function makeAccount(tag: string) {
   const { accountsService } = await services();
 
   const created = await accountsService.createAccount(
-    { email: email(tag), password: PLAINTEXT, country: "DZ" },
+    { ownership: "owned", email: email(tag), password: PLAINTEXT, country: "DZ" },
     { actor: superAdmin },
   );
 

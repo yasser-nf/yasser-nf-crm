@@ -51,6 +51,7 @@ async function makeAccount(tag: string, options: { profileSlots?: number; durati
 
   const created = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: email(tag),
       password: PLAINTEXT,
       country: "DZ",

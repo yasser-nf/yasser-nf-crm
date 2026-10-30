@@ -52,6 +52,7 @@ beforeAll(async () => {
 
   const created = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: `${PREFIX}-${Date.now()}@example.invalid`,
       password: PLAINTEXT,
       country: "DZ",
@@ -93,6 +94,7 @@ describe.skipIf(!configured)("stockTotal counts sellable slots", () => {
 
     const created = await accountsService.createAccount(
       {
+        ownership: "owned",
         email: `${PREFIX}-delta-${Date.now()}@example.invalid`,
         password: PLAINTEXT,
         profileSlots: 3,

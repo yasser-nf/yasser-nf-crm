@@ -68,6 +68,7 @@ describe.skipIf(!configured)("creating an account", () => {
 
     const result = await accountsService.createAccount(
       {
+        ownership: "owned",
         email: `m12-create-${Date.now()}@example.invalid`,
         password: PLAINTEXT,
         country: "DZ",
@@ -133,7 +134,13 @@ describe.skipIf(!configured)("creating an account", () => {
     `;
 
     const result = await accountsService.createAccount(
-      { email: existing[0]!.email, password: PLAINTEXT, country: "DZ", notes: "" },
+      {
+        ownership: "owned",
+        email: existing[0]!.email,
+        password: PLAINTEXT,
+        country: "DZ",
+        notes: "",
+      },
       { actor: superAdmin },
     );
 

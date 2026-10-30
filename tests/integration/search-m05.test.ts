@@ -49,6 +49,7 @@ async function makeAccount(label: string): Promise<string> {
   const { accountsService } = await services();
   const created = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: `${TAG}-${label}@example.invalid`,
       password: "not-a-real-password",
       country: "DZ",

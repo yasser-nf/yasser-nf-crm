@@ -47,6 +47,7 @@ beforeAll(async () => {
   for (let index = 0; index < 2; index += 1) {
     await accountsService.createAccount(
       {
+        ownership: "owned",
         email: `m08-tx-${index}-${randomUUID().slice(0, 8)}@example.invalid`,
         password: "x-not-real",
         country: "DZ",

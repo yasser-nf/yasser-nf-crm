@@ -92,6 +92,7 @@ describe.skipIf(!local)("a second restore while one holds the lock", () => {
     const { accountsService } = await import("@/modules/accounts");
     await accountsService.createAccount(
       {
+        ownership: "owned",
         email: `lock-${Date.now()}@example.invalid`,
         password: "not-real",
         country: "DZ",

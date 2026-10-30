@@ -51,6 +51,7 @@ async function makeAccount(tag: string, validForDays: number | null) {
 
   const result = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: address,
       password: PLAINTEXT,
       country: "DZ",

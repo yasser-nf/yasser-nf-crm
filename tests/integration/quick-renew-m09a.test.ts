@@ -35,7 +35,7 @@ async function makeAccount(tag: string): Promise<{ id: string; email: string }> 
   const { accountsService } = await modules();
   const email = `${PREFIX}-${tag}-${randomUUID().slice(0, 8)}@example.invalid`;
   const created = await accountsService.createAccount(
-    { email, password: PLAINTEXT, country: "DZ", profileSlots: 5 },
+    { ownership: "owned", email, password: PLAINTEXT, country: "DZ", profileSlots: 5 },
     { actor: admin },
   );
   if (!created.ok) throw new Error(created.error.message);

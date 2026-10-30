@@ -51,7 +51,7 @@ async function makeAccount(label: string, password = `pw-${label}-Secret!`) {
   const email = `${TAG}-${label}-${counter}@example.invalid`;
 
   const created = await accountsService.createAccount(
-    { email, password, country: "DZ", profileSlots: 5 },
+    { ownership: "owned", email, password, country: "DZ", profileSlots: 5 },
     { actor: superAdmin },
   );
 
@@ -196,7 +196,12 @@ describe.skipIf(!local)("the Accounts list is the operational list", () => {
     for (let i = 0; i < 5; i += 1) {
       counter += 1;
       const created = await accountsService.createAccount(
-        { email: `${pageTag}-${counter}@example.invalid`, password: "x-Secret-1!", country: "DZ" },
+        {
+          ownership: "owned",
+          email: `${pageTag}-${counter}@example.invalid`,
+          password: "x-Secret-1!",
+          country: "DZ",
+        },
         { actor: superAdmin },
       );
       if (!created.ok) throw new Error(created.error.message);

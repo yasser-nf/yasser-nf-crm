@@ -57,7 +57,13 @@ async function makeAccount(tag: string): Promise<{ id: string }> {
   const { accountsService } = await services();
 
   const result = await accountsService.createAccount(
-    { email: email(tag), password: "not-a-real-password", country: "DZ", profileSlots: 5 },
+    {
+      ownership: "owned",
+      email: email(tag),
+      password: "not-a-real-password",
+      country: "DZ",
+      profileSlots: 5,
+    },
     { actor: superAdmin },
   );
 

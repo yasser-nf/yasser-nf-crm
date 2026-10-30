@@ -87,7 +87,13 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
 
     for (const slots of [1, 3, 5]) {
       const result = await accountsService.createAccount(
-        { email: email(`slots${slots}`), password: PLAINTEXT, country: "DZ", profileSlots: slots },
+        {
+          ownership: "owned",
+          email: email(`slots${slots}`),
+          password: PLAINTEXT,
+          country: "DZ",
+          profileSlots: slots,
+        },
         { actor: superAdmin },
       );
 
@@ -117,7 +123,7 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
     const accountsService = await service();
 
     const result = await accountsService.createAccount(
-      { email: email("default"), password: PLAINTEXT, country: "DZ" },
+      { ownership: "owned", email: email("default"), password: PLAINTEXT, country: "DZ" },
       { actor: superAdmin },
     );
 
@@ -135,7 +141,12 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
 
     for (const slots of [0, 6, -1, 2.5]) {
       const result = await accountsService.createAccount(
-        { email: email(`bad${slots}`), password: PLAINTEXT, profileSlots: slots },
+        {
+          ownership: "owned",
+          email: email(`bad${slots}`),
+          password: PLAINTEXT,
+          profileSlots: slots,
+        },
         { actor: superAdmin },
       );
 
@@ -148,7 +159,7 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
 
     for (const days of [0, -30, 731]) {
       const result = await accountsService.createAccount(
-        { email: email(`dur${days}`), password: PLAINTEXT, durationDays: days },
+        { ownership: "owned", email: email(`dur${days}`), password: PLAINTEXT, durationDays: days },
         { actor: superAdmin },
       );
 
@@ -160,7 +171,7 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
     const accountsService = await service();
 
     const result = await accountsService.createAccount(
-      { email: email("duration"), password: PLAINTEXT, durationDays: 90 },
+      { ownership: "owned", email: email("duration"), password: PLAINTEXT, durationDays: 90 },
       { actor: superAdmin },
     );
 
@@ -184,7 +195,7 @@ describe.skipIf(!configured)("creating an account with a profile count", () => {
     const accountsService = await service();
 
     const result = await accountsService.createAccount(
-      { email: email("openended"), password: PLAINTEXT },
+      { ownership: "owned", email: email("openended"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 
@@ -202,7 +213,7 @@ describe.skipIf(!configured)("changing the sellable slot count", () => {
       await import("@/modules/quick-prepare/repositories/allocation.repository");
 
     const created = await accountsService.createAccount(
-      { email: email("slotchange"), password: PLAINTEXT, profileSlots: 5 },
+      { ownership: "owned", email: email("slotchange"), password: PLAINTEXT, profileSlots: 5 },
       { actor: superAdmin },
     );
 
@@ -266,7 +277,7 @@ describe.skipIf(!configured)("changing the sellable slot count", () => {
     const accountsService = await service();
 
     const created = await accountsService.createAccount(
-      { email: email("noop"), password: PLAINTEXT, profileSlots: 3 },
+      { ownership: "owned", email: email("noop"), password: PLAINTEXT, profileSlots: 3 },
       { actor: superAdmin },
     );
 
@@ -296,7 +307,7 @@ describe.skipIf(!configured)("changing the sellable slot count", () => {
     const accountsService = await service();
 
     const created = await accountsService.createAccount(
-      { email: email("occupied"), password: PLAINTEXT, profileSlots: 5 },
+      { ownership: "owned", email: email("occupied"), password: PLAINTEXT, profileSlots: 5 },
       { actor: superAdmin },
     );
 
@@ -340,6 +351,17 @@ describe.skipIf(!configured)("changing the sellable slot count", () => {
   }, 60_000);
 });
 
+/**
+ * A paste of the business's own accounts (M09B).
+ *
+ * `createAccountsInBulk` takes an envelope rather than a bare string: one
+ * provenance answer applied to every row the parser accepts. These fixtures
+ * are all our own stock, so they all say so.
+ */
+function OWNED(rows: string) {
+  return { rows, ownership: "owned" as const, supplierId: null };
+}
+
 describe.skipIf(!configured)("bulk import", () => {
   it("creates every row of a valid batch", async () => {
     const accountsService = await service();
@@ -350,7 +372,7 @@ describe.skipIf(!configured)("bulk import", () => {
       `${PREFIX}-bulk-b-${stamp}@example.invalid,pw-b,FR,30,5`,
     ].join("\n");
 
-    const result = await accountsService.createAccountsInBulk(text, { actor: superAdmin });
+    const result = await accountsService.createAccountsInBulk(OWNED(text), { actor: superAdmin });
 
     expect(result.ok, result.ok ? "" : result.error.message).toBe(true);
     if (!result.ok) return;
@@ -376,7 +398,7 @@ describe.skipIf(!configured)("bulk import", () => {
     const plaintext = "bulk-plaintext-secret";
 
     const result = await accountsService.createAccountsInBulk(
-      `${PREFIX}-enc-${stamp}@example.invalid,${plaintext},DZ`,
+      OWNED(`${PREFIX}-enc-${stamp}@example.invalid,${plaintext},DZ`),
       { actor: superAdmin },
     );
 
@@ -410,7 +432,7 @@ describe.skipIf(!configured)("bulk import", () => {
       `${good2},pw-c,DZ,60,2`,
     ].join("\n");
 
-    const result = await accountsService.createAccountsInBulk(text, { actor: superAdmin });
+    const result = await accountsService.createAccountsInBulk(OWNED(text), { actor: superAdmin });
 
     expect(result.ok, result.ok ? "" : result.error.message).toBe(true);
     if (!result.ok) return;
@@ -440,13 +462,13 @@ describe.skipIf(!configured)("bulk import", () => {
     const fresh = `${PREFIX}-dupe-new-${stamp}@example.invalid`;
 
     const first = await accountsService.createAccount(
-      { email: taken, password: PLAINTEXT },
+      { ownership: "owned", email: taken, password: PLAINTEXT },
       { actor: superAdmin },
     );
     expect(first.ok).toBe(true);
 
     const result = await accountsService.createAccountsInBulk(
-      [`${fresh},pw-a,DZ`, `${taken},pw-b,DZ`].join("\n"),
+      OWNED([`${fresh},pw-a,DZ`, `${taken},pw-b,DZ`].join("\n")),
       { actor: superAdmin },
     );
 
@@ -491,7 +513,7 @@ describe.skipIf(!configured)("bulk import", () => {
     const plaintext = "bulk-result-secret";
 
     const result = await accountsService.createAccountsInBulk(
-      `${PREFIX}-noleak-${stamp}@example.invalid,${plaintext},DZ`,
+      OWNED(`${PREFIX}-noleak-${stamp}@example.invalid,${plaintext},DZ`),
       { actor: superAdmin },
     );
 
@@ -516,11 +538,13 @@ describe.skipIf(!configured)("bulk import", () => {
     const stamp = Date.now();
 
     const result = await accountsService.createAccountsInBulk(
-      [
-        `${PREFIX}-arith-a-${stamp}@example.invalid,pw,DZ`,
-        `definitely-not-an-email,pw,FR`,
-        `${PREFIX}-arith-b-${stamp}@example.invalid,pw,DZ`,
-      ].join("\n"),
+      OWNED(
+        [
+          `${PREFIX}-arith-a-${stamp}@example.invalid,pw,DZ`,
+          `definitely-not-an-email,pw,FR`,
+          `${PREFIX}-arith-b-${stamp}@example.invalid,pw,DZ`,
+        ].join("\n"),
+      ),
       { actor: superAdmin },
     );
 
@@ -534,10 +558,12 @@ describe.skipIf(!configured)("bulk import", () => {
   it("rejects empty input rather than reporting a successful import of nothing", async () => {
     const accountsService = await service();
 
-    expect((await accountsService.createAccountsInBulk("", { actor: superAdmin })).ok).toBe(false);
-    expect((await accountsService.createAccountsInBulk("   ", { actor: superAdmin })).ok).toBe(
+    expect((await accountsService.createAccountsInBulk(OWNED(""), { actor: superAdmin })).ok).toBe(
       false,
     );
+    expect(
+      (await accountsService.createAccountsInBulk(OWNED("   "), { actor: superAdmin })).ok,
+    ).toBe(false);
   }, 30_000);
 });
 
@@ -548,7 +574,7 @@ describe.skipIf(!configured)("allocation reads the new rules", () => {
       await import("@/modules/quick-prepare/repositories/allocation.repository");
 
     const created = await accountsService.createAccount(
-      { email: email("alloc"), password: PLAINTEXT, profileSlots: 2 },
+      { ownership: "owned", email: email("alloc"), password: PLAINTEXT, profileSlots: 2 },
       { actor: superAdmin },
     );
 
@@ -576,7 +602,7 @@ describe.skipIf(!configured)("allocation reads the new rules", () => {
       await import("@/modules/quick-prepare/repositories/allocation.repository");
 
     const created = await accountsService.createAccount(
-      { email: email("expired"), password: PLAINTEXT },
+      { ownership: "owned", email: email("expired"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 
@@ -608,7 +634,7 @@ describe.skipIf(!configured)("allocation reads the new rules", () => {
       await import("@/modules/quick-prepare/repositories/allocation.repository");
 
     const created = await accountsService.createAccount(
-      { email: email("recycle"), password: PLAINTEXT },
+      { ownership: "owned", email: email("recycle"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 
@@ -646,7 +672,7 @@ describe.skipIf(!configured)("allocation reads the new rules", () => {
       await import("@/modules/quick-prepare/repositories/allocation.repository");
 
     const created = await accountsService.createAccount(
-      { email: email("live"), password: PLAINTEXT },
+      { ownership: "owned", email: email("live"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 
@@ -683,7 +709,7 @@ describe.skipIf(!configured)("changing the stored password", () => {
     const accountsService = await service();
 
     const created = await accountsService.createAccount(
-      { email: email("pwchange"), password: PLAINTEXT },
+      { ownership: "owned", email: email("pwchange"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 
@@ -726,7 +752,7 @@ describe.skipIf(!configured)("changing the stored password", () => {
     const accountsService = await service();
 
     const created = await accountsService.createAccount(
-      { email: email("pwmismatch"), password: PLAINTEXT },
+      { ownership: "owned", email: email("pwmismatch"), password: PLAINTEXT },
       { actor: superAdmin },
     );
 

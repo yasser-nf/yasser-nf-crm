@@ -63,7 +63,13 @@ beforeAll(async () => {
 
   /* Three sellable slots of five, so two are permanently not for sale. */
   const created = await accountsService.createAccount(
-    { email: accountEmail, password: PLAINTEXT, country: "DZ", profileSlots: 3 },
+    {
+      ownership: "owned",
+      email: accountEmail,
+      password: PLAINTEXT,
+      country: "DZ",
+      profileSlots: 3,
+    },
     { actor: superAdmin },
   );
 

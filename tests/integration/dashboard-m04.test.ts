@@ -40,6 +40,7 @@ async function makeAccount(label: string) {
   counter += 1;
   const created = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: `m04-${label}-${counter}@example.invalid`,
       password: "not-a-real-password",
       country: "DZ",

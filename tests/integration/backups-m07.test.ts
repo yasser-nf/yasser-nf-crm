@@ -90,6 +90,7 @@ async function makeAccount(label: string): Promise<string> {
   const { accountsService } = await services();
   const created = await accountsService.createAccount(
     {
+      ownership: "owned",
       email: `${TAG}-${label}@example.invalid`,
       password: PLAIN_PASSWORD,
       country: "DZ",
@@ -308,6 +309,8 @@ describe.skipIf(!local)("a backup", () => {
     expect(Object.keys(document.data)).toEqual([
       "users",
       "customers",
+      /* M09B: before accounts, which reference a supplier. */
+      "suppliers",
       "accounts",
       "profiles",
       "profile_events",
